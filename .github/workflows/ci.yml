@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    name: Rust / fmt
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Select pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: Rust / clippy
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Select pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Lint workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: Rust / test
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Select pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Test workspace
+        run: cargo test --workspace
+
+  runtime:
+    name: Runtime
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: runtime/pnpm-lock.yaml
+
+      - name: Install runtime dependencies
+        run: pnpm --dir runtime install --frozen-lockfile
+
+      - name: Type-check runtime
+        run: pnpm --dir runtime check
+
+      - name: Test runtime
+        run: pnpm --dir runtime test
+
+  conformance:
+    name: Conformance
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Select pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Validate conformance layers
+        run: cargo xtask conformance
+
+  generated:
+    name: Generated files
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Select pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Check generated-file freshness
+        run: cargo xtask gen-runtime --check

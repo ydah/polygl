@@ -5,6 +5,7 @@ tmp/
 *.log
 target/
 node_modules/
+.pnpm-store/
 test-results/
 playwright-report/
 dist/

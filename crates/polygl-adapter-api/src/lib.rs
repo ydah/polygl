@@ -1,0 +1,1 @@
+//! Public language adapter API.

@@ -1,0 +1,15 @@
+[package]
+name = "polygl-cli"
+description = "Command-line interface for PolyGL"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "polygl"
+path = "src/main.rs"
+
+[lints]
+workspace = true
