@@ -1,6 +1,6 @@
 [package]
-name = "polygl-core"
-description = "Compiler pipeline orchestration for PolyGL"
+name = "polygl-builtins"
+description = "Canonical builtin registry for PolyGL"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,7 +8,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-polygl-builtins = { path = "../polygl-builtins" }
+polygl-adapter-api = { path = "../polygl-adapter-api" }
+polygl-hir = { path = "../polygl-hir" }
 
 [lints]
 workspace = true

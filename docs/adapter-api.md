@@ -9,10 +9,11 @@ Adapters implement the object-safe `LanguageAdapter` trait:
 - `capabilities` declares FeatureTags used by conformance case selection.
 
 `LowerCtx` exposes canonical builtin lookup through `BuiltinResolver`. The API
-crate does not depend on `polygl-core`; instead, core implements the resolver
-for its canonical `BuiltinTable`. This keeps the dependency direction
-adapter-api → HIR/span and core → adapter-api, avoiding a cycle when core later
-owns the adapter registry.
+crate does not depend on the registry; `polygl-builtins` implements the
+resolver for its canonical `BuiltinTable`, and `polygl-core` re-exports it for
+the orchestration facade. This keeps the dependency direction adapter-api →
+HIR/span and builtins → adapter-api, avoiding a cycle when core assembles
+adapters and shared analysis.
 
 An adapter must resolve builtin names instead of constructing or persisting raw
 IDs. A missing canonical name is a compiler configuration error, not a

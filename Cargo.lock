@@ -246,6 +246,14 @@ name = "polygl-backend-js"
 version = "0.0.0"
 
 [[package]]
+name = "polygl-builtins"
+version = "0.0.0"
+dependencies = [
+ "polygl-adapter-api",
+ "polygl-hir",
+]
+
+[[package]]
 name = "polygl-cli"
 version = "0.0.0"
 
@@ -263,8 +271,7 @@ dependencies = [
 name = "polygl-core"
 version = "0.0.0"
 dependencies = [
- "polygl-adapter-api",
- "polygl-hir",
+ "polygl-builtins",
 ]
 
 [[package]]
@@ -288,6 +295,11 @@ dependencies = [
 [[package]]
 name = "polygl-types"
 version = "0.0.0"
+dependencies = [
+ "polygl-builtins",
+ "polygl-hir",
+ "polygl-span",
+]
 
 [[package]]
 name = "prettyplease"

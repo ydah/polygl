@@ -8,13 +8,14 @@ analysis.
 ## Ownership and dependency direction
 
 `polygl-span` defines source identity and byte spans. `polygl-hir` depends only
-on that foundation. `polygl-core` owns the builtin registry and depends on HIR;
-HIR must never depend on core, adapters, types, LIR, or a backend.
+on that foundation. `polygl-builtins` owns the builtin registry and depends on
+HIR plus the adapter API; HIR must never depend on builtins, core, adapters,
+types, LIR, or a backend.
 
 Builtin calls carry an opaque `BuiltinId`. Raw numeric construction is not
-public; production adapters obtain the selected ID through the core registry.
-The closed ID set lives in HIR so a call can name a builtin without introducing
-a core↔HIR dependency cycle.
+public; production adapters obtain the selected ID through the canonical
+registry. The closed ID set lives in HIR so a call can name a builtin without
+introducing a registry↔HIR dependency cycle.
 
 ## Module schema
 
@@ -41,6 +42,9 @@ Every module, item, parameter, type expression, block, statement, place, range,
 expression, map entry, and field initializer carries a validated half-open
 byte `Span`. Dump output deliberately omits spans so equivalent programs in
 different source languages can be compared; the in-memory tree retains them.
+Expression type slots are empty at the adapter boundary and are filled by
+`polygl-types`; typed HIR consumers must use its checked wrapper rather than
+assuming an arbitrary `Module` has been analyzed.
 
 ## Builders
 
