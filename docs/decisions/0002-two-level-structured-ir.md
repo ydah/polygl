@@ -23,8 +23,16 @@ structured but contains analyzed, monomorphized, domain-separated operations
 ready for code generation.
 
 Keep HIR independent of core to avoid a dependency cycle. Store builtin calls
-with an opaque HIR-owned `BuiltinId`; the core registry assigns and resolves
-those IDs.
+with an opaque HIR-owned `BuiltinId`; the canonical builtin registry assigns
+those IDs and LIR lowering resolves them to runtime operations.
+
+Resolve function domains during HIR-to-LIR lowering from explicit hints,
+entry-point reachability, builtin-domain constraints, constant dependencies,
+and the transitive call graph. Constants receive the same resolved domain, and
+LIR distinguishes constant references from shadowing local-variable
+references. Apply f64 float folding only after domain resolution and only to
+Host code; preserve GPU and Shared float expressions for their eventual f32
+lowering.
 
 Normalize only semantically unordered top-level declarations. Preserve
 constant-initializer order and all executable and aggregate order.

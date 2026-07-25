@@ -284,6 +284,12 @@ dependencies = [
 [[package]]
 name = "polygl-lir"
 version = "0.0.0"
+dependencies = [
+ "polygl-builtins",
+ "polygl-hir",
+ "polygl-span",
+ "polygl-types",
+]
 
 [[package]]
 name = "polygl-span"
