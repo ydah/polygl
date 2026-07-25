@@ -16,6 +16,12 @@ pub struct SplitProgram {
     pub warnings: Diagnostics,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Dependency<'module> {
+    Function(&'module str),
+    Constant(&'module str),
+}
+
 /// Separates a resolved LIR module into Host and GPU programs and validates the
 /// GLSL ES 3.00 subset at that boundary.
 pub fn split(module: &Module) -> Result<SplitProgram, Diagnostics> {
@@ -255,7 +261,22 @@ impl<'module> Validator<'module> {
                     Some(definition)
                         if definition.fields.first().is_some_and(|field| {
                             field.name == "clip_pos" && field.ty == Type::Vector(4)
-                        }) => {}
+                        }) =>
+                    {
+                        for field in definition.fields.iter().skip(1) {
+                            if !valid_varying_type(&field.ty) {
+                                self.error(
+                                    "E0405",
+                                    format!(
+                                        "varying field `{}.{}` has unsupported type `{}`",
+                                        definition.name, field.name, field.ty
+                                    ),
+                                    field.span,
+                                    "use int, float, a vector, or a matrix as a varying field",
+                                );
+                            }
+                        }
+                    }
                     Some(definition) => self.error(
                         "E0405",
                         format!(
@@ -388,55 +409,108 @@ impl<'module> Validator<'module> {
                 );
             }
         }
-        self.validate_recursion(&checked_functions);
+        self.validate_dependency_cycles(&checked_functions, &checked_constants);
     }
 
-    fn validate_recursion(&mut self, reachable: &HashSet<&'module str>) {
+    fn validate_dependency_cycles(
+        &mut self,
+        reachable_functions: &HashSet<&'module str>,
+        reachable_constants: &HashSet<&'module str>,
+    ) {
+        let reachable = reachable_functions
+            .iter()
+            .map(|name| Dependency::Function(name))
+            .chain(
+                reachable_constants
+                    .iter()
+                    .map(|name| Dependency::Constant(name)),
+            )
+            .collect::<HashSet<_>>();
         let mut visiting = HashSet::new();
         let mut visited = HashSet::new();
-        for name in reachable {
-            self.visit_function(name, reachable, &mut visiting, &mut visited);
+        for dependency in reachable.iter().copied() {
+            self.visit_dependency(dependency, &reachable, &mut visiting, &mut visited);
         }
     }
 
-    fn visit_function(
+    fn visit_dependency(
         &mut self,
-        name: &'module str,
-        reachable: &HashSet<&'module str>,
-        visiting: &mut HashSet<&'module str>,
-        visited: &mut HashSet<&'module str>,
+        dependency: Dependency<'module>,
+        reachable: &HashSet<Dependency<'module>>,
+        visiting: &mut HashSet<Dependency<'module>>,
+        visited: &mut HashSet<Dependency<'module>>,
     ) {
-        if visited.contains(name) {
+        if visited.contains(&dependency) {
             return;
         }
-        if !visiting.insert(name) {
-            if let Some(function) = self.functions.get(name) {
-                self.error(
-                    "E0401",
-                    format!("GPU function `{name}` is recursive"),
-                    function.span,
-                    "rewrite direct or indirect recursion as a loop",
-                );
-            }
+        if !visiting.insert(dependency) {
+            let (kind, name, span) = match dependency {
+                Dependency::Function(name) => {
+                    let Some(function) = self.functions.get(name) else {
+                        return;
+                    };
+                    ("function", name, function.span)
+                }
+                Dependency::Constant(name) => {
+                    let Some(constant) = self.constants.get(name) else {
+                        return;
+                    };
+                    ("constant", name, constant.span)
+                }
+            };
+            self.error(
+                "E0401",
+                format!("GPU dependency cycle reaches {kind} `{name}`"),
+                span,
+                "replace the function/constant cycle with an iterative or acyclic expression",
+            );
             return;
         }
-        let dependencies = self
-            .functions
-            .get(name)
-            .map(|function| function_calls(&function.body))
-            .unwrap_or_default();
-        for dependency in dependencies {
-            if reachable.contains(dependency.as_str()) {
-                let dependency = self
-                    .functions
-                    .get_key_value(dependency.as_str())
-                    .map(|(key, _)| *key)
-                    .expect("reachable dependency is declared");
-                self.visit_function(dependency, reachable, visiting, visited);
+
+        for next in self.dependencies(dependency) {
+            if reachable.contains(&next) {
+                self.visit_dependency(next, reachable, visiting, visited);
             }
         }
-        visiting.remove(name);
-        visited.insert(name);
+        visiting.remove(&dependency);
+        visited.insert(dependency);
+    }
+
+    fn dependencies(&self, dependency: Dependency<'module>) -> Vec<Dependency<'module>> {
+        let (function_names, constant_names) = match dependency {
+            Dependency::Function(name) => {
+                let Some(function) = self.functions.get(name) else {
+                    return Vec::new();
+                };
+                (
+                    function_calls(&function.body),
+                    block_constant_refs(&function.body),
+                )
+            }
+            Dependency::Constant(name) => {
+                let Some(constant) = self.constants.get(name) else {
+                    return Vec::new();
+                };
+                (
+                    expression_function_calls(&constant.value),
+                    constant_refs(&constant.value),
+                )
+            }
+        };
+
+        function_names
+            .into_iter()
+            .filter_map(|name| {
+                self.functions
+                    .get_key_value(name.as_str())
+                    .map(|(name, _)| Dependency::Function(name))
+            })
+            .chain(constant_names.into_iter().filter_map(|name| {
+                self.constants
+                    .get_key_value(name.as_str())
+                    .map(|(name, _)| Dependency::Constant(name))
+            }))
+            .collect()
     }
 
     fn inspect_block(&mut self, block: &Block) {
@@ -530,8 +604,26 @@ impl<'module> Validator<'module> {
                     self.gpu_constants.insert(constant.name.as_str());
                 }
             }
-            ExprKind::Binary { left, right, .. }
-            | ExprKind::Index {
+            ExprKind::Binary { op, left, right } => {
+                if matches!(
+                    op,
+                    crate::BinaryOp::IntegerDivide
+                        | crate::BinaryOp::FloorRemainder
+                        | crate::BinaryOp::TruncatingRemainder
+                ) && expression.ty == Type::Int
+                    && !self.is_provably_nonzero_integer(right)
+                {
+                    self.error(
+                        "E0406",
+                        "GPU integer divisor is not provably nonzero",
+                        right.span,
+                        "use a compiler-visible nonzero integer constant or move the checked operation to Host code",
+                    );
+                }
+                self.inspect_expr(left);
+                self.inspect_expr(right);
+            }
+            ExprKind::Index {
                 base: left,
                 index: right,
             } => {
@@ -676,6 +768,37 @@ impl<'module> Validator<'module> {
         }
     }
 
+    fn is_provably_nonzero_integer(&self, expression: &Expr) -> bool {
+        self.constant_integer_value(expression, &mut HashSet::new())
+            .is_some_and(|value| value != 0)
+    }
+
+    fn constant_integer_value(
+        &self,
+        expression: &Expr,
+        visiting: &mut HashSet<&'module str>,
+    ) -> Option<i32> {
+        match &expression.kind {
+            ExprKind::Literal(Literal::Int(value)) => Some(*value),
+            ExprKind::Unary {
+                op: crate::UnaryOp::Negate,
+                operand,
+            } => self
+                .constant_integer_value(operand, visiting)
+                .map(i32::wrapping_neg),
+            ExprKind::Constant(name) => {
+                let (name, constant) = self.constants.get_key_value(name.as_str())?;
+                if constant.ty != Type::Int || !visiting.insert(name) {
+                    return None;
+                }
+                let value = self.constant_integer_value(&constant.value, visiting);
+                visiting.remove(name);
+                value
+            }
+            _ => None,
+        }
+    }
+
     fn error(
         &mut self,
         code: &str,
@@ -704,10 +827,126 @@ fn constant_trip_count(range: &crate::Range) -> Option<u64> {
     Some(u64::try_from(distance).ok()? + u64::from(range.inclusive))
 }
 
+const fn valid_varying_type(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Int | Type::Float | Type::Vector(_) | Type::Matrix(_)
+    )
+}
+
 fn function_calls(block: &Block) -> Vec<String> {
     let mut calls = Vec::new();
     collect_block_calls(block, &mut calls);
     calls
+}
+
+fn expression_function_calls(expression: &Expr) -> Vec<String> {
+    let mut calls = Vec::new();
+    collect_expr_calls(expression, &mut calls);
+    calls
+}
+
+fn block_constant_refs(block: &Block) -> Vec<String> {
+    let mut constants = Vec::new();
+    collect_block_constants(block, &mut constants);
+    constants
+}
+
+fn constant_refs(expression: &Expr) -> Vec<String> {
+    let mut constants = Vec::new();
+    collect_expr_constants(expression, &mut constants);
+    constants
+}
+
+fn collect_expr_constants(expression: &Expr, constants: &mut Vec<String>) {
+    match &expression.kind {
+        ExprKind::Constant(name) => constants.push(name.clone()),
+        ExprKind::Call { args, .. } | ExprKind::Vector { args, .. } => {
+            for argument in args {
+                collect_expr_constants(argument, constants);
+            }
+        }
+        ExprKind::Binary { left, right, .. }
+        | ExprKind::Index {
+            base: left,
+            index: right,
+        } => {
+            collect_expr_constants(left, constants);
+            collect_expr_constants(right, constants);
+        }
+        ExprKind::Unary { operand, .. }
+        | ExprKind::Field { base: operand, .. }
+        | ExprKind::IsNil(operand)
+        | ExprKind::IsFalsy(operand) => collect_expr_constants(operand, constants),
+        ExprKind::Array(items) => {
+            for item in items {
+                collect_expr_constants(item, constants);
+            }
+        }
+        ExprKind::Map(entries) => {
+            for entry in entries {
+                collect_expr_constants(&entry.key, constants);
+                collect_expr_constants(&entry.value, constants);
+            }
+        }
+        ExprKind::Struct { fields, .. } => {
+            for field in fields {
+                collect_expr_constants(&field.value, constants);
+            }
+        }
+        ExprKind::Literal(_) | ExprKind::Variable(_) => {}
+    }
+}
+
+fn collect_block_constants(block: &Block, constants: &mut Vec<String>) {
+    for statement in &block.statements {
+        match &statement.kind {
+            StatementKind::Let { init, .. } | StatementKind::Expr(init) => {
+                collect_expr_constants(init, constants);
+            }
+            StatementKind::Assign { target, value } => {
+                collect_place_constants(target, constants);
+                collect_expr_constants(value, constants);
+            }
+            StatementKind::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                collect_expr_constants(condition, constants);
+                collect_block_constants(then_block, constants);
+                if let Some(else_block) = else_block {
+                    collect_block_constants(else_block, constants);
+                }
+            }
+            StatementKind::While { condition, body } => {
+                collect_expr_constants(condition, constants);
+                collect_block_constants(body, constants);
+            }
+            StatementKind::For { range, body, .. } => {
+                collect_expr_constants(&range.start, constants);
+                collect_expr_constants(&range.end, constants);
+                collect_block_constants(body, constants);
+            }
+            StatementKind::Return(value) => {
+                if let Some(value) = value {
+                    collect_expr_constants(value, constants);
+                }
+            }
+            StatementKind::Break | StatementKind::Continue => {}
+        }
+    }
+}
+
+fn collect_place_constants(place: &Place, constants: &mut Vec<String>) {
+    match &place.kind {
+        PlaceKind::Variable(_) => {}
+        PlaceKind::Index { base, index } => {
+            collect_expr_constants(base, constants);
+            collect_expr_constants(index, constants);
+        }
+        PlaceKind::Field { base, .. } => collect_expr_constants(base, constants),
+    }
 }
 
 fn collect_block_calls(block: &Block, calls: &mut Vec<String>) {
@@ -935,10 +1174,23 @@ mod tests {
                     ty: Type::Vector(2),
                     span: span(),
                 },
+                Field {
+                    name: "index".to_owned(),
+                    ty: Type::Int,
+                    span: span(),
+                },
             ],
             span: span(),
         });
         split(&module).expect("fixed varying ABI should validate");
+
+        module.structs[0].fields.push(Field {
+            name: "texture".to_owned(),
+            ty: Type::Opaque(OpaqueType::Texture),
+            span: span(),
+        });
+        let diagnostics = split(&module).expect_err("textures cannot cross as varyings");
+        assert!(codes(&diagnostics).contains("E0405"));
     }
 
     #[test]
@@ -1021,6 +1273,78 @@ mod tests {
     }
 
     #[test]
+    fn rejects_cyclic_gpu_constants() {
+        let mut module = valid_pair(vec![
+            Statement::new(
+                StatementKind::Expr(expression(ExprKind::Constant("A".to_owned()), Type::Int)),
+                span(),
+            ),
+            return_vector4(),
+        ]);
+        module.constants = vec![
+            Constant {
+                name: "A".to_owned(),
+                ty: Type::Int,
+                value: expression(ExprKind::Constant("B".to_owned()), Type::Int),
+                domain: Domain::Gpu,
+                span: span(),
+            },
+            Constant {
+                name: "B".to_owned(),
+                ty: Type::Int,
+                value: expression(ExprKind::Constant("A".to_owned()), Type::Int),
+                domain: Domain::Gpu,
+                span: span(),
+            },
+        ];
+
+        let diagnostics = split(&module).expect_err("GPU constant cycles must fail");
+        assert!(codes(&diagnostics).contains("E0401"));
+
+        let mut mixed = valid_pair(vec![
+            Statement::new(
+                StatementKind::Expr(expression(ExprKind::Constant("A".to_owned()), Type::Int)),
+                span(),
+            ),
+            return_vector4(),
+        ]);
+        mixed.constants.push(Constant {
+            name: "A".to_owned(),
+            ty: Type::Int,
+            value: expression(
+                ExprKind::Call {
+                    target: CallTarget::Function("read_a".to_owned()),
+                    args: Vec::new(),
+                },
+                Type::Int,
+            ),
+            domain: Domain::Gpu,
+            span: span(),
+        });
+        mixed.functions.push(Function {
+            name: "read_a".to_owned(),
+            params: Vec::new(),
+            result: Type::Int,
+            body: Block {
+                statements: vec![Statement::new(
+                    StatementKind::Return(Some(expression(
+                        ExprKind::Constant("A".to_owned()),
+                        Type::Int,
+                    ))),
+                    span(),
+                )],
+                span: span(),
+            },
+            domain: Domain::Gpu,
+            span: span(),
+        });
+
+        let diagnostics =
+            split(&mixed).expect_err("GPU function/constant dependency cycles must fail");
+        assert!(codes(&diagnostics).contains("E0401"));
+    }
+
+    #[test]
     fn reports_shared_precision_and_long_loop_warnings() {
         let helper_call = expression(
             ExprKind::Call {
@@ -1096,6 +1420,72 @@ mod tests {
         let diagnostics = split(&module).expect_err("Host handles cannot enter GPU code");
         assert!(codes(&diagnostics).contains("E0402"));
         assert!(codes(&diagnostics).contains("E0405"));
+    }
+
+    #[test]
+    fn rejects_gpu_integer_divisors_that_can_reach_zero() {
+        for divisor in [
+            expression(ExprKind::Literal(Literal::Int(0)), Type::Int),
+            expression(ExprKind::Variable("divisor".to_owned()), Type::Int),
+        ] {
+            let divide = expression(
+                ExprKind::Binary {
+                    op: crate::BinaryOp::IntegerDivide,
+                    left: Box::new(expression(ExprKind::Literal(Literal::Int(1)), Type::Int)),
+                    right: Box::new(divisor),
+                },
+                Type::Int,
+            );
+            let diagnostics = split(&valid_pair(vec![
+                Statement::new(StatementKind::Expr(divide), span()),
+                return_vector4(),
+            ]))
+            .expect_err("GPU integer division needs a statically nonzero divisor");
+            assert!(codes(&diagnostics).contains("E0406"));
+        }
+
+        let safe_divide = expression(
+            ExprKind::Binary {
+                op: crate::BinaryOp::IntegerDivide,
+                left: Box::new(expression(
+                    ExprKind::Literal(Literal::Int(i32::MIN)),
+                    Type::Int,
+                )),
+                right: Box::new(expression(ExprKind::Literal(Literal::Int(-1)), Type::Int)),
+            },
+            Type::Int,
+        );
+        split(&valid_pair(vec![
+            Statement::new(StatementKind::Expr(safe_divide), span()),
+            return_vector4(),
+        ]))
+        .expect("nonzero literal divisors satisfy the GPU arithmetic precondition");
+
+        let mut constant_divisor = valid_pair(vec![
+            Statement::new(
+                StatementKind::Expr(expression(
+                    ExprKind::Binary {
+                        op: crate::BinaryOp::FloorRemainder,
+                        left: Box::new(expression(ExprKind::Literal(Literal::Int(7)), Type::Int)),
+                        right: Box::new(expression(
+                            ExprKind::Constant("NONZERO".to_owned()),
+                            Type::Int,
+                        )),
+                    },
+                    Type::Int,
+                )),
+                span(),
+            ),
+            return_vector4(),
+        ]);
+        constant_divisor.constants.push(Constant {
+            name: "NONZERO".to_owned(),
+            ty: Type::Int,
+            value: expression(ExprKind::Literal(Literal::Int(3)), Type::Int),
+            domain: Domain::Gpu,
+            span: span(),
+        });
+        split(&constant_divisor).expect("nonzero integer constants are propagated");
     }
 
     #[test]

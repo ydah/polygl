@@ -123,6 +123,12 @@ inheriting the target language's `%` operator. For nonzero operands,
 `RemFloor(a, b) = a - floor(a / b) * b`; `RemTrunc` uses a quotient truncated
 toward zero. Integer zero divisors are runtime errors.
 
+WebGL shaders cannot transport a catchable arithmetic fault to Host code.
+Therefore the v1 GPU subset accepts integer division and remainder only when
+constant propagation proves the divisor nonzero; otherwise split reports E0406.
+Host code continues to accept dynamic divisors and raises the source-located
+runtime error when zero is observed.
+
 Language-specific integer, string, or collection behavior not listed here is
 not inherited automatically. If the fixed HIR cannot preserve a source
 construct, the adapter must reject it rather than approximate it.

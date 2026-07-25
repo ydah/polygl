@@ -34,14 +34,20 @@ selected vertex entry does not request.
 ## Varyings and stage results
 
 A vertex entry returns a user-defined struct. Its first field must be
-`clip_pos: vec4`; the compiler assigns that field to `gl_Position`. Every
-remaining field becomes a smooth varying named `v_<field>`.
+`clip_pos: vec4`; the compiler assigns that field to `gl_Position`. Every field
+is also mirrored as a varying named `v_<field>`. Float, vector, and matrix
+fields use smooth interpolation; `int` fields use `flat`.
 
 The matching fragment entry takes exactly one parameter whose type is the same
 struct. It returns `vec4`, which the compiler writes to `out_color`. Struct
-field order and types are part of the ABI. `clip_pos` is not exposed as a
-fragment input. A missing `clip_pos`, a mismatched struct, or an invalid stage
+field order and types are part of the ABI. `clip_pos` is assigned to
+`gl_Position` and also mirrored as a varying so the fragment observes the same
+struct value. A missing `clip_pos`, a mismatched struct, or an invalid stage
 result is E0405.
+
+Varying fields may be `int`, `float`, `vec2` through `vec4`, or `mat2` through
+`mat4`. Boolean fields, nested structs, textures, opaque handles, and dynamic
+collections are not valid varyings.
 
 The first implementation also accepts a vertex entry that returns `vec4` and a
 fragment entry with no parameters. This zero-varying form exists for generated
@@ -92,11 +98,12 @@ GPU code rejects:
 
 | Code | Condition |
 |---|---|
-| E0401 | direct or indirect recursion |
+| E0401 | a dependency cycle through GPU functions and/or constants |
 | E0402 | `str`, `Option`, or another value with no GPU representation |
 | E0403 | dynamic arrays or maps |
 | E0404 | a Host-only builtin, function, or constant reached from GPU code |
 | E0405 | invalid shader pair, stage ABI, material name, uniform, or reserved name |
+| E0406 | an integer divisor that is not statically proven nonzero |
 
 Functions reached by both Host and GPU entries are emitted once per target.
 Because Host `float` is f64 and GPU `float` is f32, each such shared function
@@ -114,4 +121,3 @@ does not concatenate or evaluate GLSL.
 Shader compiler and linker failures are runtime errors because WebGL drivers
 remain the final validator. The runtime includes the pair name, stage, driver
 log, and original shader-entry source location in the error overlay.
-
