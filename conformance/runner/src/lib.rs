@@ -10,4 +10,4 @@ pub use case::{ConformanceCase, ConformanceLayer, select_cases};
 pub use error::ConformanceError;
 pub use frame::{L1BaselineStore, RenderedFrame, compare_frames};
 pub use smoke::{ConformanceReport, verify_smoke};
-pub use snapshot::{L2SnapshotStore, NeutralProgram, compare_neutral_hir};
+pub use snapshot::{L2SnapshotStore, L3SnapshotStore, NeutralProgram, compare_neutral_hir};

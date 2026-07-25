@@ -280,8 +280,11 @@ version = "0.0.0"
 dependencies = [
  "insta",
  "polygl-adapter-api",
+ "polygl-adapter-ruby",
+ "polygl-core",
  "polygl-hir",
  "polygl-span",
+ "polygl-types",
 ]
 
 [[package]]

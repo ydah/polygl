@@ -39,6 +39,8 @@ Install runtime dependencies and run the local gates:
 ```console
 corepack enable
 pnpm --dir runtime install --frozen-lockfile
+pnpm --dir conformance/browser install --frozen-lockfile
+pnpm --dir conformance/browser exec playwright install chromium
 just build
 just test
 just conformance
@@ -51,7 +53,7 @@ files must be committed and pass `cargo xtask gen-runtime --check`.
 ## Compile a Ruby sketch
 
 ```console
-cargo run -p polygl-cli -- build sketch.rb -o dist
+cargo run -p polygl-cli -- build examples/triangle.rb -o dist
 ```
 
 The build writes `index.html`, `app.js`, `app.js.map`, and the embedded

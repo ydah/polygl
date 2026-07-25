@@ -35,6 +35,24 @@ pub struct NeutralProgram<'a> {
     pub module: &'a Module,
 }
 
+pub struct L3SnapshotStore {
+    root: PathBuf,
+}
+
+impl L3SnapshotStore {
+    #[must_use]
+    pub fn new(conformance_root: impl Into<PathBuf>) -> Self {
+        Self {
+            root: conformance_root.into(),
+        }
+    }
+
+    pub fn verify(&self, case: &str, module: &Module) -> Result<(), ConformanceError> {
+        validate_name(case)?;
+        compare_l3_snapshot(&self.root, case, &normalized_dump(module))
+    }
+}
+
 pub fn compare_neutral_hir(
     case: &str,
     programs: &[NeutralProgram<'_>],

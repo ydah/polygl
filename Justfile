@@ -13,6 +13,7 @@ test:
 
 conformance:
     cargo xtask conformance
+    pnpm --dir conformance/browser test
 
 gen:
     cargo xtask gen-runtime
@@ -21,5 +22,5 @@ gen-check:
     cargo xtask gen-runtime --check
 
 serve-example:
-    @echo "serve-example will become runnable with the first end-to-end example in M1." >&2
-    @exit 1
+    cargo run -p polygl-cli -- build examples/triangle.rb -o dist
+    python3 -m http.server 8000 --directory dist

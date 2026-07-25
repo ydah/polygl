@@ -31,9 +31,10 @@ const INDEX_HTML: &str = r#"<!doctype html>
   <canvas id="polygl-canvas" width="640" height="480"></canvas>
   <script type="module">
     import { showRuntimeError, start } from "./runtime.js";
-    start(() => import("./app.js")).catch((error) => {
+    globalThis.__polyglReady = start(() => import("./app.js")).catch((error) => {
       console.error(error);
       showRuntimeError(error);
+      throw error;
     });
   </script>
 </body>

@@ -24,15 +24,19 @@ impl L1BaselineStore {
     }
 
     pub fn verify(&self, case: &str, actual: &RenderedFrame) -> Result<(), ConformanceError> {
+        let expected = self.load(case, &actual.renderer)?;
+        compare_frames(&expected, actual)
+    }
+
+    pub fn load(&self, case: &str, renderer: &str) -> Result<RenderedFrame, ConformanceError> {
         validate_name(case)?;
-        validate_name(&actual.renderer)?;
+        validate_name(renderer)?;
         let path = self
             .root
             .join("l1-render")
             .join(case)
-            .join(format!("{}.rgba", actual.renderer));
-        let expected = parse_baseline(&actual.renderer, &fs::read_to_string(path)?)?;
-        compare_frames(&expected, actual)
+            .join(format!("{renderer}.rgba"));
+        parse_baseline(renderer, &fs::read_to_string(path)?)
     }
 }
 

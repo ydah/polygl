@@ -10,8 +10,11 @@ repository.workspace = true
 
 [dependencies]
 polygl-adapter-api = { path = "../../crates/polygl-adapter-api" }
+polygl-adapter-ruby = { path = "../../crates/polygl-adapter-ruby" }
+polygl-core = { path = "../../crates/polygl-core" }
 polygl-hir = { path = "../../crates/polygl-hir" }
 polygl-span = { path = "../../crates/polygl-span" }
+polygl-types = { path = "../../crates/polygl-types" }
 
 [dev-dependencies]
 insta = { version = "=1.48.0", default-features = false }

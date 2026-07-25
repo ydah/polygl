@@ -38,3 +38,35 @@ jobs:
 
       - name: Compare three independent SwiftShader processes
         run: pnpm --dir spikes/webgl-stability test
+
+  conformance:
+    name: Ruby framebuffer conformance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Select pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: conformance/browser/pnpm-lock.yaml
+
+      - name: Install conformance dependencies
+        run: pnpm --dir conformance/browser install --frozen-lockfile
+
+      - name: Install pinned Chromium
+        run: pnpm --dir conformance/browser exec playwright install --with-deps chromium
+
+      - name: Compare Ruby framebuffers
+        run: pnpm --dir conformance/browser test

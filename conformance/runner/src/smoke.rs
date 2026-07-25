@@ -1,13 +1,23 @@
+use std::fs;
 use std::path::Path;
 
-use polygl_hir::{BuiltinId, EntryPointKind, HirBuilder, Module, dump};
-use polygl_span::{SourceFile, SourceId};
+use polygl_adapter_api::{LanguageAdapter, LowerCtx};
+use polygl_adapter_ruby::RubyAdapter;
+use polygl_core::BuiltinTable;
+use polygl_hir::{Module, dump};
+use polygl_span::{Diagnostics, SourceFile, SourceId};
 
-use crate::snapshot::compare_l3_snapshot;
-use crate::{
-    ConformanceError, L1BaselineStore, L2SnapshotStore, NeutralProgram, RenderedFrame,
-    compare_neutral_hir,
-};
+use crate::{ConformanceError, L1BaselineStore, L2SnapshotStore, L3SnapshotStore};
+
+const M1_CASES: &[&str] = &[
+    "background",
+    "circle",
+    "rectangle",
+    "seeded-random",
+    "triangle",
+];
+const NEUTRAL_CASES: &[&str] = &["rectangle", "triangle"];
+const BASELINE_RENDERER: &str = "swiftshader";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ConformanceReport {
@@ -17,86 +27,76 @@ pub struct ConformanceReport {
 }
 
 pub fn verify_smoke(root: &Path) -> Result<ConformanceReport, ConformanceError> {
-    let expected_frame = RenderedFrame {
-        renderer: "swiftshader-smoke".to_owned(),
-        width: 1,
-        height: 1,
-        rgba: vec![255, 64, 32, 255],
-    };
-    L1BaselineStore::new(root).verify("triangle", &expected_frame)?;
+    let l1 = L1BaselineStore::new(root);
+    let l2 = L2SnapshotStore::new(root);
+    let l3 = L3SnapshotStore::new(root);
 
-    let ruby = triangle_module();
-    let php = triangle_module();
-    let l2 = dump(&ruby);
-    L2SnapshotStore::new(root).verify("handwritten", "triangle", &l2)?;
-
-    let neutral = compare_neutral_hir(
-        "triangle",
-        &[
-            NeutralProgram {
-                language: "ruby",
-                module: &ruby,
-            },
-            NeutralProgram {
-                language: "php",
-                module: &php,
-            },
-        ],
-    )?;
-    compare_l3_snapshot(root, "triangle", &neutral)?;
+    for case in M1_CASES {
+        let module = compile_ruby(root, case)?;
+        l1.load(case, BASELINE_RENDERER)?;
+        l2.verify("ruby", case, &dump(&module))?;
+        if NEUTRAL_CASES.contains(case) {
+            l3.verify(case, &module)?;
+        }
+    }
 
     Ok(ConformanceReport {
-        l1_cases: 1,
-        l2_cases: 1,
-        l3_cases: 1,
+        l1_cases: M1_CASES.len(),
+        l2_cases: M1_CASES.len(),
+        l3_cases: NEUTRAL_CASES.len(),
     })
 }
 
-fn triangle_module() -> Module {
-    let source = SourceFile::new(SourceId::new(0), "triangle", "triangle");
-    let span = source.span(0, source.len()).expect("static span is valid");
-    let builder = HirBuilder::new(span);
-    let triangle = builder.builtin_call(
-        BuiltinId::TRIANGLE,
-        vec![
-            builder.float(10.0),
-            builder.float(80.0),
-            builder.float(50.0),
-            builder.float(10.0),
-            builder.float(90.0),
-            builder.float(80.0),
-        ],
-    );
-    builder.module(vec![builder.entry(
-        EntryPointKind::Setup,
-        builder.block(vec![builder.expression(triangle)]),
-    )])
+fn compile_ruby(root: &Path, case: &str) -> Result<Module, ConformanceError> {
+    let path = root.join("cases").join(case).join("main.rb");
+    let bytes = fs::read(&path)?;
+    let source = SourceFile::from_bytes(SourceId::new(0), path.display().to_string(), bytes)
+        .map_err(|error| ConformanceError::Compile {
+            case: case.to_owned(),
+            message: error.to_string(),
+        })?;
+    let mut context = LowerCtx::new(&BuiltinTable);
+    let hir = RubyAdapter
+        .lower(&source, &mut context)
+        .map_err(|diagnostics| compile_diagnostics(case, &diagnostics, &source))?;
+    polygl_types::analyze(&hir)
+        .map(polygl_types::TypedModule::into_hir)
+        .map_err(|diagnostics| compile_diagnostics(case, &diagnostics, &source))
+}
+
+fn compile_diagnostics(
+    case: &str,
+    diagnostics: &Diagnostics,
+    source: &SourceFile,
+) -> ConformanceError {
+    let message = diagnostics
+        .render(source)
+        .unwrap_or_else(|error| format!("diagnostic rendering failed: {error}"));
+    ConformanceError::Compile {
+        case: case.to_owned(),
+        message,
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use polygl_hir::dump;
+    use std::path::{Path, PathBuf};
 
     use crate::{NeutralProgram, compare_neutral_hir};
 
-    use super::triangle_module;
+    use super::{M1_CASES, NEUTRAL_CASES, compile_ruby};
 
     #[test]
-    fn l2_triangle_dump_is_snapshot_stable() {
-        insta::assert_snapshot!(dump(&triangle_module()), @r#"
-        module
-        {
-          entry setup() [host]
-          {
-            builtin#11(10.0, 80.0, 50.0, 10.0, 90.0, 80.0);
-          }
-        }
-        "#);
+    fn m1_case_inventory_has_five_render_and_two_neutral_cases() {
+        assert_eq!(M1_CASES.len(), 5);
+        assert_eq!(NEUTRAL_CASES.len(), 2);
+        assert!(NEUTRAL_CASES.iter().all(|case| M1_CASES.contains(case)));
     }
 
     #[test]
     fn l3_rejects_duplicate_language_entries() {
-        let module = triangle_module();
+        let root = conformance_root();
+        let module = compile_ruby(&root, "triangle").unwrap();
         assert!(
             compare_neutral_hir(
                 "triangle",
@@ -113,5 +113,12 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    fn conformance_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("runner lives below conformance")
+            .to_path_buf()
     }
 }

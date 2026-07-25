@@ -8,5 +8,8 @@ PolyGL conformance is split into the three layers defined by the design:
 
 `polygl-conformance` implements capability-based case selection, renderer-keyed
 L1 frame comparison, language-specific L2 snapshot verification, and normalized
-L3 equality. `cargo xtask conformance` validates the layout and one smoke case
-through all three layers.
+L3 equality. `cargo xtask conformance` compiles all committed Ruby cases and
+checks five L1 baselines, five L2 snapshots, and two neutral L3 snapshots.
+
+`pnpm --dir conformance/browser test` rebuilds those cases with the CLI and
+compares real WebGL2 framebuffer bytes under pinned Chromium + SwiftShader.

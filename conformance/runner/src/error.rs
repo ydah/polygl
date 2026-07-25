@@ -16,6 +16,10 @@ pub enum ConformanceError {
         case: String,
         subject: String,
     },
+    Compile {
+        case: String,
+        message: String,
+    },
     DuplicateLanguage(String),
     NotEnoughNeutralPrograms,
 }
@@ -41,6 +45,12 @@ impl fmt::Display for ConformanceError {
                 formatter,
                 "{layer} snapshot mismatch for case `{case}` and `{subject}`"
             ),
+            Self::Compile { case, message } => {
+                write!(
+                    formatter,
+                    "failed to compile conformance case `{case}`: {message}"
+                )
+            }
             Self::DuplicateLanguage(language) => {
                 write!(
                     formatter,
