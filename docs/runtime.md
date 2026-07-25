@@ -23,11 +23,15 @@ entrypoint.
 `shaders.js` contains data-only GLSL and reflection metadata. At startup the
 shader registry compiles and links every pair, resolves reflected uniform
 locations, and reports driver logs at the original vertex or fragment source
-location. It uploads `u_time`, `u_resolution`, and identity transform defaults
-after `setup` and before each frame. User uniform values are type-checked when
-set; debug builds additionally reject an unset reflected user uniform after
+location. Driver-optimized inactive uniforms have no location and are skipped.
+It uploads `u_time`, `u_resolution`, and identity transform defaults after
+`setup` and before each frame. User uniform values are type-checked and copied
+when set; debug builds additionally reject an unset active user uniform after
 `setup`, while release builds retain WebGL's zero/default value until one is
 set. Registry programs are deleted with the runtime session.
+
+GPU split warnings such as W0401 and W0402 are rendered by both `check` and
+`build`; successful compilation no longer discards non-fatal diagnostics.
 
 Generated debug checks call `checkedIndex`, `checkIndex`, and `requireNonNil`
 with an embedded source location. An uncaught lifecycle error stops the loop and

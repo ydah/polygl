@@ -224,7 +224,10 @@ test("compiles reflected shaders and uploads automatic and user uniforms", async
     {
       __polyglShaderBundle: bundle,
       setup() {
-        setShaderUniform("plasma", "tint", [0.2, 0.4, 0.6]);
+        const tint = [0.2, 0.4, 0.6];
+        setShaderUniform("plasma", "tint", tint);
+        tint[0] = Number.NaN;
+        tint.length = 0;
       },
       frame() {},
     },
@@ -246,6 +249,79 @@ test("compiles reflected shaders and uploads automatic and user uniforms", async
   frames[1](1_016);
   assert.deepEqual(uniform1fValues, [0, 0, 0.016]);
   handle.stop();
+});
+
+test("allows optimized-out uniforms and rejects invalid uploads", async () => {
+  const inactive = fakeWebGl2({ inactiveUniform: "u_time" });
+  const handle = await start(
+    {},
+    {
+      canvas: fakeCanvas(),
+      context: inactive.context,
+      shaderBundle: shaderBundle([
+        {
+          name: "optimized",
+          uniforms: [
+            {
+              name: "u_time",
+              glslName: "u_time",
+              type: "float",
+              source: "automatic",
+            },
+          ],
+        },
+      ]),
+      onError() {},
+    },
+  );
+  assert.deepEqual(inactive.uniform1fValues, []);
+  handle.stop();
+
+  const integer = fakeWebGl2();
+  await assert.rejects(
+    start(
+      {
+        __polyglShaderBundle: shaderBundle([
+          {
+            name: "integer",
+            uniforms: [
+              {
+                name: "count",
+                glslName: "pgl_u_count",
+                type: "int",
+                source: "user",
+              },
+            ],
+          },
+        ]),
+        setup() {
+          setShaderUniform("integer", "count", 2_147_483_648);
+        },
+      },
+      {
+        canvas: fakeCanvas(),
+        context: integer.context,
+        onError() {},
+      },
+    ),
+    /uniform `count` expects int/,
+  );
+});
+
+test("releases built-in renderer resources when startup fails", async () => {
+  const failed = fakeWebGl2({ failShaderAt: 2 });
+  await assert.rejects(
+    start(
+      {},
+      {
+        canvas: fakeCanvas(),
+        context: failed.context,
+        onError() {},
+      },
+    ),
+    /built-in WebGL2 shader/,
+  );
+  assert.equal(failed.deletedShaders.length, 2);
 });
 
 test("reports shader startup failures at the originating source", async () => {
@@ -356,6 +432,7 @@ function fakeWebGl2(options = {}) {
   const clears = [];
   const uniform1fValues = [];
   const uniform3fvValues = [];
+  const deletedShaders = [];
   let shaderChecks = 0;
   const context = {
     ARRAY_BUFFER: 0x8892,
@@ -366,6 +443,7 @@ function fakeWebGl2(options = {}) {
     FLOAT: 0x1406,
     FRAGMENT_SHADER: 0x8b30,
     LINK_STATUS: 0x8b82,
+    NO_ERROR: 0,
     ONE_MINUS_SRC_ALPHA: 0x0303,
     SRC_ALPHA: 0x0302,
     TRIANGLES: 0x0004,
@@ -394,7 +472,9 @@ function fakeWebGl2(options = {}) {
     },
     deleteBuffer() {},
     deleteProgram() {},
-    deleteShader() {},
+    deleteShader(shader) {
+      deletedShaders.push(shader);
+    },
     drawArrays(_mode, _first, count) {
       draws.push(count);
     },
@@ -416,8 +496,14 @@ function fakeWebGl2(options = {}) {
       shaderChecks += 1;
       return shaderChecks !== options.failShaderAt;
     },
-    getUniformLocation() {
-      return {};
+    getUniformLocation(_program, name) {
+      return name === options.inactiveUniform ? null : {};
+    },
+    getError() {
+      return options.uniformError ?? 0;
+    },
+    isTexture(value) {
+      return value?.texture === true;
     },
     linkProgram() {},
     shaderSource() {},
@@ -444,5 +530,6 @@ function fakeWebGl2(options = {}) {
     clears,
     uniform1fValues,
     uniform3fvValues,
+    deletedShaders,
   };
 }

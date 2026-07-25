@@ -28,6 +28,7 @@ export class WebGL2BatchRenderer {
     this.program = createProgram(gl);
     const buffer = gl.createBuffer();
     if (buffer === null) {
+      gl.deleteProgram(this.program);
       throw new Error("failed to create the WebGL2 vertex buffer");
     }
     this.buffer = buffer;
@@ -36,6 +37,8 @@ export class WebGL2BatchRenderer {
     const color = gl.getAttribLocation(this.program, "a_color");
     const resolution = gl.getUniformLocation(this.program, "u_resolution");
     if (position < 0 || color < 0 || resolution === null) {
+      gl.deleteBuffer(this.buffer);
+      gl.deleteProgram(this.program);
       throw new Error("the built-in WebGL2 shader interface is incomplete");
     }
     this.resolution = resolution;
@@ -177,10 +180,13 @@ void main() {
   v_color = a_color;
 }`,
   );
-  const fragment = compileShader(
-    gl,
-    gl.FRAGMENT_SHADER,
-    `#version 300 es
+  let fragment: WebGLShader | undefined;
+  let program: WebGLProgram | undefined;
+  try {
+    fragment = compileShader(
+      gl,
+      gl.FRAGMENT_SHADER,
+      `#version 300 es
 precision highp float;
 in vec4 v_color;
 out vec4 out_color;
@@ -188,22 +194,30 @@ out vec4 out_color;
 void main() {
   out_color = v_color;
 }`,
-  );
-  const program = gl.createProgram();
-  if (program === null) {
-    throw new Error("failed to create the built-in WebGL2 program");
+    );
+    program = gl.createProgram() ?? undefined;
+    if (program === undefined) {
+      throw new Error("failed to create the built-in WebGL2 program");
+    }
+    gl.attachShader(program, vertex);
+    gl.attachShader(program, fragment);
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      const message = gl.getProgramInfoLog(program) ?? "unknown link failure";
+      throw new Error(`failed to link the built-in WebGL2 program: ${message}`);
+    }
+    return program;
+  } catch (error) {
+    if (program !== undefined) {
+      gl.deleteProgram(program);
+    }
+    throw error;
+  } finally {
+    gl.deleteShader(vertex);
+    if (fragment !== undefined) {
+      gl.deleteShader(fragment);
+    }
   }
-  gl.attachShader(program, vertex);
-  gl.attachShader(program, fragment);
-  gl.linkProgram(program);
-  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-    const message = gl.getProgramInfoLog(program) ?? "unknown link failure";
-    gl.deleteProgram(program);
-    throw new Error(`failed to link the built-in WebGL2 program: ${message}`);
-  }
-  gl.deleteShader(vertex);
-  gl.deleteShader(fragment);
-  return program;
 }
 
 function compileShader(

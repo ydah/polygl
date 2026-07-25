@@ -89,12 +89,13 @@ pub fn run(
     match parse_args(args)? {
         Command::Build {
             source,
-            output,
+            output: destination,
             mode,
-        } => build(&source, &output, mode),
+        } => build(&source, &destination, mode, output),
         Command::Check { source } => {
             let (source, typed) = compile_frontend(&source)?;
-            compile_backends(&source, &typed, BuildMode::Debug)?;
+            let (_, _, warnings) = compile_backends(&source, &typed, BuildMode::Debug)?;
+            write_diagnostics(&warnings, &source, output)?;
             Ok(())
         }
         Command::DumpHir { source } => {
@@ -190,31 +191,43 @@ fn ensure_empty(mut args: impl Iterator<Item = OsString>) -> Result<(), CliError
     Ok(())
 }
 
-fn build(source_path: &Path, output: &Path, mode: BuildMode) -> Result<(), CliError> {
+fn build(
+    source_path: &Path,
+    destination: &Path,
+    mode: BuildMode,
+    messages: &mut dyn Write,
+) -> Result<(), CliError> {
     let (source, typed) = compile_frontend(source_path)?;
-    let (javascript, shaders) = compile_backends(&source, &typed, mode)?;
+    let (javascript, shaders, warnings) = compile_backends(&source, &typed, mode)?;
+    write_diagnostics(&warnings, &source, messages)?;
 
-    fs::create_dir_all(output).map_err(|error| {
+    fs::create_dir_all(destination).map_err(|error| {
         CliError::new(format!(
             "failed to create output directory {}: {error}",
-            output.display()
+            destination.display()
         ))
     })?;
-    write_artifact(&output.join("app.js"), javascript.javascript.as_bytes())?;
-    write_artifact(&output.join("app.js.map"), javascript.source_map.as_bytes())?;
     write_artifact(
-        &output.join("shaders.js"),
+        &destination.join("app.js"),
+        javascript.javascript.as_bytes(),
+    )?;
+    write_artifact(
+        &destination.join("app.js.map"),
+        javascript.source_map.as_bytes(),
+    )?;
+    write_artifact(
+        &destination.join("shaders.js"),
         render_shader_module(&shaders, &source, mode)?.as_bytes(),
     )?;
-    write_artifact(&output.join("runtime.js"), RUNTIME_BUNDLE)?;
-    write_artifact(&output.join("index.html"), INDEX_HTML.as_bytes())
+    write_artifact(&destination.join("runtime.js"), RUNTIME_BUNDLE)?;
+    write_artifact(&destination.join("index.html"), INDEX_HTML.as_bytes())
 }
 
 fn compile_backends(
     source: &SourceFile,
     typed: &TypedModule,
     mode: BuildMode,
-) -> Result<(polygl_backend_js::Artifacts, GlslArtifacts), CliError> {
+) -> Result<(polygl_backend_js::Artifacts, GlslArtifacts, Diagnostics), CliError> {
     let lir = polygl_lir::lower(typed);
     let split =
         polygl_lir::split(&lir).map_err(|diagnostics| diagnostic_error(&diagnostics, source))?;
@@ -224,7 +237,7 @@ fn compile_backends(
     let shaders = GlslBackend::new()
         .generate(&split.gpu)
         .map_err(|error| CliError::new(format!("GLSL generation failed: {error}")))?;
-    Ok((javascript, shaders))
+    Ok((javascript, shaders, split.warnings))
 }
 
 fn render_shader_module(
@@ -364,6 +377,22 @@ fn diagnostic_error(diagnostics: &Diagnostics, source: &SourceFile) -> CliError 
     }
 }
 
+fn write_diagnostics(
+    diagnostics: &Diagnostics,
+    source: &SourceFile,
+    output: &mut dyn Write,
+) -> Result<(), CliError> {
+    if diagnostics.is_empty() {
+        return Ok(());
+    }
+    let rendered = diagnostics
+        .render(source)
+        .map_err(|error| CliError::new(format!("failed to render diagnostics: {error}")))?;
+    output
+        .write_all(rendered.as_bytes())
+        .map_err(|error| CliError::new(format!("failed to write diagnostics: {error}")))
+}
+
 fn write_artifact(path: &Path, contents: &[u8]) -> Result<(), CliError> {
     fs::write(path, contents).map_err(|error| {
         CliError::new(format!(
@@ -497,6 +526,20 @@ mod tests {
         let dump = String::from_utf8(output).unwrap();
         assert!(dump.contains("entry setup() [host]"));
         assert!(dump.contains("let value: int = 1;"));
+
+        let warning = temporary.join("warning.rb");
+        fs::write(
+            &warning,
+            "def helper\n  time()\nend\n\ndef setup\n  helper()\nend\n\ndef vertex_warning\n  helper()\n  vec4(0.0, 0.0, 0.0, 1.0)\nend\n\ndef fragment_warning\n  vec4(1.0, 1.0, 1.0, 1.0)\nend\n",
+        )
+        .unwrap();
+        let mut warnings = Vec::new();
+        run(
+            arguments(["check", warning.to_str().unwrap()]),
+            &mut warnings,
+        )
+        .unwrap();
+        assert!(String::from_utf8(warnings).unwrap().contains("W0401"));
         fs::remove_dir_all(temporary).unwrap();
     }
 

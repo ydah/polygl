@@ -115,8 +115,16 @@ export class WebGL2ShaderRegistry {
         shader.artifact.fragmentLocation,
       );
     }
-    validateUniformValue(binding, value, shader.artifact.fragmentLocation);
-    shader.userValues.set(uniformName, value);
+    validateUniformValue(
+      this.gl,
+      binding,
+      value,
+      shader.artifact.fragmentLocation,
+    );
+    shader.userValues.set(
+      uniformName,
+      Array.isArray(value) ? Object.freeze([...value]) : value,
+    );
   }
 
   public updateAutomaticUniforms(
@@ -134,6 +142,7 @@ export class WebGL2ShaderRegistry {
         }
         if (binding.source === "automatic") {
           this.uploadAutomatic(binding, location, elapsedSeconds, width, height);
+          this.assertUploadSucceeded(shader, binding);
           continue;
         }
         const value = shader.userValues.get(binding.name);
@@ -147,6 +156,7 @@ export class WebGL2ShaderRegistry {
           continue;
         }
         textureUnit = this.uploadUser(binding, location, value, textureUnit);
+        this.assertUploadSucceeded(shader, binding);
       }
     }
   }
@@ -199,13 +209,9 @@ export class WebGL2ShaderRegistry {
       const uniforms = new Map<string, WebGLUniformLocation>();
       for (const uniform of artifact.uniforms) {
         const location = this.gl.getUniformLocation(program, uniform.glslName);
-        if (location === null) {
-          throw runtimeError(
-            `linked shader \`${artifact.name}\` is missing reflected uniform \`${uniform.name}\``,
-            artifact.fragmentLocation,
-          );
+        if (location !== null) {
+          uniforms.set(uniform.name, location);
         }
-        uniforms.set(uniform.name, location);
       }
       return {
         artifact,
@@ -291,6 +297,19 @@ export class WebGL2ShaderRegistry {
         return textureUnit + 1;
     }
   }
+
+  private assertUploadSucceeded(
+    shader: LinkedShader,
+    binding: ShaderUniform,
+  ): void {
+    const error = this.gl.getError();
+    if (error !== this.gl.NO_ERROR) {
+      throw runtimeError(
+        `WebGL rejected uniform \`${binding.name}\` for shader \`${shader.artifact.name}\` (error 0x${error.toString(16)})`,
+        shader.artifact.fragmentLocation,
+      );
+    }
+  }
 }
 
 function compileArtifactShader(
@@ -322,6 +341,7 @@ function compileArtifactShader(
 }
 
 function validateUniformValue(
+  gl: WebGL2RenderingContext,
   binding: ShaderUniform,
   value: ShaderUniformValue,
   location: SourceLocation,
@@ -334,7 +354,14 @@ function validateUniformValue(
   };
   switch (binding.type) {
     case "int":
-      if (typeof value !== "number" || !Number.isInteger(value)) invalid();
+      if (
+        typeof value !== "number" ||
+        !Number.isInteger(value) ||
+        value < -2_147_483_648 ||
+        value > 2_147_483_647
+      ) {
+        invalid();
+      }
       return;
     case "float":
       if (typeof value !== "number" || !Number.isFinite(value)) invalid();
@@ -359,11 +386,7 @@ function validateUniformValue(
       validateNumericArray(value, 16, invalid);
       return;
     case "texture":
-      if (
-        typeof value !== "object" ||
-        value === null ||
-        Array.isArray(value)
-      ) {
+      if (typeof value !== "object" || value === null || !gl.isTexture(value)) {
         invalid();
       }
   }

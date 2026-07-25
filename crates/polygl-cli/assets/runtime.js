@@ -162,6 +162,7 @@ export class WebGL2BatchRenderer {
         this.program = createProgram(gl);
         const buffer = gl.createBuffer();
         if (buffer === null) {
+            gl.deleteProgram(this.program);
             throw new Error("failed to create the WebGL2 vertex buffer");
         }
         this.buffer = buffer;
@@ -169,6 +170,8 @@ export class WebGL2BatchRenderer {
         const color = gl.getAttribLocation(this.program, "a_color");
         const resolution = gl.getUniformLocation(this.program, "u_resolution");
         if (position < 0 || color < 0 || resolution === null) {
+            gl.deleteBuffer(this.buffer);
+            gl.deleteProgram(this.program);
             throw new Error("the built-in WebGL2 shader interface is incomplete");
         }
         this.resolution = resolution;
@@ -258,7 +261,10 @@ void main() {
   gl_Position = vec4(clip * vec2(1.0, -1.0), 0.0, 1.0);
   v_color = a_color;
 }`);
-    const fragment = compileShader(gl, gl.FRAGMENT_SHADER, `#version 300 es
+    let fragment;
+    let program;
+    try {
+        fragment = compileShader(gl, gl.FRAGMENT_SHADER, `#version 300 es
 precision highp float;
 in vec4 v_color;
 out vec4 out_color;
@@ -266,21 +272,31 @@ out vec4 out_color;
 void main() {
   out_color = v_color;
 }`);
-    const program = gl.createProgram();
-    if (program === null) {
-        throw new Error("failed to create the built-in WebGL2 program");
+        program = gl.createProgram() ?? undefined;
+        if (program === undefined) {
+            throw new Error("failed to create the built-in WebGL2 program");
+        }
+        gl.attachShader(program, vertex);
+        gl.attachShader(program, fragment);
+        gl.linkProgram(program);
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+            const message = gl.getProgramInfoLog(program) ?? "unknown link failure";
+            throw new Error(`failed to link the built-in WebGL2 program: ${message}`);
+        }
+        return program;
     }
-    gl.attachShader(program, vertex);
-    gl.attachShader(program, fragment);
-    gl.linkProgram(program);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-        const message = gl.getProgramInfoLog(program) ?? "unknown link failure";
-        gl.deleteProgram(program);
-        throw new Error(`failed to link the built-in WebGL2 program: ${message}`);
+    catch (error) {
+        if (program !== undefined) {
+            gl.deleteProgram(program);
+        }
+        throw error;
     }
-    gl.deleteShader(vertex);
-    gl.deleteShader(fragment);
-    return program;
+    finally {
+        gl.deleteShader(vertex);
+        if (fragment !== undefined) {
+            gl.deleteShader(fragment);
+        }
+    }
 }
 function compileShader(gl, kind, source) {
     const shader = gl.createShader(kind);
@@ -344,8 +360,8 @@ export class WebGL2ShaderRegistry {
         if (binding === undefined || binding.source !== "user") {
             throw runtimeError(`shader \`${shaderName}\` has no user uniform \`${uniformName}\``, shader.artifact.fragmentLocation);
         }
-        validateUniformValue(binding, value, shader.artifact.fragmentLocation);
-        shader.userValues.set(uniformName, value);
+        validateUniformValue(this.gl, binding, value, shader.artifact.fragmentLocation);
+        shader.userValues.set(uniformName, Array.isArray(value) ? Object.freeze([...value]) : value);
     }
     updateAutomaticUniforms(elapsedSeconds, width, height) {
         for (const shader of this.shaders.values()) {
@@ -358,6 +374,7 @@ export class WebGL2ShaderRegistry {
                 }
                 if (binding.source === "automatic") {
                     this.uploadAutomatic(binding, location, elapsedSeconds, width, height);
+                    this.assertUploadSucceeded(shader, binding);
                     continue;
                 }
                 const value = shader.userValues.get(binding.name);
@@ -368,6 +385,7 @@ export class WebGL2ShaderRegistry {
                     continue;
                 }
                 textureUnit = this.uploadUser(binding, location, value, textureUnit);
+                this.assertUploadSucceeded(shader, binding);
             }
         }
     }
@@ -397,10 +415,9 @@ export class WebGL2ShaderRegistry {
             const uniforms = new Map();
             for (const uniform of artifact.uniforms) {
                 const location = this.gl.getUniformLocation(program, uniform.glslName);
-                if (location === null) {
-                    throw runtimeError(`linked shader \`${artifact.name}\` is missing reflected uniform \`${uniform.name}\``, artifact.fragmentLocation);
+                if (location !== null) {
+                    uniforms.set(uniform.name, location);
                 }
-                uniforms.set(uniform.name, location);
             }
             return {
                 artifact,
@@ -475,6 +492,12 @@ export class WebGL2ShaderRegistry {
                 return textureUnit + 1;
         }
     }
+    assertUploadSucceeded(shader, binding) {
+        const error = this.gl.getError();
+        if (error !== this.gl.NO_ERROR) {
+            throw runtimeError(`WebGL rejected uniform \`${binding.name}\` for shader \`${shader.artifact.name}\` (error 0x${error.toString(16)})`, shader.artifact.fragmentLocation);
+        }
+    }
 }
 function compileArtifactShader(gl, kind, source, name, stage, location) {
     const shader = gl.createShader(kind);
@@ -490,14 +513,18 @@ function compileArtifactShader(gl, kind, source, name, stage, location) {
     }
     return shader;
 }
-function validateUniformValue(binding, value, location) {
+function validateUniformValue(gl, binding, value, location) {
     const invalid = () => {
         throw runtimeError(`uniform \`${binding.name}\` expects ${binding.type}`, location);
     };
     switch (binding.type) {
         case "int":
-            if (typeof value !== "number" || !Number.isInteger(value))
+            if (typeof value !== "number" ||
+                !Number.isInteger(value) ||
+                value < -2147483648 ||
+                value > 2147483647) {
                 invalid();
+            }
             return;
         case "float":
             if (typeof value !== "number" || !Number.isFinite(value))
@@ -524,9 +551,7 @@ function validateUniformValue(binding, value, location) {
             validateNumericArray(value, 16, invalid);
             return;
         case "texture":
-            if (typeof value !== "object" ||
-                value === null ||
-                Array.isArray(value)) {
+            if (typeof value !== "object" || value === null || !gl.isTexture(value)) {
                 invalid();
             }
     }
