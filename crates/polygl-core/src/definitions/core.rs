@@ -1,7 +1,7 @@
 use super::{Builtin, BuiltinId, BuiltinTier, Domain, F, I, builtin, req};
 
 pub(super) const FLOOR: Builtin = builtin(
-    BuiltinId::Floor,
+    BuiltinId::FLOOR,
     "floor",
     BuiltinTier::Core,
     &[req("value", F)],
@@ -11,7 +11,7 @@ pub(super) const FLOOR: Builtin = builtin(
 );
 
 pub(super) const ROUND: Builtin = builtin(
-    BuiltinId::Round,
+    BuiltinId::ROUND,
     "round",
     BuiltinTier::Core,
     &[req("value", F)],
@@ -21,7 +21,7 @@ pub(super) const ROUND: Builtin = builtin(
 );
 
 pub(super) const TRUNC: Builtin = builtin(
-    BuiltinId::Trunc,
+    BuiltinId::TRUNC,
     "trunc",
     BuiltinTier::Core,
     &[req("value", F)],

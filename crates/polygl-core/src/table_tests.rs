@@ -3,6 +3,13 @@ use crate::{BuiltinTable, BuiltinTier, BuiltinType, Domain};
 #[test]
 fn registry_is_valid_and_contains_every_tier_one_function() {
     BuiltinTable::validate().unwrap();
+    assert_eq!(
+        BuiltinTable::all()
+            .iter()
+            .map(|builtin| builtin.id)
+            .collect::<Vec<_>>(),
+        crate::BuiltinId::ALL
+    );
     let tier_one = BuiltinTable::all()
         .iter()
         .filter(|builtin| builtin.tier == BuiltinTier::Tier1)

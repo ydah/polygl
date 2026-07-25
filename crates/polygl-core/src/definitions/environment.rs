@@ -1,7 +1,7 @@
 use super::{B, Builtin, BuiltinId, BuiltinTier, Domain, F, I, S, V, builtin, req};
 
 pub(super) const PUSH_MATRIX: Builtin = builtin(
-    BuiltinId::PushMatrix,
+    BuiltinId::PUSH_MATRIX,
     "push_matrix",
     BuiltinTier::Tier1,
     &[],
@@ -10,7 +10,7 @@ pub(super) const PUSH_MATRIX: Builtin = builtin(
     "pushMatrix",
 );
 pub(super) const POP_MATRIX: Builtin = builtin(
-    BuiltinId::PopMatrix,
+    BuiltinId::POP_MATRIX,
     "pop_matrix",
     BuiltinTier::Tier1,
     &[],
@@ -19,7 +19,7 @@ pub(super) const POP_MATRIX: Builtin = builtin(
     "popMatrix",
 );
 pub(super) const TRANSLATE: Builtin = builtin(
-    BuiltinId::Translate,
+    BuiltinId::TRANSLATE,
     "translate",
     BuiltinTier::Tier1,
     &[req("x", F), req("y", F)],
@@ -28,7 +28,7 @@ pub(super) const TRANSLATE: Builtin = builtin(
     "translate",
 );
 pub(super) const ROTATE: Builtin = builtin(
-    BuiltinId::Rotate,
+    BuiltinId::ROTATE,
     "rotate",
     BuiltinTier::Tier1,
     &[req("radians", F)],
@@ -37,7 +37,7 @@ pub(super) const ROTATE: Builtin = builtin(
     "rotate",
 );
 pub(super) const SCALE: Builtin = builtin(
-    BuiltinId::Scale,
+    BuiltinId::SCALE,
     "scale",
     BuiltinTier::Tier1,
     &[req("x", F), req("y", F)],
@@ -46,7 +46,7 @@ pub(super) const SCALE: Builtin = builtin(
     "scale",
 );
 pub(super) const WIDTH: Builtin = builtin(
-    BuiltinId::Width,
+    BuiltinId::WIDTH,
     "width",
     BuiltinTier::Tier1,
     &[],
@@ -55,7 +55,7 @@ pub(super) const WIDTH: Builtin = builtin(
     "width",
 );
 pub(super) const HEIGHT: Builtin = builtin(
-    BuiltinId::Height,
+    BuiltinId::HEIGHT,
     "height",
     BuiltinTier::Tier1,
     &[],
@@ -64,7 +64,7 @@ pub(super) const HEIGHT: Builtin = builtin(
     "height",
 );
 pub(super) const TIME: Builtin = builtin(
-    BuiltinId::Time,
+    BuiltinId::TIME,
     "time",
     BuiltinTier::Tier1,
     &[],
@@ -73,7 +73,7 @@ pub(super) const TIME: Builtin = builtin(
     "time",
 );
 pub(super) const MOUSE_X: Builtin = builtin(
-    BuiltinId::MouseX,
+    BuiltinId::MOUSE_X,
     "mouse_x",
     BuiltinTier::Tier1,
     &[],
@@ -82,7 +82,7 @@ pub(super) const MOUSE_X: Builtin = builtin(
     "mouseX",
 );
 pub(super) const MOUSE_Y: Builtin = builtin(
-    BuiltinId::MouseY,
+    BuiltinId::MOUSE_Y,
     "mouse_y",
     BuiltinTier::Tier1,
     &[],
@@ -91,7 +91,7 @@ pub(super) const MOUSE_Y: Builtin = builtin(
     "mouseY",
 );
 pub(super) const KEY_DOWN: Builtin = builtin(
-    BuiltinId::KeyDown,
+    BuiltinId::KEY_DOWN,
     "key_down",
     BuiltinTier::Tier1,
     &[req("key", S)],
@@ -100,7 +100,7 @@ pub(super) const KEY_DOWN: Builtin = builtin(
     "keyDown",
 );
 pub(super) const RANDOM: Builtin = builtin(
-    BuiltinId::Random,
+    BuiltinId::RANDOM,
     "random",
     BuiltinTier::Tier1,
     &[req("a", F), req("b", F)],

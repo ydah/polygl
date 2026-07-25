@@ -43,10 +43,16 @@ version = "0.0.0"
 [[package]]
 name = "polygl-core"
 version = "0.0.0"
+dependencies = [
+ "polygl-hir",
+]
 
 [[package]]
 name = "polygl-hir"
 version = "0.0.0"
+dependencies = [
+ "polygl-span",
+]
 
 [[package]]
 name = "polygl-lir"

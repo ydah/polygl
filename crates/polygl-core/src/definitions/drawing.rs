@@ -1,7 +1,7 @@
 use super::{Builtin, BuiltinId, BuiltinTier, Domain, F, I, S, V, alpha, builtin, req};
 
 pub(super) const SIZE: Builtin = builtin(
-    BuiltinId::Size,
+    BuiltinId::SIZE,
     "size",
     BuiltinTier::Tier1,
     &[req("w", I), req("h", I)],
@@ -10,7 +10,7 @@ pub(super) const SIZE: Builtin = builtin(
     "size",
 );
 pub(super) const BACKGROUND: Builtin = builtin(
-    BuiltinId::Background,
+    BuiltinId::BACKGROUND,
     "background",
     BuiltinTier::Tier1,
     &[req("r", F), req("g", F), req("b", F)],
@@ -19,7 +19,7 @@ pub(super) const BACKGROUND: Builtin = builtin(
     "background",
 );
 pub(super) const FILL: Builtin = builtin(
-    BuiltinId::Fill,
+    BuiltinId::FILL,
     "fill",
     BuiltinTier::Tier1,
     &[req("r", F), req("g", F), req("b", F), alpha()],
@@ -28,7 +28,7 @@ pub(super) const FILL: Builtin = builtin(
     "fill",
 );
 pub(super) const STROKE: Builtin = builtin(
-    BuiltinId::Stroke,
+    BuiltinId::STROKE,
     "stroke",
     BuiltinTier::Tier1,
     &[req("r", F), req("g", F), req("b", F), alpha()],
@@ -37,7 +37,7 @@ pub(super) const STROKE: Builtin = builtin(
     "stroke",
 );
 pub(super) const NO_STROKE: Builtin = builtin(
-    BuiltinId::NoStroke,
+    BuiltinId::NO_STROKE,
     "no_stroke",
     BuiltinTier::Tier1,
     &[],
@@ -46,7 +46,7 @@ pub(super) const NO_STROKE: Builtin = builtin(
     "noStroke",
 );
 pub(super) const RECT: Builtin = builtin(
-    BuiltinId::Rect,
+    BuiltinId::RECT,
     "rect",
     BuiltinTier::Tier1,
     &[req("x", F), req("y", F), req("w", F), req("h", F)],
@@ -55,7 +55,7 @@ pub(super) const RECT: Builtin = builtin(
     "rect",
 );
 pub(super) const CIRCLE: Builtin = builtin(
-    BuiltinId::Circle,
+    BuiltinId::CIRCLE,
     "circle",
     BuiltinTier::Tier1,
     &[req("x", F), req("y", F), req("r", F)],
@@ -64,7 +64,7 @@ pub(super) const CIRCLE: Builtin = builtin(
     "circle",
 );
 pub(super) const LINE: Builtin = builtin(
-    BuiltinId::Line,
+    BuiltinId::LINE,
     "line",
     BuiltinTier::Tier1,
     &[req("x1", F), req("y1", F), req("x2", F), req("y2", F)],
@@ -73,7 +73,7 @@ pub(super) const LINE: Builtin = builtin(
     "line",
 );
 pub(super) const TRIANGLE: Builtin = builtin(
-    BuiltinId::Triangle,
+    BuiltinId::TRIANGLE,
     "triangle",
     BuiltinTier::Tier1,
     &[
@@ -89,7 +89,7 @@ pub(super) const TRIANGLE: Builtin = builtin(
     "triangle",
 );
 pub(super) const TEXT: Builtin = builtin(
-    BuiltinId::Text,
+    BuiltinId::TEXT,
     "text",
     BuiltinTier::Tier1,
     &[req("s", S), req("x", F), req("y", F)],

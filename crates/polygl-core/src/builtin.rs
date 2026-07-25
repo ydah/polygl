@@ -1,5 +1,7 @@
 use std::fmt;
 
+use polygl_hir::BuiltinId;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BuiltinTier {
     Core,
@@ -129,33 +131,4 @@ pub struct Builtin {
     pub signature: Signature,
     pub domain: Domain,
     pub runtime_op: RuntimeOp,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum BuiltinId {
-    Floor,
-    Round,
-    Trunc,
-    Size,
-    Background,
-    Fill,
-    Stroke,
-    NoStroke,
-    Rect,
-    Circle,
-    Line,
-    Triangle,
-    Text,
-    PushMatrix,
-    PopMatrix,
-    Translate,
-    Rotate,
-    Scale,
-    Width,
-    Height,
-    Time,
-    MouseX,
-    MouseY,
-    KeyDown,
-    Random,
 }
