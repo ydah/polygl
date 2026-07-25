@@ -1,0 +1,12 @@
+[package]
+name = "polygl-perl-parser-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+tree-sitter = "=0.26.11"
+ts-parser-perl = "=1.2.1"
+
+[lints.rust]
+unsafe_code = "forbid"

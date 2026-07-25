@@ -1,0 +1,40 @@
+name: WebGL stability
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  swiftshader:
+    name: Chromium / SwiftShader
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: spikes/webgl-stability/pnpm-lock.yaml
+
+      - name: Install probe dependencies
+        run: pnpm --dir spikes/webgl-stability install --frozen-lockfile
+
+      - name: Install pinned Chromium
+        run: pnpm --dir spikes/webgl-stability exec playwright install --with-deps chromium
+
+      - name: Compare three independent SwiftShader processes
+        run: pnpm --dir spikes/webgl-stability test

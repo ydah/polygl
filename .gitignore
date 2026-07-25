@@ -1,0 +1,10 @@
+/.idea/
+/.vscode/
+/.serena/
+tmp/
+*.log
+target/
+node_modules/
+test-results/
+playwright-report/
+dist/

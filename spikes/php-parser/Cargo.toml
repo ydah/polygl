@@ -1,0 +1,19 @@
+[package]
+name = "polygl-php-parser-spike"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.96.0"
+publish = false
+
+[dependencies]
+mago-allocator = "=1.43.0"
+mago-database = "=1.43.0"
+mago-php-version = "=1.43.0"
+mago-reporting = "=1.43.0"
+mago-span = "=1.43.0"
+mago-syntax = "=1.43.0"
+mago-syntax-core = "=1.43.0"
+mago-text-edit = "=1.43.0"
+
+[lints.rust]
+unsafe_code = "forbid"
