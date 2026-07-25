@@ -65,6 +65,10 @@ export class WebGL2BatchRenderer {
     this.resize(canvas.width, canvas.height);
   }
 
+  public get context(): WebGL2RenderingContext {
+    return this.gl;
+  }
+
   public resize(width: number, height: number): void {
     const safeWidth = positiveInteger(width, "canvas width");
     const safeHeight = positiveInteger(height, "canvas height");

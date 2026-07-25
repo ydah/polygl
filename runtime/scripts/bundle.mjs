@@ -12,6 +12,7 @@ const inputs = [
   "dist/errors.js",
   "dist/random.js",
   "dist/renderer.js",
+  "dist/shader.js",
   "dist/session.js",
   "dist/index.js",
 ];

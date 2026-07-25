@@ -16,6 +16,7 @@ const {
   roundToInt,
   runtimeOps,
   runtimeVersion,
+  setShaderUniform,
   size,
   start,
   time,
@@ -191,6 +192,145 @@ test("rejects failed startup and clears the active session", async () => {
   assert.equal(canvas.listeners.size, 0);
 });
 
+test("compiles reflected shaders and uploads automatic and user uniforms", async () => {
+  const {
+    context,
+    uniform1fValues,
+    uniform3fvValues,
+  } = fakeWebGl2();
+  const canvas = fakeCanvas();
+  const frames = [];
+  const bundle = shaderBundle([
+    {
+      name: "plasma",
+      uniforms: [
+        {
+          name: "u_time",
+          glslName: "u_time",
+          type: "float",
+          source: "automatic",
+        },
+        {
+          name: "tint",
+          glslName: "pgl_u_tint",
+          type: "vec3",
+          source: "user",
+        },
+      ],
+    },
+  ]);
+
+  const handle = await start(
+    {
+      __polyglShaderBundle: bundle,
+      setup() {
+        setShaderUniform("plasma", "tint", [0.2, 0.4, 0.6]);
+      },
+      frame() {},
+    },
+    {
+      canvas,
+      context,
+      requestAnimationFrame(callback) {
+        frames.push(callback);
+        return frames.length;
+      },
+      cancelAnimationFrame() {},
+      onError() {},
+    },
+  );
+
+  assert.deepEqual(uniform1fValues, [0]);
+  assert.deepEqual(uniform3fvValues, [[0.2, 0.4, 0.6]]);
+  frames[0](1_000);
+  frames[1](1_016);
+  assert.deepEqual(uniform1fValues, [0, 0, 0.016]);
+  handle.stop();
+});
+
+test("reports shader startup failures at the originating source", async () => {
+  const missing = fakeWebGl2();
+  await assert.rejects(
+    start(
+      {
+        __polyglShaderBundle: shaderBundle([
+          {
+            name: "needs_color",
+            uniforms: [
+              {
+                name: "color",
+                glslName: "pgl_u_color",
+                type: "vec4",
+                source: "user",
+              },
+            ],
+          },
+        ]),
+      },
+      {
+        canvas: fakeCanvas(),
+        context: missing.context,
+        onError() {},
+      },
+    ),
+    (error) => {
+      assert.equal(
+        formatRuntimeError(error),
+        "main.rb:8:3: user uniform `color` is unset for shader `needs_color`",
+      );
+      return true;
+    },
+  );
+
+  const failedCompile = fakeWebGl2({ failShaderAt: 3 });
+  await assert.rejects(
+    start(
+      {
+        __polyglShaderBundle: shaderBundle([{ name: "broken" }]),
+      },
+      {
+        canvas: fakeCanvas(),
+        context: failedCompile.context,
+        onError() {},
+      },
+    ),
+    (error) => {
+      assert.match(
+        formatRuntimeError(error),
+        /main\.rb:4:2: failed to compile vertex shader `broken`: driver rejected source/,
+      );
+      return true;
+    },
+  );
+});
+
+function shaderBundle(shaders) {
+  return {
+    debug: true,
+    shaders: shaders.map((shader) => ({
+      vertex: "#version 300 es\nvoid main() {}",
+      fragment: "#version 300 es\nvoid main() {}",
+      attributes: [],
+      uniforms: [],
+      vertexLocation: {
+        source: "main.rb",
+        line: 4,
+        column: 2,
+        start: 20,
+        end: 40,
+      },
+      fragmentLocation: {
+        source: "main.rb",
+        line: 8,
+        column: 3,
+        start: 60,
+        end: 80,
+      },
+      ...shader,
+    })),
+  };
+}
+
 function fakeCanvas() {
   const listeners = new Map();
   return {
@@ -211,9 +351,12 @@ function fakeCanvas() {
   };
 }
 
-function fakeWebGl2() {
+function fakeWebGl2(options = {}) {
   const draws = [];
   const clears = [];
+  const uniform1fValues = [];
+  const uniform3fvValues = [];
+  let shaderChecks = 0;
   const context = {
     ARRAY_BUFFER: 0x8892,
     BLEND: 0x0be2,
@@ -226,9 +369,13 @@ function fakeWebGl2() {
     ONE_MINUS_SRC_ALPHA: 0x0303,
     SRC_ALPHA: 0x0302,
     TRIANGLES: 0x0004,
+    TEXTURE0: 0x84c0,
+    TEXTURE_2D: 0x0de1,
     VERTEX_SHADER: 0x8b31,
+    activeTexture() {},
     attachShader() {},
     bindBuffer() {},
+    bindTexture() {},
     blendFunc() {},
     bufferData() {},
     clear(mask) {
@@ -263,10 +410,11 @@ function fakeWebGl2() {
       return true;
     },
     getShaderInfoLog() {
-      return "";
+      return "driver rejected source";
     },
     getShaderParameter() {
-      return true;
+      shaderChecks += 1;
+      return shaderChecks !== options.failShaderAt;
     },
     getUniformLocation() {
       return {};
@@ -274,9 +422,27 @@ function fakeWebGl2() {
     linkProgram() {},
     shaderSource() {},
     uniform2f() {},
+    uniform1f(_location, value) {
+      uniform1fValues.push(value);
+    },
+    uniform1i() {},
+    uniform2fv() {},
+    uniform3fv(_location, value) {
+      uniform3fvValues.push([...value]);
+    },
+    uniform4fv() {},
+    uniformMatrix2fv() {},
+    uniformMatrix3fv() {},
+    uniformMatrix4fv() {},
     useProgram() {},
     vertexAttribPointer() {},
     viewport() {},
   };
-  return { context, draws, clears };
+  return {
+    context,
+    draws,
+    clears,
+    uniform1fValues,
+    uniform3fvValues,
+  };
 }

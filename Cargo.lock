@@ -276,12 +276,14 @@ version = "0.0.0"
 dependencies = [
  "polygl-adapter-api",
  "polygl-adapter-ruby",
+ "polygl-backend-glsl",
  "polygl-backend-js",
  "polygl-core",
  "polygl-hir",
  "polygl-lir",
  "polygl-span",
  "polygl-types",
+ "serde_json",
 ]
 
 [[package]]

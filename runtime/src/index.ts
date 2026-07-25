@@ -14,6 +14,15 @@ export {
 export type { LocatedError, SourceLocation } from "./errors.js";
 export { SeededRandom } from "./random.js";
 export { WebGL2BatchRenderer } from "./renderer.js";
+export { WebGL2ShaderRegistry } from "./shader.js";
+export type {
+  ShaderArtifact,
+  ShaderAttribute,
+  ShaderBundle,
+  ShaderUniform,
+  ShaderUniformValue,
+  ShaderValueType,
+} from "./shader.js";
 export { RuntimeSession } from "./session.js";
 export type {
   PolyglProgram,
@@ -32,6 +41,7 @@ import type {
   RuntimeOptions,
   PolyglProgramSource,
 } from "./session.js";
+import type { ShaderUniformValue } from "./shader.js";
 
 export const runtimeVersion = "0.0.0" as const;
 
@@ -126,6 +136,14 @@ export function keyDown(key: string): boolean {
 
 export function random(a: number, b: number): number {
   return session().randomSource.between(a, b);
+}
+
+export function setShaderUniform(
+  shaderName: string,
+  uniformName: string,
+  value: ShaderUniformValue,
+): void {
+  session().setShaderUniform(shaderName, uniformName, value);
 }
 
 export function floorToInt(value: number): number {

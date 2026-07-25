@@ -1,6 +1,11 @@
 import { showRuntimeError } from "./errors.js";
 import { SeededRandom } from "./random.js";
 import { WebGL2BatchRenderer } from "./renderer.js";
+import { WebGL2ShaderRegistry } from "./shader.js";
+import type {
+  ShaderBundle,
+  ShaderUniformValue,
+} from "./shader.js";
 
 export interface RuntimeEvent {
   readonly kind: string;
@@ -13,6 +18,7 @@ export interface PolyglProgram {
   readonly setup?: () => void | Promise<void>;
   readonly frame?: (dt: number) => void;
   readonly on_event?: (event: RuntimeEvent) => void;
+  readonly __polyglShaderBundle?: ShaderBundle;
 }
 
 export type PolyglProgramLoader = () => Promise<PolyglProgram>;
@@ -25,6 +31,7 @@ export interface RuntimeOptions {
   readonly requestAnimationFrame?: (callback: FrameRequestCallback) => number;
   readonly cancelAnimationFrame?: (handle: number) => void;
   readonly seed?: number;
+  readonly shaderBundle?: ShaderBundle;
   readonly onError?: (reason: unknown) => void;
 }
 
@@ -48,12 +55,18 @@ export class RuntimeSession implements RuntimeHandle {
   private previousTimestamp: number | undefined;
   private stopped = false;
   private onStop: () => void = () => {};
+  private shaderRegistry: WebGL2ShaderRegistry;
+  private readonly initialShaderBundle: ShaderBundle | undefined;
 
   public constructor(
     public readonly canvas: HTMLCanvasElement,
     options: RuntimeOptions,
   ) {
     this.renderer = new WebGL2BatchRenderer(canvas, options.context);
+    this.shaderRegistry = WebGL2ShaderRegistry.fromBundle(
+      this.renderer.context,
+    );
+    this.initialShaderBundle = options.shaderBundle;
     this.randomSource = new SeededRandom(options.seed);
     this.documentObject = options.document ?? globalThis.document;
     this.requestFrame =
@@ -70,15 +83,20 @@ export class RuntimeSession implements RuntimeHandle {
 
   public async run(source: PolyglProgramSource): Promise<void> {
     try {
+      this.replaceShaderBundle(this.initialShaderBundle);
       const program = typeof source === "function" ? await source() : source;
       if (this.stopped) {
         return;
       }
       this.program = program;
+      if (program.__polyglShaderBundle !== undefined) {
+        this.replaceShaderBundle(program.__polyglShaderBundle);
+      }
       await program.setup?.();
       if (this.stopped) {
         return;
       }
+      this.updateShaderUniforms();
       this.renderer.flush();
       if (program.frame !== undefined) {
         this.animationHandle = this.requestFrame(this.tick);
@@ -102,6 +120,7 @@ export class RuntimeSession implements RuntimeHandle {
     this.documentObject?.removeEventListener("keydown", this.handleKeyDown);
     this.documentObject?.removeEventListener("keyup", this.handleKeyUp);
     this.renderer.dispose();
+    this.shaderRegistry.dispose();
     this.onStop();
   }
 
@@ -111,6 +130,14 @@ export class RuntimeSession implements RuntimeHandle {
 
   public setStopHandler(handler: () => void): void {
     this.onStop = handler;
+  }
+
+  public setShaderUniform(
+    shaderName: string,
+    uniformName: string,
+    value: ShaderUniformValue,
+  ): void {
+    this.shaderRegistry.setUniform(shaderName, uniformName, value);
   }
 
   private program: PolyglProgram | undefined;
@@ -125,6 +152,7 @@ export class RuntimeSession implements RuntimeHandle {
       previous === undefined ? 0 : Math.max(0, (timestamp - previous) / 1000);
     this.elapsedSeconds += dt;
     try {
+      this.updateShaderUniforms();
       this.program?.frame?.(dt);
       if (this.stopped) {
         return;
@@ -186,6 +214,22 @@ export class RuntimeSession implements RuntimeHandle {
     } catch (error) {
       this.fail(error);
     }
+  }
+
+  private updateShaderUniforms(): void {
+    this.shaderRegistry.updateAutomaticUniforms(
+      this.elapsedSeconds,
+      this.canvas.width,
+      this.canvas.height,
+    );
+  }
+
+  private replaceShaderBundle(bundle: ShaderBundle | undefined): void {
+    this.shaderRegistry.dispose();
+    this.shaderRegistry = WebGL2ShaderRegistry.fromBundle(
+      this.renderer.context,
+      bundle,
+    );
   }
 
   private fail(reason: unknown): void {

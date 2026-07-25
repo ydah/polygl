@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use polygl_adapter_api::{LanguageAdapter, LowerCtx};
 use polygl_adapter_ruby::RubyAdapter;
+use polygl_backend_glsl::{GlslArtifacts, GlslBackend, UniformSource};
 use polygl_backend_js::{BuildMode, JavaScriptBackend};
 use polygl_core::BuiltinTable;
 use polygl_span::{Diagnostics, SourceFile, SourceId};
@@ -31,7 +32,10 @@ const INDEX_HTML: &str = r#"<!doctype html>
   <canvas id="polygl-canvas" width="640" height="480"></canvas>
   <script type="module">
     import { showRuntimeError, start } from "./runtime.js";
-    globalThis.__polyglReady = start(() => import("./app.js")).catch((error) => {
+    import { shaderBundle } from "./shaders.js";
+    globalThis.__polyglReady = start(() => import("./app.js"), {
+      shaderBundle,
+    }).catch((error) => {
       console.error(error);
       showRuntimeError(error);
       throw error;
@@ -89,7 +93,8 @@ pub fn run(
             mode,
         } => build(&source, &output, mode),
         Command::Check { source } => {
-            compile_frontend(&source)?;
+            let (source, typed) = compile_frontend(&source)?;
+            compile_backends(&source, &typed, BuildMode::Debug)?;
             Ok(())
         }
         Command::DumpHir { source } => {
@@ -187,10 +192,7 @@ fn ensure_empty(mut args: impl Iterator<Item = OsString>) -> Result<(), CliError
 
 fn build(source_path: &Path, output: &Path, mode: BuildMode) -> Result<(), CliError> {
     let (source, typed) = compile_frontend(source_path)?;
-    let lir = polygl_lir::lower(&typed);
-    let artifacts = JavaScriptBackend::new(mode)
-        .generate(&lir, std::slice::from_ref(&source))
-        .map_err(|error| CliError::new(format!("JavaScript generation failed: {error}")))?;
+    let (javascript, shaders) = compile_backends(&source, &typed, mode)?;
 
     fs::create_dir_all(output).map_err(|error| {
         CliError::new(format!(
@@ -198,10 +200,125 @@ fn build(source_path: &Path, output: &Path, mode: BuildMode) -> Result<(), CliEr
             output.display()
         ))
     })?;
-    write_artifact(&output.join("app.js"), artifacts.javascript.as_bytes())?;
-    write_artifact(&output.join("app.js.map"), artifacts.source_map.as_bytes())?;
+    write_artifact(&output.join("app.js"), javascript.javascript.as_bytes())?;
+    write_artifact(&output.join("app.js.map"), javascript.source_map.as_bytes())?;
+    write_artifact(
+        &output.join("shaders.js"),
+        render_shader_module(&shaders, &source, mode)?.as_bytes(),
+    )?;
     write_artifact(&output.join("runtime.js"), RUNTIME_BUNDLE)?;
     write_artifact(&output.join("index.html"), INDEX_HTML.as_bytes())
+}
+
+fn compile_backends(
+    source: &SourceFile,
+    typed: &TypedModule,
+    mode: BuildMode,
+) -> Result<(polygl_backend_js::Artifacts, GlslArtifacts), CliError> {
+    let lir = polygl_lir::lower(typed);
+    let split =
+        polygl_lir::split(&lir).map_err(|diagnostics| diagnostic_error(&diagnostics, source))?;
+    let javascript = JavaScriptBackend::new(mode)
+        .generate(&split.host, std::slice::from_ref(source))
+        .map_err(|error| CliError::new(format!("JavaScript generation failed: {error}")))?;
+    let shaders = GlslBackend::new()
+        .generate(&split.gpu)
+        .map_err(|error| CliError::new(format!("GLSL generation failed: {error}")))?;
+    Ok((javascript, shaders))
+}
+
+fn render_shader_module(
+    artifacts: &GlslArtifacts,
+    source: &SourceFile,
+    mode: BuildMode,
+) -> Result<String, CliError> {
+    let mut shaders = Vec::with_capacity(artifacts.shaders.len());
+    for shader in &artifacts.shaders {
+        let attributes = shader
+            .attributes
+            .iter()
+            .map(|attribute| {
+                Ok(format!(
+                    "{{name:{},glslName:{},location:{},type:{}}}",
+                    js_string(&attribute.name),
+                    js_string(&attribute.glsl_name),
+                    attribute.location,
+                    js_string(shader_type(&attribute.ty)?),
+                ))
+            })
+            .collect::<Result<Vec<_>, CliError>>()?
+            .join(",");
+        let uniforms = shader
+            .uniforms
+            .iter()
+            .map(|uniform| {
+                Ok(format!(
+                    "{{name:{},glslName:{},type:{},source:{}}}",
+                    js_string(&uniform.name),
+                    js_string(&uniform.glsl_name),
+                    js_string(shader_type(&uniform.ty)?),
+                    js_string(match uniform.source {
+                        UniformSource::Automatic => "automatic",
+                        UniformSource::User => "user",
+                    }),
+                ))
+            })
+            .collect::<Result<Vec<_>, CliError>>()?
+            .join(",");
+        shaders.push(format!(
+            "{{name:{},vertex:{},fragment:{},attributes:[{}],uniforms:[{}],vertexLocation:{},fragmentLocation:{}}}",
+            js_string(&shader.name),
+            js_string(&shader.vertex),
+            js_string(&shader.fragment),
+            attributes,
+            uniforms,
+            render_location(source, shader.vertex_span)?,
+            render_location(source, shader.fragment_span)?,
+        ));
+    }
+    Ok(format!(
+        "export const shaderBundle = Object.freeze({{debug:{},shaders:Object.freeze([{}])}});\n",
+        mode == BuildMode::Debug,
+        shaders.join(","),
+    ))
+}
+
+fn shader_type(ty: &polygl_types::Type) -> Result<&'static str, CliError> {
+    match ty {
+        polygl_types::Type::Int => Ok("int"),
+        polygl_types::Type::Float => Ok("float"),
+        polygl_types::Type::Bool => Ok("bool"),
+        polygl_types::Type::Vector(2) => Ok("vec2"),
+        polygl_types::Type::Vector(3) => Ok("vec3"),
+        polygl_types::Type::Vector(4) => Ok("vec4"),
+        polygl_types::Type::Matrix(2) => Ok("mat2"),
+        polygl_types::Type::Matrix(3) => Ok("mat3"),
+        polygl_types::Type::Matrix(4) => Ok("mat4"),
+        polygl_types::Type::Opaque(polygl_hir::OpaqueType::Texture) => Ok("texture"),
+        other => Err(CliError::new(format!(
+            "cannot package shader binding type `{other}`"
+        ))),
+    }
+}
+
+fn render_location(source: &SourceFile, span: polygl_span::Span) -> Result<String, CliError> {
+    span.validate_for(source)
+        .map_err(|error| CliError::new(format!("invalid shader source span: {error}")))?;
+    let position = source
+        .position(span.start())
+        .map_err(|error| CliError::new(format!("invalid shader source position: {error}")))?;
+    Ok(format!(
+        "{{source:{},line:{},column:{},start:{},end:{}}}",
+        js_string(source.name()),
+        position.line,
+        position.scalar_column,
+        span.start(),
+        span.end(),
+    ))
+}
+
+fn js_string(value: &str) -> String {
+    serde_json::to_string(value).expect("serializing a UTF-8 string cannot fail")
 }
 
 fn compile_frontend(source_path: &Path) -> Result<(SourceFile, TypedModule), CliError> {
@@ -298,7 +415,7 @@ mod tests {
         let source = temporary.join("triangle.rb");
         fs::write(
             &source,
-            "def setup\n  size(320, 180)\n  fill(1.0, 0.0, 0.0)\n  triangle(10.0, 10.0, 50.0, 10.0, 30.0, 40.0)\nend\n",
+            "def setup\n  size(320, 180)\n  fill(1.0, 0.0, 0.0)\n  triangle(10.0, 10.0, 50.0, 10.0, 30.0, 40.0)\nend\n\ndef vertex_plasma\n  vec4(0.0, 0.0, 0.0, 1.0)\nend\n\ndef fragment_plasma\n  vec4(time(), 0.0, 0.0, 1.0)\nend\n",
         )
         .unwrap();
 
@@ -318,10 +435,15 @@ mod tests {
         assert!(debug_javascript.contains("__pglRuntime.triangle"));
         assert!(debug.join("app.js.map").is_file());
         assert!(debug.join("runtime.js").is_file());
+        let debug_shaders = fs::read_to_string(debug.join("shaders.js")).unwrap();
+        assert!(debug_shaders.contains("debug:true"));
+        assert!(debug_shaders.contains("name:\"plasma\""));
+        assert!(debug_shaders.contains("name:\"u_time\""));
+        assert!(debug_shaders.contains("#version 300 es"));
         assert!(
             fs::read_to_string(debug.join("index.html"))
                 .unwrap()
-                .contains("start(() => import(\"./app.js\"))")
+                .contains("from \"./shaders.js\"")
         );
 
         let release = temporary.join("release");
@@ -340,6 +462,11 @@ mod tests {
             !fs::read_to_string(release.join("app.js"))
                 .unwrap()
                 .contains("__pglSpans")
+        );
+        assert!(
+            fs::read_to_string(release.join("shaders.js"))
+                .unwrap()
+                .contains("debug:false")
         );
         fs::remove_dir_all(temporary).unwrap();
     }

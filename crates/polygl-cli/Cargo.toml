@@ -10,12 +10,14 @@ repository.workspace = true
 [dependencies]
 polygl-adapter-api = { path = "../polygl-adapter-api" }
 polygl-adapter-ruby = { path = "../polygl-adapter-ruby" }
+polygl-backend-glsl = { path = "../polygl-backend-glsl" }
 polygl-backend-js = { path = "../polygl-backend-js" }
 polygl-core = { path = "../polygl-core" }
 polygl-hir = { path = "../polygl-hir" }
 polygl-lir = { path = "../polygl-lir" }
 polygl-span = { path = "../polygl-span" }
 polygl-types = { path = "../polygl-types" }
+serde_json = "1.0.149"
 
 [[bin]]
 name = "polygl"
