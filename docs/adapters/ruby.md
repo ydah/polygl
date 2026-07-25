@@ -24,6 +24,12 @@ M1 supports required positional parameters, integer and float literals, UTF-8
 strings, booleans, `nil`, local variables, arithmetic, comparison, boolean
 operators, parentheses, and plain calls.
 
+Place `# @pgl name: type` immediately before the containing `def` for a
+parameter, or immediately before a local variable's first assignment, when
+inference needs help. Scalar, array, `Map<str, T>`, `Option<T>`, vector, matrix,
+opaque graphics handle, and named struct types are accepted. Invalid, unused,
+or non-adjacent directives produce E0314.
+
 ## Semantic expansion
 
 - Ruby `/` initially lowers to `DivInt`. Type inference may rewrite it to
@@ -33,6 +39,9 @@ operators, parentheses, and plain calls.
   recursively preserve short-circuit Ruby condition semantics.
 - Ruby `+` initially lowers to numeric `Add`. Type inference rewrites string
   operands to `StrConcat`.
+- A bare return or empty function lowers to `void`. A final side-effect call may
+  remain in return position and is normalized as a `void` result by shared
+  lowering; write explicit `nil` when an absent value is intended.
 - Ruby `==` and `!=` map to typed HIR equality and inequality.
 - `&&` and `||` remain structured short-circuit operators.
 

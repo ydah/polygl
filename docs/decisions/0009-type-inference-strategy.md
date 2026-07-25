@@ -27,10 +27,20 @@ Keep unresolved values such as unconstrained empty arrays as type variables
 until later uses have been analyzed. If they remain unresolved, require a
 source-language annotation and report a positioned diagnostic.
 
+Normalize arguments through parameter annotations before forming a
+specialization key. For example, an `int` passed to an annotated `float`
+parameter and a direct `float` argument select the same function instance.
+Defer choosing that key and emitting the instance until all constraints in the
+containing body have stabilized; a later builtin use can therefore widen an
+earlier call argument without leaving a stale specialization behind.
+
+Reject recursive specialization in v1 rather than guessing a result type or
+emitting a partially typed cycle.
+
 ## Consequences
 
 Most idiomatic Common Core code needs no annotations, and LIR remains statically
 typed and backend-independent. Compilation and generated code grow with the
 number of concrete call signatures, so the limit and E0310 diagnostic are part
-of the public contract. Recursive calls, control-flow joins, and annotations
-need explicit production handling beyond the validating S-2 prototype.
+of the public contract. Recursive algorithms must be rewritten as loops or
+deferred until an explicitly typed recursive strategy is designed.

@@ -14,7 +14,9 @@ impl Diagnostics {
     }
 
     pub fn push(&mut self, diagnostic: Diagnostic) {
-        self.entries.push(diagnostic);
+        if !self.entries.contains(&diagnostic) {
+            self.entries.push(diagnostic);
+        }
     }
 
     #[must_use]

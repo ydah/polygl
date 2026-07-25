@@ -5,23 +5,30 @@ use polygl_hir::{Block, Module};
 use polygl_span::{Diagnostic, Diagnostics, Severity, SourceFile, Span, Suggestion};
 use ruby_prism::{Location, Node, ProgramNode, StatementsNode};
 
+use crate::annotation::Annotations;
+
 pub(crate) struct Lowerer<'source, 'context, 'resolver> {
     pub(crate) source: &'source SourceFile,
     pub(crate) context: &'context mut LowerCtx<'resolver>,
     pub(crate) diagnostics: Diagnostics,
     pub(crate) declared: HashSet<String>,
+    pub(crate) annotations: Annotations,
+    pub(crate) loop_depth: usize,
 }
 
 impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
     pub(crate) fn new(
         source: &'source SourceFile,
         context: &'context mut LowerCtx<'resolver>,
+        annotations: Annotations,
     ) -> Self {
         Self {
             source,
             context,
             diagnostics: Diagnostics::new(),
             declared: HashSet::new(),
+            annotations,
+            loop_depth: 0,
         }
     }
 
@@ -73,6 +80,7 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
             items,
             span: self.span(program.location()),
         };
+        self.annotations.report_unused(&mut self.diagnostics);
         if self.diagnostics.has_errors() {
             Err(self.diagnostics)
         } else {
@@ -145,5 +153,23 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
 
     pub(crate) fn name(&self, bytes: &[u8]) -> String {
         String::from_utf8_lossy(bytes).into_owned()
+    }
+
+    pub(crate) fn annotation_for(
+        &mut self,
+        name: &str,
+        location: Location<'_>,
+    ) -> Option<polygl_hir::TypeExpr> {
+        self.annotations
+            .take(name, location.start_offset(), self.source)
+    }
+
+    pub(crate) fn parameter_annotation_for(
+        &mut self,
+        name: &str,
+        definition: Location<'_>,
+    ) -> Option<polygl_hir::TypeExpr> {
+        self.annotations
+            .take_parameter(name, definition.start_offset(), self.source)
     }
 }

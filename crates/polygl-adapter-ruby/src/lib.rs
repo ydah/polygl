@@ -1,5 +1,6 @@
 //! Ruby source to HIR adapter backed by Prism.
 
+mod annotation;
 mod expression;
 mod item;
 mod literal;
@@ -11,6 +12,7 @@ use polygl_adapter_api::{FeatureTag, LanguageAdapter, LowerCtx};
 use polygl_hir::Module;
 use polygl_span::{Diagnostic, Diagnostics, Severity, SourceFile};
 
+use crate::annotation::parse_annotations;
 use crate::lowerer::Lowerer;
 
 const CAPABILITIES: &[FeatureTag] = &[
@@ -54,11 +56,15 @@ impl LanguageAdapter for RubyAdapter {
             return Err(diagnostics);
         }
 
+        let annotations = parse_annotations(source, &parsed, &mut diagnostics);
+        if diagnostics.has_errors() {
+            return Err(diagnostics);
+        }
         let program = parsed
             .node()
             .as_program_node()
             .expect("Prism parse roots are program nodes");
-        Lowerer::new(source, context).lower_program(&program)
+        Lowerer::new(source, context, annotations).lower_program(&program)
     }
 
     fn capabilities(&self) -> &'static [FeatureTag] {

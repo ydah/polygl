@@ -89,6 +89,9 @@ fn rejects_labels_from_another_source_and_tracks_error_severity() {
     diagnostics.push(diagnostic);
     assert!(diagnostics.has_errors());
     assert_eq!(diagnostics.iter().len(), 2);
+    let duplicate = diagnostics.iter().last().unwrap().clone();
+    diagnostics.push(duplicate);
+    assert_eq!(diagnostics.iter().len(), 2);
 }
 
 #[test]

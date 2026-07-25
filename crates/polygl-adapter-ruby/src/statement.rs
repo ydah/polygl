@@ -10,9 +10,10 @@ impl Lowerer<'_, '_, '_> {
             let name = self.name(write.name().as_slice());
             let value = self.lower_expression(&write.value())?;
             if self.declared.insert(name.clone()) {
+                let ty = self.annotation_for(&name, write.location());
                 StmtKind::Let {
                     name: Symbol::new(name),
-                    ty: None,
+                    ty,
                     init: value,
                 }
             } else {
@@ -36,7 +37,9 @@ impl Lowerer<'_, '_, '_> {
                 return None;
             }
             let condition = self.lower_condition(&while_node.predicate())?;
+            self.loop_depth += 1;
             let body = self.lower_nested_statements(while_node.statements(), span);
+            self.loop_depth -= 1;
             StmtKind::While { condition, body }
         } else if let Some(return_node) = node.as_return_node() {
             StmtKind::Return(self.lower_optional_value(return_node.arguments(), node)?)
@@ -49,6 +52,14 @@ impl Lowerer<'_, '_, '_> {
                 );
                 return None;
             }
+            if self.loop_depth == 0 {
+                self.unsupported(
+                    node,
+                    "`break` is only valid inside a loop",
+                    "move `break` into a `while` loop",
+                );
+                return None;
+            }
             StmtKind::Break
         } else if let Some(next_node) = node.as_next_node() {
             if next_node.arguments().is_some() {
@@ -56,6 +67,14 @@ impl Lowerer<'_, '_, '_> {
                     node,
                     "next values are outside Common Core",
                     "use `next` without a value",
+                );
+                return None;
+            }
+            if self.loop_depth == 0 {
+                self.unsupported(
+                    node,
+                    "`next` is only valid inside a loop",
+                    "move `next` into a `while` loop",
                 );
                 return None;
             }
@@ -109,10 +128,7 @@ impl Lowerer<'_, '_, '_> {
         node: &Node<'_>,
     ) -> Option<Option<Expr>> {
         let Some(arguments) = arguments else {
-            return Some(Some(Expr::new(
-                ExprKind::Literal(Literal::None),
-                self.span(node.location()),
-            )));
+            return Some(None);
         };
         let values = arguments.arguments();
         if values.len() > 1 {

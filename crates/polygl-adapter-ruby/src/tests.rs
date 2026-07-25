@@ -98,6 +98,16 @@ end
 def empty_explicit
   return
 end
+
+def paint(x)
+  circle(x, 0.0, 1.0)
+end
+
+def maybe(flag)
+  if flag
+    1
+  end
+end
 "#,
     )
     .expect("supported Ruby should lower");
@@ -105,8 +115,12 @@ end
     assert!(text.contains("let value = 1;\n    return value;"));
     assert!(text.contains("return 2;"));
     assert!(text.contains("return 3;"));
-    assert!(text.contains("fn empty() [auto]\n  {\n    return none;"));
-    assert_eq!(text.matches("return none;").count(), 2);
+    assert!(text.contains("fn empty() [auto]\n  {\n    return;"));
+    assert_eq!(text.matches("return;").count(), 2);
+    assert!(text.contains("fn paint(x) [auto]"));
+    assert!(text.contains("return builtin#9(x, 0.0, 1.0);"));
+    assert!(text.contains("fn maybe(flag) [auto]"));
+    assert!(text.contains("return none;"));
 }
 
 #[test]
@@ -161,9 +175,120 @@ end
 }
 
 #[test]
+fn rejects_loop_control_outside_a_loop() {
+    for keyword in ["break", "next"] {
+        let source = format!("def setup\n  {keyword}\nend\n");
+        let diagnostics = lower(&source).expect_err("loop control requires an enclosing loop");
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| matches!(diagnostic.code.as_str(), "E0100" | "E0200"))
+        );
+    }
+
+    lower("def setup\n  while true\n    break\n  end\nend\n")
+        .expect("loop control remains valid in an enclosing loop");
+}
+
+#[test]
 fn accepts_the_signed_integer_lower_boundary() {
     let module = lower("def minimum\n  -2147483648\nend\n").expect("i32 minimum is valid");
     assert!(dump(&module).contains("return -2147483648;"));
+}
+
+#[test]
+fn lowers_pgl_comments_to_positioned_hir_annotations() {
+    let module = lower(
+        r#"
+# @pgl value: float
+def scale(value)
+  # @pgl amount: float
+  amount = 1
+  # @pgl items: float[]
+  items = 1
+  value
+end
+"#,
+    )
+    .expect("valid annotations should lower");
+    let Item::Function(function) = &module.items[0] else {
+        panic!("expected function");
+    };
+    assert!(matches!(
+        function.params[0].ty.as_ref().map(|ty| &ty.kind),
+        Some(polygl_hir::TypeKind::Float)
+    ));
+    let StmtKind::Let { ty, .. } = &function.body.statements[0].kind else {
+        panic!("expected amount binding");
+    };
+    assert!(matches!(
+        ty.as_ref().map(|ty| &ty.kind),
+        Some(polygl_hir::TypeKind::Float)
+    ));
+    let StmtKind::Let { ty, .. } = &function.body.statements[1].kind else {
+        panic!("expected items binding");
+    };
+    assert!(matches!(
+        ty.as_ref().map(|ty| &ty.kind),
+        Some(polygl_hir::TypeKind::Array(_))
+    ));
+}
+
+#[test]
+fn reports_invalid_and_unused_pgl_annotations() {
+    let invalid =
+        lower("# @pgl value: number\ndef setup\nend\n").expect_err("unknown type must fail");
+    assert!(invalid.iter().any(|diagnostic| diagnostic.code == "E0314"));
+
+    let unused =
+        lower("# @pgl missing: float\ndef setup\nend\n").expect_err("unused target must fail");
+    assert!(unused.iter().any(|diagnostic| {
+        diagnostic.code == "E0314" && diagnostic.message.contains("does not match")
+    }));
+
+    let void = lower("# @pgl value: void\ndef setup\n  value = 1\nend\n")
+        .expect_err("void is not a value");
+    assert!(void.iter().any(|diagnostic| diagnostic.code == "E0314"));
+}
+
+#[test]
+fn ignores_non_directive_and_inline_pgl_comments() {
+    let module = lower(
+        r#"
+# @pglossary is ordinary documentation
+def setup
+  value = 1 # @pgl value: float
+end
+"#,
+    )
+    .expect("only standalone comments with an exact @pgl token are directives");
+    let Item::Entry(entry) = &module.items[0] else {
+        panic!("expected setup");
+    };
+    let StmtKind::Let { ty, .. } = &entry.body.statements[0].kind else {
+        panic!("expected value binding");
+    };
+    assert!(ty.is_none());
+}
+
+#[test]
+fn does_not_leak_annotations_across_function_boundaries() {
+    let diagnostics = lower(
+        r#"
+def first
+  # @pgl value: float
+  1
+end
+
+def second
+  value = 2
+end
+"#,
+    )
+    .expect_err("a directive in another function must remain unused");
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "E0314" && diagnostic.message.contains("does not match")
+    }));
 }
 
 #[test]
@@ -179,6 +304,27 @@ fn turns_repeated_local_writes_into_assignments() {
     assert!(matches!(
         entry.body.statements[1].kind,
         StmtKind::Assign { .. }
+    ));
+}
+
+#[test]
+fn lowers_bare_returns_as_void() {
+    let module = lower("def setup\n  return\nend\n").expect("bare setup return is valid");
+    let Item::Entry(entry) = &module.items[0] else {
+        panic!("setup should be an entry");
+    };
+    assert!(matches!(
+        entry.body.statements[0].kind,
+        StmtKind::Return(None)
+    ));
+
+    let module = lower("def value\n  return\nend\n").expect("bare function return is void");
+    let Item::Function(function) = &module.items[0] else {
+        panic!("value should be a function");
+    };
+    assert!(matches!(
+        function.body.statements[0].kind,
+        StmtKind::Return(None)
     ));
 }
 

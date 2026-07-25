@@ -1,17 +1,29 @@
 use polygl_span::Span;
 
-use crate::{BuiltinId, Symbol};
+use crate::{BuiltinId, Symbol, TypeExpr};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Expr {
     pub kind: ExprKind,
+    /// Filled by `polygl-types`; adapters leave this unset.
+    pub ty: Option<TypeExpr>,
     pub span: Span,
 }
 
 impl Expr {
     #[must_use]
     pub const fn new(kind: ExprKind, span: Span) -> Self {
-        Self { kind, span }
+        Self {
+            kind,
+            ty: None,
+            span,
+        }
+    }
+
+    #[must_use]
+    pub fn with_type(mut self, ty: TypeExpr) -> Self {
+        self.ty = Some(ty);
+        self
     }
 }
 

@@ -18,6 +18,7 @@ impl Lowerer<'_, '_, '_> {
         }
 
         let name = self.name(definition.name().as_slice());
+        let kind = entry_kind(&name);
         let params = self.lower_params(definition)?;
         self.declared = params
             .iter()
@@ -27,7 +28,7 @@ impl Lowerer<'_, '_, '_> {
         let mut body = self.lower_body(definition.body(), span);
         self.declared.clear();
 
-        match entry_kind(&name) {
+        match kind {
             Some(kind) => Some(Item::Entry(EntryPoint {
                 kind,
                 params,
@@ -77,9 +78,11 @@ impl Lowerer<'_, '_, '_> {
                 );
                 return None;
             };
+            let name = self.name(parameter.name().as_slice());
+            let ty = self.parameter_annotation_for(&name, definition.location());
             result.push(Param {
-                name: Symbol::new(self.name(parameter.name().as_slice())),
-                ty: None,
+                name: Symbol::new(name),
+                ty,
                 span: self.span(parameter.location()),
             });
         }
@@ -89,7 +92,7 @@ impl Lowerer<'_, '_, '_> {
 
 fn ensure_implicit_return(body: &mut Block) {
     if body.statements.is_empty() {
-        body.statements.push(nil_return(body.span));
+        body.statements.push(unit_return(body.span));
         return;
     }
     let index = body.statements.len() - 1;
@@ -128,12 +131,16 @@ fn ensure_implicit_return(body: &mut Block) {
         }
         StmtKind::Return(_) => None,
         StmtKind::While { .. } | StmtKind::For { .. } | StmtKind::Break | StmtKind::Continue => {
-            Some(nil_return(span).kind)
+            Some(unit_return(span).kind)
         }
     };
     if let Some(kind) = appended {
         body.statements.push(Stmt::new(kind, span));
     }
+}
+
+fn unit_return(span: polygl_span::Span) -> Stmt {
+    Stmt::new(StmtKind::Return(None), span)
 }
 
 fn nil_return(span: polygl_span::Span) -> Stmt {
