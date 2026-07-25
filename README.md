@@ -26,7 +26,7 @@ generated JavaScript and the runtime's rendering batches.
 ## Requirements
 
 - Rust 1.96.1 (selected automatically by `rust-toolchain.toml`)
-- Node.js 24 or newer
+- Node.js 24.14.1 (pinned by `.node-version`)
 - pnpm 10.33.0
 - [just](https://github.com/casey/just)
 
@@ -35,6 +35,7 @@ generated JavaScript and the runtime's rendering batches.
 Install runtime dependencies and run the local gates:
 
 ```console
+corepack enable
 pnpm --dir runtime install --frozen-lockfile
 just build
 just test
