@@ -7,9 +7,9 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc --project tsconfig.json",
+    "build": "tsc --project tsconfig.json && node scripts/bundle.mjs",
     "check": "tsc --project tsconfig.json --noEmit",
-    "test": "pnpm run build && node --test test/*.test.mjs"
+    "test": "tsc --project tsconfig.json && node scripts/bundle.mjs --check && node --test test/*.test.mjs"
   },
   "devDependencies": {
     "typescript": "5.9.3"

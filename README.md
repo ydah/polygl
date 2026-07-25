@@ -5,8 +5,10 @@ programs in Ruby, PHP, Perl, and other host languages. It lowers each
 language's supported Common Core into shared HIR and LIR, then emits JavaScript
 and GLSL ES 3.00 for WebGL 2.
 
-The project is at the workspace-skeleton stage. Compiler and runtime behavior
-described in the design is not implemented yet.
+The first vertical slice is implemented: Ruby Common Core source can be
+lowered, type-checked, emitted as ES2020 with source maps, and run through the
+batched WebGL2 browser runtime. Shader, additional-language, and Tier 2 work is
+still in progress.
 
 ## Architecture
 
@@ -45,6 +47,21 @@ just gen-check
 
 The equivalent generation command is `cargo xtask gen-runtime`. Generated
 files must be committed and pass `cargo xtask gen-runtime --check`.
+
+## Compile a Ruby sketch
+
+```console
+cargo run -p polygl-cli -- build sketch.rb -o dist
+```
+
+The build writes `index.html`, `app.js`, `app.js.map`, and the embedded
+`runtime.js`. Serve the output directory through an HTTP server so browser ES
+modules can load. Debug checks are enabled by default; pass `--release` to
+remove compiler-inserted collection and nil checks.
+
+Use `polygl check source.rb` for diagnostics without output or
+`polygl dump-hir source.rb` to inspect typed HIR. See [the CLI
+reference](docs/cli.md) for details.
 
 ## License
 

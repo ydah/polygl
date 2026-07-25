@@ -4,8 +4,8 @@ default:
     @just --list
 
 build:
-    cargo build --workspace
     pnpm --dir runtime build
+    cargo build --workspace
 
 test:
     cargo test --workspace

@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import {
+const runtimeBundle = await readFile(
+  new URL("../../crates/polygl-cli/assets/runtime.js", import.meta.url),
+);
+const {
   SeededRandom,
   checkedIndex,
   circle,
@@ -17,7 +21,7 @@ import {
   time,
   triangle,
   width,
-} from "../dist/index.js";
+} = await import(`data:text/javascript;base64,${runtimeBundle.toString("base64")}`);
 
 test("exports generated runtime metadata", () => {
   assert.equal(runtimeOps.background, "background");

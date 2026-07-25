@@ -7,6 +7,16 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[dependencies]
+polygl-adapter-api = { path = "../polygl-adapter-api" }
+polygl-adapter-ruby = { path = "../polygl-adapter-ruby" }
+polygl-backend-js = { path = "../polygl-backend-js" }
+polygl-core = { path = "../polygl-core" }
+polygl-hir = { path = "../polygl-hir" }
+polygl-lir = { path = "../polygl-lir" }
+polygl-span = { path = "../polygl-span" }
+polygl-types = { path = "../polygl-types" }
+
 [[bin]]
 name = "polygl"
 path = "src/main.rs"
