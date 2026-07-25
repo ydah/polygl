@@ -34,7 +34,8 @@ Expressions include typed literals, variables, binary/unary operations, user
 and builtin calls, index/field access, homogeneous arrays/maps, struct/vector
 construction, and `NilCheck`. `DivInt` and `DivFloat` are distinct operators;
 adapters choose one according to `docs/common-core.md`. String concatenation is
-also distinct from numeric addition.
+also distinct from numeric addition. `FalsyCheck` has the fixed meaning “nil or
+false” and is the single-evaluation target for Ruby truthiness lowering.
 
 Every module, item, parameter, type expression, block, statement, place, range,
 expression, map entry, and field initializer carries a validated half-open

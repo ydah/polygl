@@ -27,6 +27,44 @@ fn renders_codes_labels_notes_and_suggestions_without_color() {
 }
 
 #[test]
+fn renders_non_machine_applicable_rewrites_without_an_empty_replacement() {
+    let source = SourceFile::new(SourceId::new(1), "main.rb", "define_method(:setup) {}");
+    let diagnostic = Diagnostic::new(
+        Severity::Error,
+        "E0200",
+        "dynamic methods are unsupported",
+        source.span(0, source.len()).unwrap(),
+    )
+    .with_suggestion(Suggestion::rewrite(
+        source.span(0, source.len()).unwrap(),
+        "use a regular `def setup` declaration",
+    ));
+
+    let rendered = diagnostic.render(&source).unwrap();
+    assert!(rendered.contains("use a regular `def setup` declaration"));
+    assert!(!rendered.contains("replace with ``"));
+}
+
+#[test]
+fn renders_an_empty_machine_replacement_as_a_deletion() {
+    let source = SourceFile::new(SourceId::new(1), "main.rb", "unsupported");
+    let diagnostic = Diagnostic::new(
+        Severity::Error,
+        "E0200",
+        "unsupported syntax",
+        source.span(0, source.len()).unwrap(),
+    )
+    .with_suggestion(Suggestion::new(
+        source.span(0, source.len()).unwrap(),
+        "",
+        "remove the unsupported syntax",
+    ));
+
+    let rendered = diagnostic.render(&source).unwrap();
+    assert!(rendered.contains("remove selected text"));
+}
+
+#[test]
 fn rejects_labels_from_another_source_and_tracks_error_severity() {
     let source = SourceFile::new(SourceId::new(1), "main.rb", "value");
     let foreign_source = SourceFile::new(SourceId::new(2), "other.rb", "value");

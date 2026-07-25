@@ -51,6 +51,7 @@ pub enum ExprKind {
         args: Vec<Expr>,
     },
     NilCheck(Box<Expr>),
+    FalsyCheck(Box<Expr>),
 }
 
 #[derive(Clone, Debug, PartialEq)]

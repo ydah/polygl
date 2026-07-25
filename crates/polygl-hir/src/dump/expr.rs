@@ -61,6 +61,7 @@ impl Dumper {
                 format!("vec{size}{}", self.expression_list("(", args, ")"))
             }
             ExprKind::NilCheck(value) => format!("nil?({})", self.expression(value)),
+            ExprKind::FalsyCheck(value) => format!("falsy?({})", self.expression(value)),
         }
     }
 

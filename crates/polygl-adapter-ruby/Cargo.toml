@@ -7,5 +7,14 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[dependencies]
+polygl-adapter-api = { path = "../polygl-adapter-api" }
+polygl-hir = { path = "../polygl-hir" }
+polygl-span = { path = "../polygl-span" }
+ruby-prism = "=1.9.0"
+
+[dev-dependencies]
+polygl-core = { path = "../polygl-core" }
+
 [lints]
 workspace = true

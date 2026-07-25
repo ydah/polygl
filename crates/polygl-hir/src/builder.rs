@@ -127,6 +127,11 @@ impl HirBuilder {
     }
 
     #[must_use]
+    pub fn falsy_check(self, value: Expr) -> Expr {
+        Expr::new(ExprKind::FalsyCheck(Box::new(value)), self.span)
+    }
+
+    #[must_use]
     pub fn expression(self, expression: Expr) -> Stmt {
         Stmt::new(StmtKind::Expr(expression), self.span)
     }

@@ -111,9 +111,11 @@ Adapters must make the following differences explicit while lowering:
 | Absence test | Lower to `NilCheck` | Lower to `NilCheck` | Lower to `NilCheck` |
 | Equality | Same-type comparison | Strict equality only; `==` is E0302 with a `===` suggestion | Same-type comparison |
 
-Ruby truthiness expansion is adapter-generated HIR, not a general truthiness
-operation. PHP and Perl rules such as `"0"` being false are deliberately not
-reproduced. Backends therefore only receive boolean conditions.
+Ruby truthiness expansion is adapter-generated `not FalsyCheck(value)` HIR.
+`FalsyCheck` evaluates its operand once and is true only for nil or false. It is
+not a configurable general truthiness operation. PHP and Perl rules such as
+`"0"` being false are deliberately not reproduced. Backends therefore only
+receive boolean conditions.
 
 Language-specific integer, string, or collection behavior not listed here is
 not inherited automatically. If the fixed HIR cannot preserve a source

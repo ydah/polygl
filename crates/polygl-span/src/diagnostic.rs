@@ -29,7 +29,9 @@ impl Label {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Suggestion {
     pub span: Span,
-    pub replacement: String,
+    /// `Some` is a machine-applicable replacement, including `Some("")` for
+    /// deletion. `None` is a human-applicable rewrite.
+    pub replacement: Option<String>,
     pub message: String,
 }
 
@@ -38,7 +40,17 @@ impl Suggestion {
     pub fn new(span: Span, replacement: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             span,
-            replacement: replacement.into(),
+            replacement: Some(replacement.into()),
+            message: message.into(),
+        }
+    }
+
+    /// A human-applicable rewrite for cases without one safe textual edit.
+    #[must_use]
+    pub fn rewrite(span: Span, message: impl Into<String>) -> Self {
+        Self {
+            span,
+            replacement: None,
             message: message.into(),
         }
     }
@@ -136,10 +148,18 @@ impl Diagnostic {
                 AriadneLabel::new((name.clone(), render_range(suggestion.span)))
                     .with_message(&suggestion.message),
             );
-            builder.add_help(format!(
-                "{}: replace with `{}`",
-                suggestion.message, suggestion.replacement
-            ));
+            match suggestion.replacement.as_deref() {
+                None => builder.add_help(&suggestion.message),
+                Some("") => {
+                    builder.add_help(format!("{}: remove selected text", suggestion.message));
+                }
+                Some(replacement) => {
+                    builder.add_help(format!(
+                        "{}: replace with `{replacement}`",
+                        suggestion.message
+                    ));
+                }
+            }
         }
 
         let mut output = Vec::new();
