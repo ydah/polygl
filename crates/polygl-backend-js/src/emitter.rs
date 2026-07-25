@@ -400,7 +400,9 @@ impl<'source> Emitter<'source> {
                 self.write(" = ");
                 self.expression(value)?;
             }
-            PlaceKind::Index { base, index } if self.mode == BuildMode::Debug => {
+            PlaceKind::Index { base, index }
+                if self.mode == BuildMode::Debug && requires_bounds_check(&base.ty) =>
+            {
                 let span = self.span_id(target.span)?;
                 let suffix = self.temporary();
                 let base_temporary = format!("__pglIndexBase{suffix}");
@@ -479,7 +481,9 @@ impl<'source> Emitter<'source> {
                 self.expressions(args)?;
                 self.write(")");
             }
-            ExprKind::Index { base, index } if self.mode == BuildMode::Debug => {
+            ExprKind::Index { base, index }
+                if self.mode == BuildMode::Debug && requires_bounds_check(&base.ty) =>
+            {
                 let span = self.span_id(expression.span)?;
                 self.write("__pglRuntime.checkedIndex(");
                 self.expression(base)?;
@@ -923,4 +927,8 @@ fn is_reserved_word(name: &str) -> bool {
 
 fn json_string(value: &str) -> String {
     serde_json::to_string(value).expect("serializing a Rust string cannot fail")
+}
+
+fn requires_bounds_check(ty: &Type) -> bool {
+    matches!(ty, Type::Array(_) | Type::Vector(_) | Type::Matrix(_))
 }

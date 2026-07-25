@@ -32,6 +32,14 @@ fn float(value: f64, span: Span) -> Expr {
     expression(ExprKind::Literal(Literal::Float(value)), Type::Float, span)
 }
 
+fn string(value: &str, span: Span) -> Expr {
+    expression(
+        ExprKind::Literal(Literal::Str(value.to_owned())),
+        Type::Str,
+        span,
+    )
+}
+
 fn variable(name: &str, ty: Type, span: Span) -> Expr {
     expression(ExprKind::Variable(name.to_owned()), ty, span)
 }
@@ -325,6 +333,34 @@ fn inserts_debug_index_and_nil_checks_and_removes_them_in_release() {
                     ),
                     statement(
                         StatementKind::Let {
+                            name: "mapped".to_owned(),
+                            ty: Type::Int,
+                            init: expression(
+                                ExprKind::Index {
+                                    base: Box::new(record.clone()),
+                                    index: Box::new(string("value", check_span)),
+                                },
+                                Type::Int,
+                                check_span,
+                            ),
+                        },
+                        check_span,
+                    ),
+                    statement(
+                        StatementKind::Assign {
+                            target: Place {
+                                kind: PlaceKind::Index {
+                                    base: record.clone(),
+                                    index: string("value", check_span),
+                                },
+                                span: check_span,
+                            },
+                            value: int(4, check_span),
+                        },
+                        check_span,
+                    ),
+                    statement(
+                        StatementKind::Let {
                             name: "field".to_owned(),
                             ty: Type::Int,
                             init: expression(
@@ -369,6 +405,8 @@ fn inserts_debug_index_and_nil_checks_and_removes_them_in_release() {
     assert!(debug.contains("__pglRuntime.checkedIndex("));
     assert!(debug.contains("__pglRuntime.checkIndex("));
     assert!(debug.contains("__pglRuntime.requireNonNil("));
+    assert!(debug.contains("let mapped = (record)[\"value\"]"));
+    assert!(debug.contains("(record)[\"value\"] = 4"));
 
     let release = JavaScriptBackend::new(BuildMode::Release)
         .generate(&module, std::slice::from_ref(&source))
