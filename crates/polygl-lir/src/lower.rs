@@ -106,6 +106,7 @@ impl Lowerer {
                 .iter()
                 .map(|parameter| self.lower_parameter(parameter))
                 .collect(),
+            result: source.return_type.as_ref().map_or(Type::Unit, lower_type),
             body: self.lower_block(&source.body),
             domain: match source.kind.domain() {
                 hir::DomainHint::Host => Domain::Host,

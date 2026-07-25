@@ -31,6 +31,7 @@ fn setup(statements: Vec<hir::Stmt>) -> hir::Item {
     hir::Item::Entry(hir::EntryPoint {
         kind: hir::EntryPointKind::Setup,
         params: Vec::new(),
+        return_type: None,
         body: hir::Block {
             statements,
             span: span(),
@@ -43,6 +44,7 @@ fn vertex(statements: Vec<hir::Stmt>) -> hir::Item {
     hir::Item::Entry(hir::EntryPoint {
         kind: hir::EntryPointKind::Vertex(hir::Symbol::new("main")),
         params: Vec::new(),
+        return_type: None,
         body: hir::Block {
             statements,
             span: span(),

@@ -26,6 +26,7 @@ pub struct Function {
 pub struct EntryPoint {
     pub kind: EntryKind,
     pub params: Vec<Parameter>,
+    pub result: Type,
     pub body: Block,
     pub domain: Domain,
     pub span: Span,

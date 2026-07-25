@@ -72,6 +72,7 @@ pub struct ConstDef {
 pub struct EntryPoint {
     pub kind: EntryPointKind,
     pub params: Vec<Param>,
+    pub return_type: Option<TypeExpr>,
     pub body: Block,
     pub span: Span,
 }

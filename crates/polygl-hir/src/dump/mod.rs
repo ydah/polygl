@@ -86,8 +86,13 @@ impl Dumper {
     }
 
     fn entry(&mut self, entry: &EntryPoint) {
+        let result = entry
+            .return_type
+            .as_ref()
+            .map(|ty| format!(" -> {}", type_name(ty)))
+            .unwrap_or_default();
         self.line(format!(
-            "entry {}({}) [{}]",
+            "entry {}({}){result} [{}]",
             entry.kind.canonical_name(),
             parameters(&entry.params),
             domain_name(entry.kind.domain())

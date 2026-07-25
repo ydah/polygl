@@ -43,6 +43,7 @@ fn setup(statements: Vec<Stmt>) -> Item {
     Item::Entry(EntryPoint {
         kind: EntryPointKind::Setup,
         params: Vec::new(),
+        return_type: None,
         body: Block {
             statements,
             span: span(),
@@ -608,6 +609,7 @@ fn keeps_annotations_and_parameter_bindings_invariant() {
             ty: Some(TypeExpr::new(TypeKind::Int, span())),
             span: span(),
         }],
+        return_type: None,
         body: Block {
             statements: Vec::new(),
             span: span(),
@@ -771,6 +773,7 @@ fn rejects_void_in_value_positions() {
             ty: Some(TypeExpr::new(TypeKind::Unit, span())),
             span: span(),
         }],
+        return_type: None,
         body: Block {
             statements: Vec::new(),
             span: span(),
@@ -929,6 +932,7 @@ fn types_builtin_event_fields_from_the_registry() {
     let typed = analyze(&module(vec![Item::Entry(EntryPoint {
         kind: EntryPointKind::OnEvent,
         params: vec![parameter("event")],
+        return_type: None,
         body: Block {
             statements: vec![
                 builder.expression(field("x")),
@@ -1360,6 +1364,39 @@ fn validates_return_annotations_fallthrough_and_entry_results() {
 
     let entry = setup(vec![return_value(builder.int(1))]);
     assert!(analyze(&module(vec![entry])).is_err());
+
+    let partial_shader = Item::Entry(EntryPoint {
+        kind: EntryPointKind::Fragment(Symbol::new("partial")),
+        params: Vec::new(),
+        return_type: None,
+        body: Block {
+            statements: vec![Stmt::new(
+                StmtKind::If {
+                    condition: builder.bool(true),
+                    then_block: Block {
+                        statements: vec![return_value(expression(ExprKind::Vector {
+                            size: 4,
+                            args: vec![
+                                builder.float(0.0),
+                                builder.float(0.0),
+                                builder.float(0.0),
+                                builder.float(1.0),
+                            ],
+                        }))],
+                        span: span(),
+                    },
+                    else_block: None,
+                },
+                span(),
+            )],
+            span: span(),
+        },
+        span: span(),
+    });
+    assert!(
+        analyze(&module(vec![partial_shader])).is_err(),
+        "every shader control-flow path must return the stage result"
+    );
 }
 
 #[test]

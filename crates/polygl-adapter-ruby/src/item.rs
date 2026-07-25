@@ -29,12 +29,21 @@ impl Lowerer<'_, '_, '_> {
         self.declared.clear();
 
         match kind {
-            Some(kind) => Some(Item::Entry(EntryPoint {
-                kind,
-                params,
-                body,
-                span,
-            })),
+            Some(kind) => {
+                if matches!(
+                    kind,
+                    EntryPointKind::Vertex(_) | EntryPointKind::Fragment(_)
+                ) {
+                    ensure_implicit_return(&mut body);
+                }
+                Some(Item::Entry(EntryPoint {
+                    kind,
+                    params,
+                    return_type: None,
+                    body,
+                    span,
+                }))
+            }
             None => {
                 ensure_implicit_return(&mut body);
                 Some(Item::Function(Function {

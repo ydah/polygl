@@ -303,9 +303,21 @@ impl Analyzer {
             context.environment.insert(&parameter.name, binding);
         }
         self.infer_block(&mut entry.body, &mut context, false);
-        for returned in &context.returns {
-            if let Err(error) = self.solver.equal(InferType::Unit, returned.clone()) {
-                self.solve_error(error, entry.span, "E0303");
+        if matches!(
+            entry.kind,
+            EntryPointKind::Vertex(_) | EntryPointKind::Fragment(_)
+        ) {
+            let expected = context.returns.first().cloned().unwrap_or(InferType::Unit);
+            for returned in context.returns.iter().skip(1) {
+                if let Err(error) = self.solver.equal(expected.clone(), returned.clone()) {
+                    self.solve_error(error, entry.span, "E0303");
+                }
+            }
+        } else {
+            for returned in &context.returns {
+                if let Err(error) = self.solver.equal(InferType::Unit, returned.clone()) {
+                    self.solve_error(error, entry.span, "E0303");
+                }
             }
         }
         context
@@ -314,17 +326,28 @@ impl Analyzer {
     fn annotate_entry(&mut self, entry: &mut EntryPoint, context: &BodyContext) {
         self.annotate_block(&mut entry.body, context, false);
         self.annotate_block(&mut entry.body, context, false);
-        for returned in final_return_types(&entry.body) {
-            if returned != Type::Unit {
-                self.solve_error(
-                    crate::solver::SolveError::Mismatch {
-                        expected: InferType::Unit,
-                        actual: InferType::from_type(&returned),
-                    },
-                    entry.span,
-                    "E0303",
-                );
+        let returns = final_return_types(&entry.body);
+        if matches!(
+            entry.kind,
+            EntryPointKind::Vertex(_) | EntryPointKind::Fragment(_)
+        ) {
+            if let Some(result) = self.final_return_type(&entry.body, entry.span) {
+                entry.return_type = Some(result.to_expr(entry.span));
             }
+        } else {
+            for returned in returns {
+                if returned != Type::Unit {
+                    self.solve_error(
+                        crate::solver::SolveError::Mismatch {
+                            expected: InferType::Unit,
+                            actual: InferType::from_type(&returned),
+                        },
+                        entry.span,
+                        "E0303",
+                    );
+                }
+            }
+            entry.return_type = None;
         }
     }
 
@@ -599,6 +622,9 @@ impl Analyzer {
                         if let Some(annotation) = &parameter.ty {
                             self.validate_type_annotation(annotation, false);
                         }
+                    }
+                    if let Some(annotation) = &entry.return_type {
+                        self.validate_type_annotation(annotation, true);
                     }
                     self.validate_block_annotations(&entry.body);
                 }

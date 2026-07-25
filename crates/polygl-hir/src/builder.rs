@@ -43,6 +43,7 @@ impl HirBuilder {
         Item::Entry(EntryPoint {
             kind,
             params: Vec::new(),
+            return_type: None,
             body,
             span: self.span,
         })

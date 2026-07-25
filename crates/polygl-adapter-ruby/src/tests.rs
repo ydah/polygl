@@ -79,6 +79,28 @@ end
 }
 
 #[test]
+fn lowers_shader_entries_and_vector_constructors() {
+    let module = lower(
+        r#"
+# @pgl position: vec3
+def vertex_plasma(position)
+  vec4(0.0, 0.0, 0.0, 1.0)
+end
+
+def fragment_plasma
+  vec4(1.0, 0.5, 0.25, 1.0)
+end
+"#,
+    )
+    .expect("shader entries and vectors should lower");
+    let text = dump(&module);
+    assert!(text.contains("entry vertex_plasma(position: vec3) [gpu]"));
+    assert!(text.contains("return vec4(0.0, 0.0, 0.0, 1.0);"));
+    assert!(text.contains("entry fragment_plasma() [gpu]"));
+    assert!(text.contains("return vec4(1.0, 0.5, 0.25, 1.0);"));
+}
+
+#[test]
 fn preserves_implicit_returns_for_assignments_and_conditionals() {
     let module = lower(
         r#"

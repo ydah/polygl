@@ -42,3 +42,11 @@ statements are retained because they may have effects or debug checks.
 
 The IR remains structured rather than SSA as decided in
 [ADR 0002](decisions/0002-two-level-structured-ir.md).
+
+## Host/GPU split
+
+`polygl_lir::split` is the checked backend boundary. It clones shared
+declarations into both target modules, retains target-specific declarations,
+and validates shader pairs plus the GLSL ES 3.00 subset. E0401 through E0405
+are errors; W0401 and W0402 are retained on the successful `SplitProgram` so a
+caller can report precision and long-loop warnings without blocking emission.

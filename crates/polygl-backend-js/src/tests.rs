@@ -149,6 +149,7 @@ fn sample_module(source: &SourceFile) -> Module {
     let entry = EntryPoint {
         kind: EntryKind::Setup,
         params: Vec::new(),
+        result: Type::Unit,
         body: block(
             vec![
                 statement(
@@ -301,6 +302,7 @@ fn inserts_debug_index_and_nil_checks_and_removes_them_in_release() {
         entries: vec![EntryPoint {
             kind: EntryKind::Setup,
             params: Vec::new(),
+            result: Type::Unit,
             body: block(
                 vec![
                     statement(

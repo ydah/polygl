@@ -116,6 +116,9 @@ impl Lowerer<'_, '_, '_> {
         }
 
         let args = self.lower_arguments(call)?;
+        if let Some(size) = vector_size(&name) {
+            return Some(Expr::new(ExprKind::Vector { size, args }, span));
+        }
         let callee = self
             .context
             .resolve_builtin(&name)
@@ -154,5 +157,14 @@ impl Lowerer<'_, '_, '_> {
             "keep one expression inside the parentheses",
         );
         None
+    }
+}
+
+fn vector_size(name: &str) -> Option<u8> {
+    match name {
+        "vec2" => Some(2),
+        "vec3" => Some(3),
+        "vec4" => Some(4),
+        _ => None,
     }
 }
