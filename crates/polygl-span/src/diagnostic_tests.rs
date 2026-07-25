@@ -1,4 +1,4 @@
-use crate::{Diagnostic, Diagnostics, Label, Severity, SourceFile, SourceId, Span, Suggestion};
+use crate::{Diagnostic, Diagnostics, Label, Severity, SourceFile, SourceId, Suggestion};
 
 #[test]
 fn renders_codes_labels_notes_and_suggestions_without_color() {
@@ -29,7 +29,8 @@ fn renders_codes_labels_notes_and_suggestions_without_color() {
 #[test]
 fn rejects_labels_from_another_source_and_tracks_error_severity() {
     let source = SourceFile::new(SourceId::new(1), "main.rb", "value");
-    let foreign = Span::new(SourceId::new(2), 0, 1).unwrap();
+    let foreign_source = SourceFile::new(SourceId::new(2), "other.rb", "value");
+    let foreign = foreign_source.span(0, 1).unwrap();
     let diagnostic = Diagnostic::new(
         Severity::Error,
         "E0100",
@@ -50,4 +51,15 @@ fn rejects_labels_from_another_source_and_tracks_error_severity() {
     diagnostics.push(diagnostic);
     assert!(diagnostics.has_errors());
     assert_eq!(diagnostics.iter().len(), 2);
+}
+
+#[test]
+fn renders_empty_eof_span_after_crlf_on_the_trailing_line() {
+    let source = SourceFile::new(SourceId::new(1), "main.rb", "α\r\n");
+    let eof = source.span(source.len(), source.len()).unwrap();
+    let rendered = Diagnostic::new(Severity::Error, "E0100", "expected expression", eof)
+        .render(&source)
+        .unwrap();
+
+    assert!(rendered.contains("main.rb:2:1"), "{rendered}");
 }

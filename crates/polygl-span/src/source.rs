@@ -93,9 +93,12 @@ impl SourceFile {
     }
 
     pub fn span(&self, start: usize, end: usize) -> Result<Span, SpanError> {
-        let span = Span::new(self.id, start, end)?;
-        span.validate_for(self)?;
-        Ok(span)
+        if start > end {
+            return Err(SpanError::Reversed { start, end });
+        }
+        self.validate_offset(start)?;
+        self.validate_offset(end)?;
+        Ok(Span::from_validated_offsets(self.id, start, end))
     }
 
     pub fn position(&self, offset: usize) -> Result<SourcePosition, SpanError> {
