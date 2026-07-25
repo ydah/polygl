@@ -34,6 +34,8 @@ or non-adjacent directives produce E0314.
 
 - Ruby `/` initially lowers to `DivInt`. Type inference may rewrite it to
   `DivFloat` when either operand is inferred as float.
+- Ruby `%` lowers to `RemFloor`, preserving Ruby's divisor-signed result for
+  negative operands instead of inheriting JavaScript remainder semantics.
 - Every condition lowers to `not FalsyCheck(value)`. `FalsyCheck` evaluates its
   operand once and is true only for `nil` and `false`. `&&`, `||`, and `!`
   recursively preserve short-circuit Ruby condition semantics.

@@ -73,7 +73,7 @@ pub(crate) fn binary_operator(name: &str) -> Option<BinOp> {
         "-" => Some(BinOp::Sub),
         "*" => Some(BinOp::Mul),
         "/" => Some(BinOp::DivInt),
-        "%" => Some(BinOp::Rem),
+        "%" => Some(BinOp::RemFloor),
         "==" => Some(BinOp::Eq),
         "!=" => Some(BinOp::NotEq),
         "<" => Some(BinOp::Less),

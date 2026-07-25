@@ -539,7 +539,9 @@ fn annotated_binary(operator: &mut BinOp, left: &Type, right: &Type) -> Type {
             *operator = BinOp::StrConcat;
             Type::Str
         }
-        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Rem => numeric_type(left, right),
+        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::RemFloor | BinOp::RemTrunc => {
+            numeric_type(left, right)
+        }
         BinOp::DivInt if *left == Type::Float || *right == Type::Float => {
             *operator = BinOp::DivFloat;
             Type::Float

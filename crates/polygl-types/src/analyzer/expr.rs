@@ -193,7 +193,9 @@ impl Analyzer {
                     _ => self.numeric_result(left, right, span, false),
                 }
             }
-            BinOp::Sub | BinOp::Mul | BinOp::Rem => self.numeric_result(left, right, span, false),
+            BinOp::Sub | BinOp::Mul | BinOp::RemFloor | BinOp::RemTrunc => {
+                self.numeric_result(left, right, span, false)
+            }
             BinOp::DivInt => self.numeric_result(left, right, span, false),
             BinOp::DivFloat => self.numeric_result(left, right, span, true),
             BinOp::Eq | BinOp::NotEq => {

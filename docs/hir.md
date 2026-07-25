@@ -34,9 +34,10 @@ not contain closures.
 Expressions include typed literals, variables, binary/unary operations, user
 and builtin calls, index/field access, homogeneous arrays/maps, struct/vector
 construction, and `NilCheck`. `DivInt` and `DivFloat` are distinct operators;
-adapters choose one according to `docs/common-core.md`. String concatenation is
-also distinct from numeric addition. `FalsyCheck` has the fixed meaning “nil or
-false” and is the single-evaluation target for Ruby truthiness lowering.
+`RemFloor` and `RemTrunc` likewise preserve remainder direction. Adapters choose
+the semantic operation according to `docs/common-core.md`. String concatenation
+is also distinct from numeric addition. `FalsyCheck` has the fixed meaning “nil
+or false” and is the single-evaluation target for Ruby truthiness lowering.
 
 Every module, item, parameter, type expression, block, statement, place, range,
 expression, map entry, and field initializer carries a validated half-open
@@ -56,8 +57,9 @@ source spans.
 ## Dump and normalization
 
 `dump` emits deterministic, human-readable text and distinguishes semantically
-different operators such as `/int` and `/float`. It is a snapshot/debug format,
-not a source language and not a stable serialization protocol.
+different operators such as `/int`, `/float`, `%floor`, and `%trunc`. It is a
+snapshot/debug format, not a source language and not a stable serialization
+protocol.
 
 `Module::normalize` performs only semantics-preserving top-level declaration
 ordering. Constants retain their relative order because initializers may

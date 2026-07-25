@@ -244,6 +244,13 @@ version = "0.0.0"
 [[package]]
 name = "polygl-backend-js"
 version = "0.0.0"
+dependencies = [
+ "polygl-builtins",
+ "polygl-lir",
+ "polygl-span",
+ "polygl-types",
+ "serde_json",
+]
 
 [[package]]
 name = "polygl-builtins"

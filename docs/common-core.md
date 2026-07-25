@@ -105,6 +105,7 @@ Adapters must make the following differences explicit while lowering:
 |---|---|---|---|
 | Integer operands to `/` | `DivInt`; quotient rounds toward negative infinity | `DivFloat` | `DivFloat` |
 | A `/` operand is `float` | `DivFloat` | `DivFloat` | `DivFloat` |
+| `%` remainder direction | `RemFloor` (sign follows divisor) | `RemTrunc` (sign follows dividend) | `RemFloor` (sign follows divisor) |
 | Non-`bool` condition | Expand to “not nil and not false” | E0301 plus an explicit-comparison suggestion | E0301 plus an explicit-comparison suggestion |
 | String concatenation | `+` when both operands are `str` | `.` | `.` |
 | Absence value | `nil` → `Option<T>` | `null` → `Option<T>` | `undef` → `Option<T>` |
@@ -116,6 +117,11 @@ Ruby truthiness expansion is adapter-generated `not FalsyCheck(value)` HIR.
 not a configurable general truthiness operation. PHP and Perl rules such as
 `"0"` being false are deliberately not reproduced. Backends therefore only
 receive boolean conditions.
+
+`RemFloor` and `RemTrunc` make the quotient direction part of HIR rather than
+inheriting the target language's `%` operator. For nonzero operands,
+`RemFloor(a, b) = a - floor(a / b) * b`; `RemTrunc` uses a quotient truncated
+toward zero. Integer zero divisors are runtime errors.
 
 Language-specific integer, string, or collection behavior not listed here is
 not inherited automatically. If the fixed HIR cannot preserve a source

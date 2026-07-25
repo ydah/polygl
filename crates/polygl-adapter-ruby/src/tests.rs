@@ -31,6 +31,7 @@ fn lowers_entry_control_flow_arithmetic_and_builtin_calls() {
         r#"
 def setup
   x = 5 / 2
+  remainder = -3 % 2
   x = x + 1
   if x
     background(0.0, 0.0, 0.0)
@@ -45,6 +46,7 @@ end
     let text = dump(&module);
     assert!(text.contains("entry setup() [host]"));
     assert!(text.contains("let x = (5 /int 2);"));
+    assert!(text.contains("%floor"));
     assert!(text.contains("x = (x + 1);"));
     assert!(text.contains("if (not falsy?(x))"));
     assert!(text.contains("builtin#4(0.0, 0.0, 0.0);"));
