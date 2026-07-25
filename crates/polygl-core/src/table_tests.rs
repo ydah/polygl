@@ -1,0 +1,69 @@
+use crate::{BuiltinTable, BuiltinTier, BuiltinType, Domain};
+
+#[test]
+fn registry_is_valid_and_contains_every_tier_one_function() {
+    BuiltinTable::validate().unwrap();
+    let tier_one = BuiltinTable::all()
+        .iter()
+        .filter(|builtin| builtin.tier == BuiltinTier::Tier1)
+        .map(|builtin| builtin.name)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        tier_one,
+        [
+            "size",
+            "background",
+            "fill",
+            "stroke",
+            "no_stroke",
+            "rect",
+            "circle",
+            "line",
+            "triangle",
+            "text",
+            "push_matrix",
+            "pop_matrix",
+            "translate",
+            "rotate",
+            "scale",
+            "width",
+            "height",
+            "time",
+            "mouse_x",
+            "mouse_y",
+            "key_down",
+            "random",
+        ]
+    );
+}
+
+#[test]
+fn domains_and_defaults_match_the_public_contract() {
+    assert_eq!(BuiltinTable::find("time").unwrap().domain, Domain::Both);
+    assert_eq!(BuiltinTable::find("random").unwrap().domain, Domain::Host);
+    let fill = BuiltinTable::find("fill").unwrap();
+    assert_eq!(fill.signature.params[3].name, "a");
+    assert!(fill.signature.params[3].default.is_some());
+    assert_eq!(
+        BuiltinTable::find("floor").unwrap().signature.result,
+        BuiltinType::Int
+    );
+}
+
+#[test]
+fn public_parameter_names_match_the_design_contract() {
+    let names = |builtin: &str| {
+        BuiltinTable::find(builtin)
+            .unwrap()
+            .signature
+            .params
+            .iter()
+            .map(|param| param.name)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names("size"), ["w", "h"]);
+    assert_eq!(names("rect"), ["x", "y", "w", "h"]);
+    assert_eq!(names("circle"), ["x", "y", "r"]);
+    assert_eq!(names("text"), ["s", "x", "y"]);
+    assert_eq!(names("random"), ["a", "b"]);
+}

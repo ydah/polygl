@@ -8,5 +8,8 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[dependencies]
+polygl-core = { path = "../crates/polygl-core" }
+
 [lints]
 workspace = true
