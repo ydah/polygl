@@ -7,5 +7,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[dependencies]
+polygl-hir = { path = "../polygl-hir" }
+polygl-span = { path = "../polygl-span" }
+
 [lints]
 workspace = true

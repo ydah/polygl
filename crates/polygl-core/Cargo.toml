@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+polygl-adapter-api = { path = "../polygl-adapter-api" }
 polygl-hir = { path = "../polygl-hir" }
 
 [lints]

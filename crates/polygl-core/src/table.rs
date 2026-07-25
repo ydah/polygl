@@ -4,6 +4,8 @@ use std::fmt;
 
 use crate::definitions::BUILTINS;
 use crate::{Builtin, BuiltinType, DefaultValue};
+use polygl_adapter_api::BuiltinResolver;
+use polygl_hir::BuiltinId;
 
 pub struct BuiltinTable;
 
@@ -45,6 +47,12 @@ impl BuiltinTable {
             validate_signature(builtin)?;
         }
         Ok(())
+    }
+}
+
+impl BuiltinResolver for BuiltinTable {
+    fn resolve_builtin(&self, canonical_name: &str) -> Option<BuiltinId> {
+        Self::find(canonical_name).map(|builtin| builtin.id)
     }
 }
 
