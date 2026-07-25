@@ -1,0 +1,53 @@
+use crate::{Diagnostic, Diagnostics, Label, Severity, SourceFile, SourceId, Span, Suggestion};
+
+#[test]
+fn renders_codes_labels_notes_and_suggestions_without_color() {
+    let source = SourceFile::new(SourceId::new(1), "main.php", "$x == 1");
+    let diagnostic = Diagnostic::new(
+        Severity::Error,
+        "E0302",
+        "loose equality is unsupported",
+        source.span(3, 5).unwrap(),
+    )
+    .with_label(Label::new(source.span(0, 2).unwrap(), "left operand"))
+    .with_note("Common Core comparisons require matching types")
+    .with_suggestion(Suggestion::new(
+        source.span(3, 5).unwrap(),
+        "===",
+        "use strict equality",
+    ));
+
+    let rendered = diagnostic.render(&source).unwrap();
+    assert!(rendered.contains("E0302"));
+    assert!(rendered.contains("loose equality is unsupported"));
+    assert!(rendered.contains("main.php"));
+    assert!(rendered.contains("left operand"));
+    assert!(rendered.contains("replace with `===`"));
+    assert!(!rendered.contains("\u{1b}["));
+}
+
+#[test]
+fn rejects_labels_from_another_source_and_tracks_error_severity() {
+    let source = SourceFile::new(SourceId::new(1), "main.rb", "value");
+    let foreign = Span::new(SourceId::new(2), 0, 1).unwrap();
+    let diagnostic = Diagnostic::new(
+        Severity::Error,
+        "E0100",
+        "bad source",
+        source.span(0, 1).unwrap(),
+    )
+    .with_label(Label::new(foreign, "foreign"));
+    assert!(diagnostic.render(&source).is_err());
+
+    let mut diagnostics = Diagnostics::new();
+    diagnostics.push(Diagnostic::new(
+        Severity::Warning,
+        "W0300",
+        "warning",
+        source.span(0, 0).unwrap(),
+    ));
+    assert!(!diagnostics.has_errors());
+    diagnostics.push(diagnostic);
+    assert!(diagnostics.has_errors());
+    assert_eq!(diagnostics.iter().len(), 2);
+}
