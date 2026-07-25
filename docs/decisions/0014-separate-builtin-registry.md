@@ -17,9 +17,9 @@ single-source-of-truth contract and allow compiler/runtime drift.
 
 ## Decision
 
-Create `polygl-builtins` as the canonical owner of builtin signatures, domains,
-defaults, runtime operation names, validation, and the `BuiltinResolver`
-implementation. It depends only on the adapter API and HIR.
+Create `polygl-builtins` as the canonical owner of builtin signatures, builtin
+struct schemas, domains, defaults, runtime operation names, validation, and the
+`BuiltinResolver` implementation. It depends only on the adapter API and HIR.
 
 Make `polygl-types` depend directly on `polygl-builtins`. Keep compatibility
 re-exports in `polygl-core` while core remains the public orchestration facade.

@@ -132,3 +132,21 @@ pub struct Builtin {
     pub domain: Domain,
     pub runtime_op: RuntimeOp,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BuiltinValueType {
+    Scalar(BuiltinType),
+    Option(BuiltinType),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BuiltinField {
+    pub name: &'static str,
+    pub ty: BuiltinValueType,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BuiltinStruct {
+    pub name: &'static str,
+    pub fields: &'static [BuiltinField],
+}

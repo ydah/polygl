@@ -7,7 +7,8 @@ mod table;
 mod table_tests;
 
 pub use builtin::{
-    Builtin, BuiltinTier, BuiltinType, DefaultValue, Domain, Parameter, RuntimeOp, Signature,
+    Builtin, BuiltinField, BuiltinStruct, BuiltinTier, BuiltinType, BuiltinValueType, DefaultValue,
+    Domain, Parameter, RuntimeOp, Signature,
 };
 pub use polygl_hir::BuiltinId;
 pub use table::{BuiltinTable, BuiltinTableError};

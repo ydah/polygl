@@ -74,3 +74,22 @@ fn public_parameter_names_match_the_design_contract() {
     assert_eq!(names("text"), ["s", "x", "y"]);
     assert_eq!(names("random"), ["a", "b"]);
 }
+
+#[test]
+fn event_schema_matches_the_common_core_contract() {
+    let event = BuiltinTable::find_struct("Event").expect("Event is a builtin struct");
+    let fields = event
+        .fields
+        .iter()
+        .map(|field| (field.name, field.ty))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        fields,
+        [
+            ("kind", crate::BuiltinValueType::Scalar(BuiltinType::Str)),
+            ("x", crate::BuiltinValueType::Scalar(BuiltinType::Float)),
+            ("y", crate::BuiltinValueType::Scalar(BuiltinType::Float)),
+            ("key", crate::BuiltinValueType::Option(BuiltinType::Str)),
+        ]
+    );
+}

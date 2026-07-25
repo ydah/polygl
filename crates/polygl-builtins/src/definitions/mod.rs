@@ -1,6 +1,7 @@
 mod core;
 mod drawing;
 mod environment;
+mod structures;
 
 use crate::{
     Builtin, BuiltinId, BuiltinTier, BuiltinType, DefaultValue, Domain, Parameter, RuntimeOp,
@@ -67,3 +68,5 @@ pub(crate) static BUILTINS: &[Builtin] = &[
     environment::KEY_DOWN,
     environment::RANDOM,
 ];
+
+pub(crate) static BUILTIN_STRUCTS: &[crate::BuiltinStruct] = &[structures::EVENT];

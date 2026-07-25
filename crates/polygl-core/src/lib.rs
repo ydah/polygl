@@ -1,6 +1,6 @@
 //! Compiler pipeline orchestration and compatibility re-exports.
 
 pub use polygl_builtins::{
-    Builtin, BuiltinId, BuiltinTable, BuiltinTableError, BuiltinTier, BuiltinType, DefaultValue,
-    Domain, Parameter, RuntimeOp, Signature,
+    Builtin, BuiltinField, BuiltinId, BuiltinStruct, BuiltinTable, BuiltinTableError, BuiltinTier,
+    BuiltinType, BuiltinValueType, DefaultValue, Domain, Parameter, RuntimeOp, Signature,
 };

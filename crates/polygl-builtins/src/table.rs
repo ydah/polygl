@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
 
-use crate::definitions::BUILTINS;
+use crate::definitions::{BUILTIN_STRUCTS, BUILTINS};
 use crate::{Builtin, BuiltinType, DefaultValue};
 use polygl_adapter_api::BuiltinResolver;
 use polygl_hir::BuiltinId;
@@ -18,6 +18,18 @@ impl BuiltinTable {
     #[must_use]
     pub fn find(name: &str) -> Option<&'static Builtin> {
         BUILTINS.iter().find(|builtin| builtin.name == name)
+    }
+
+    #[must_use]
+    pub const fn structs() -> &'static [crate::BuiltinStruct] {
+        BUILTIN_STRUCTS
+    }
+
+    #[must_use]
+    pub fn find_struct(name: &str) -> Option<&'static crate::BuiltinStruct> {
+        BUILTIN_STRUCTS
+            .iter()
+            .find(|definition| definition.name == name)
     }
 
     pub fn validate() -> Result<(), BuiltinTableError> {
@@ -46,6 +58,7 @@ impl BuiltinTable {
             }
             validate_signature(builtin)?;
         }
+        validate_structs()?;
         Ok(())
     }
 }
@@ -92,9 +105,53 @@ fn validate_signature(builtin: &Builtin) -> Result<(), BuiltinTableError> {
     Ok(())
 }
 
+fn validate_structs() -> Result<(), BuiltinTableError> {
+    let mut names = HashSet::new();
+    for definition in BUILTIN_STRUCTS {
+        if !is_type_identifier(definition.name) {
+            return Err(BuiltinTableError::InvalidStructName(definition.name));
+        }
+        if !names.insert(definition.name) {
+            return Err(BuiltinTableError::DuplicateStructName(definition.name));
+        }
+        let mut fields = HashSet::new();
+        for field in definition.fields {
+            if !is_identifier(field.name) {
+                return Err(BuiltinTableError::InvalidStructField(
+                    definition.name,
+                    field.name,
+                ));
+            }
+            if !fields.insert(field.name) {
+                return Err(BuiltinTableError::DuplicateStructField(
+                    definition.name,
+                    field.name,
+                ));
+            }
+            let scalar = match field.ty {
+                crate::BuiltinValueType::Scalar(scalar)
+                | crate::BuiltinValueType::Option(scalar) => scalar,
+            };
+            if scalar == BuiltinType::Void {
+                return Err(BuiltinTableError::VoidStructField(
+                    definition.name,
+                    field.name,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn is_identifier(value: &str) -> bool {
     let mut chars = value.chars();
     chars.next().is_some_and(|first| first.is_ascii_lowercase())
+        && chars.all(|char| char.is_ascii_alphanumeric() || char == '_')
+}
+
+fn is_type_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    chars.next().is_some_and(|first| first.is_ascii_uppercase())
         && chars.all(|char| char.is_ascii_alphanumeric() || char == '_')
 }
 
@@ -119,6 +176,11 @@ pub enum BuiltinTableError {
     VoidParameter(&'static str, &'static str),
     RequiredAfterOptional(&'static str, &'static str),
     DefaultType(&'static str, &'static str),
+    InvalidStructName(&'static str),
+    DuplicateStructName(&'static str),
+    InvalidStructField(&'static str, &'static str),
+    DuplicateStructField(&'static str, &'static str),
+    VoidStructField(&'static str, &'static str),
 }
 
 impl fmt::Display for BuiltinTableError {
@@ -154,6 +216,19 @@ impl fmt::Display for BuiltinTableError {
                     formatter,
                     "`{builtin}` parameter `{param}` has a mistyped default"
                 )
+            }
+            Self::InvalidStructName(name) => write!(formatter, "invalid builtin struct `{name}`"),
+            Self::DuplicateStructName(name) => {
+                write!(formatter, "duplicate builtin struct `{name}`")
+            }
+            Self::InvalidStructField(structure, field) => {
+                write!(formatter, "`{structure}` has invalid field `{field}`")
+            }
+            Self::DuplicateStructField(structure, field) => {
+                write!(formatter, "`{structure}` repeats field `{field}`")
+            }
+            Self::VoidStructField(structure, field) => {
+                write!(formatter, "`{structure}` field `{field}` has type void")
             }
         }
     }
