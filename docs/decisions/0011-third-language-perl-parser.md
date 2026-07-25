@@ -1,4 +1,4 @@
-# 0002: Keep Perl and use the maintained Tree-sitter grammar
+# 0011: Keep Perl and use the maintained Tree-sitter grammar
 
 - Status: Accepted
 - Date: 2026-07-25

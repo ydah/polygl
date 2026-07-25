@@ -1,4 +1,4 @@
-# 0001: Infer locally and monomorphize at call sites
+# 0009: Infer locally and monomorphize at call sites
 
 - Status: Accepted
 - Date: 2026-07-25
