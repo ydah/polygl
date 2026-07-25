@@ -1,3 +1,4 @@
 # L2: language-specific HIR snapshots
 
-This directory will contain each adapter's HIR regression snapshots.
+Snapshots live at `<case>/<language>.hir`. They are ordinary HIR dumps and are
+never shared across languages.

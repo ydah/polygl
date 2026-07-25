@@ -1,4 +1,4 @@
 # L3: neutral HIR equality
 
-This directory will contain cases whose normalized HIR must match across
-languages.
+Expected normalized dumps live at `<case>/neutral.hir`. Only cases using the
+Neutral subset may enter this layer.

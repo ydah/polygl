@@ -60,6 +60,7 @@ fn check_conformance_layout() -> io::Result<()> {
             )));
         }
     }
+    polygl_conformance::verify_smoke(&root).map_err(io::Error::other)?;
     Ok(())
 }
 

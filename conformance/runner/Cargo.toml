@@ -1,0 +1,20 @@
+[package]
+name = "polygl-conformance"
+description = "Three-layer conformance runner for PolyGL adapters"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+polygl-adapter-api = { path = "../../crates/polygl-adapter-api" }
+polygl-hir = { path = "../../crates/polygl-hir" }
+polygl-span = { path = "../../crates/polygl-span" }
+
+[dev-dependencies]
+insta = { version = "=1.48.0", default-features = false }
+
+[lints]
+workspace = true

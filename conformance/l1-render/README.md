@@ -1,4 +1,4 @@
 # L1: render equivalence
 
-This directory will contain deterministic rendering cases and renderer-keyed
-pixel baselines.
+Baselines are keyed by renderer identity. The M0 runner compares exact RGBA
+frames; later rendering milestones may add explicitly configured tolerances.

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/*", "xtask"]
+members = ["crates/*", "conformance/runner", "xtask"]
 exclude = ["spikes/*"]
 resolver = "3"
 
