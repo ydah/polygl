@@ -48,6 +48,11 @@ export type ShaderUniformValue =
   | readonly number[]
   | WebGLTexture;
 
+export interface ShaderMaterial {
+  readonly kind: "shader";
+  readonly shaderName: string;
+}
+
 interface LinkedShader {
   readonly artifact: ShaderArtifact;
   readonly program: WebGLProgram;
@@ -125,6 +130,17 @@ export class WebGL2ShaderRegistry {
       uniformName,
       Array.isArray(value) ? Object.freeze([...value]) : value,
     );
+  }
+
+  public material(shaderName: string): ShaderMaterial {
+    const shader = this.shaders.get(shaderName);
+    if (shader === undefined) {
+      throw new Error(`unknown shader pair \`${shaderName}\``);
+    }
+    return Object.freeze({
+      kind: "shader",
+      shaderName: shader.artifact.name,
+    });
   }
 
   public updateAutomaticUniforms(

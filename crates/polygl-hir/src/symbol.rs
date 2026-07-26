@@ -63,8 +63,9 @@ impl BuiltinId {
     pub const MOUSE_Y: Self = Self(22);
     pub const KEY_DOWN: Self = Self(23);
     pub const RANDOM: Self = Self(24);
+    pub const MATERIAL_SHADER: Self = Self(25);
 
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 26] = [
         Self::FLOOR,
         Self::ROUND,
         Self::TRUNC,
@@ -90,6 +91,7 @@ impl BuiltinId {
         Self::MOUSE_Y,
         Self::KEY_DOWN,
         Self::RANDOM,
+        Self::MATERIAL_SHADER,
     ];
 
     #[must_use]

@@ -4,6 +4,7 @@ import { WebGL2BatchRenderer } from "./renderer.js";
 import { WebGL2ShaderRegistry } from "./shader.js";
 import type {
   ShaderBundle,
+  ShaderMaterial,
   ShaderUniformValue,
 } from "./shader.js";
 
@@ -138,6 +139,10 @@ export class RuntimeSession implements RuntimeHandle {
     value: ShaderUniformValue,
   ): void {
     this.shaderRegistry.setUniform(shaderName, uniformName, value);
+  }
+
+  public materialShader(shaderName: string): ShaderMaterial {
+    return this.shaderRegistry.material(shaderName);
   }
 
   private program: PolyglProgram | undefined;

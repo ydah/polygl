@@ -477,6 +477,7 @@ pub(super) fn builtin_type(ty: BuiltinType) -> InferType {
         BuiltinType::Float => InferType::Float,
         BuiltinType::Bool => InferType::Bool,
         BuiltinType::Str => InferType::Str,
+        BuiltinType::Opaque(kind) => InferType::Opaque(kind),
     }
 }
 

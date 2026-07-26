@@ -481,6 +481,9 @@ fn default_expression(default: DefaultValue, ty: BuiltinType, span: polygl_span:
         (DefaultValue::Int(value), BuiltinType::Int) => (Literal::Int(value), Type::Int),
         (DefaultValue::Float(value), BuiltinType::Float) => (Literal::Float(value), Type::Float),
         (DefaultValue::Bool(value), BuiltinType::Bool) => (Literal::Bool(value), Type::Bool),
+        (_, BuiltinType::Opaque(_)) => {
+            unreachable!("opaque builtin parameters cannot have literal defaults")
+        }
         _ => unreachable!("builtin registry validation guarantees matching defaults"),
     };
     Expr::new(ExprKind::Literal(literal), ty, span)

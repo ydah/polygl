@@ -19,6 +19,7 @@ export type {
   ShaderArtifact,
   ShaderAttribute,
   ShaderBundle,
+  ShaderMaterial,
   ShaderUniform,
   ShaderUniformValue,
   ShaderValueType,
@@ -42,6 +43,7 @@ import type {
   PolyglProgramSource,
 } from "./session.js";
 import type { ShaderUniformValue } from "./shader.js";
+import type { ShaderMaterial } from "./shader.js";
 
 export const runtimeVersion = "0.0.0" as const;
 
@@ -144,6 +146,10 @@ export function setShaderUniform(
   value: ShaderUniformValue,
 ): void {
   session().setShaderUniform(shaderName, uniformName, value);
+}
+
+export function materialShader(shaderName: string): ShaderMaterial {
+  return session().materialShader(shaderName);
 }
 
 export function floorToInt(value: number): number {

@@ -11,8 +11,10 @@ repository.workspace = true
 [dependencies]
 polygl-adapter-api = { path = "../../crates/polygl-adapter-api" }
 polygl-adapter-ruby = { path = "../../crates/polygl-adapter-ruby" }
+polygl-backend-glsl = { path = "../../crates/polygl-backend-glsl" }
 polygl-core = { path = "../../crates/polygl-core" }
 polygl-hir = { path = "../../crates/polygl-hir" }
+polygl-lir = { path = "../../crates/polygl-lir" }
 polygl-span = { path = "../../crates/polygl-span" }
 polygl-types = { path = "../../crates/polygl-types" }
 

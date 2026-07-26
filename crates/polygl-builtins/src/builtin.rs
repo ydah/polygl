@@ -1,11 +1,12 @@
 use std::fmt;
 
-use polygl_hir::BuiltinId;
+use polygl_hir::{BuiltinId, OpaqueType};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BuiltinTier {
     Core,
     Tier1,
+    Tier2,
 }
 
 impl BuiltinTier {
@@ -14,6 +15,7 @@ impl BuiltinTier {
         match self {
             Self::Core => "Core",
             Self::Tier1 => "Tier 1",
+            Self::Tier2 => "Tier 2",
         }
     }
 }
@@ -43,6 +45,7 @@ pub enum BuiltinType {
     Float,
     Bool,
     Str,
+    Opaque(OpaqueType),
 }
 
 impl BuiltinType {
@@ -54,6 +57,10 @@ impl BuiltinType {
             Self::Float => "float",
             Self::Bool => "bool",
             Self::Str => "str",
+            Self::Opaque(OpaqueType::Mesh) => "Mesh",
+            Self::Opaque(OpaqueType::Node) => "Node",
+            Self::Opaque(OpaqueType::Material) => "Material",
+            Self::Opaque(OpaqueType::Texture) => "Texture",
         }
     }
 }

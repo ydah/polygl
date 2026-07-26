@@ -293,8 +293,10 @@ dependencies = [
  "insta",
  "polygl-adapter-api",
  "polygl-adapter-ruby",
+ "polygl-backend-glsl",
  "polygl-core",
  "polygl-hir",
+ "polygl-lir",
  "polygl-span",
  "polygl-types",
 ]

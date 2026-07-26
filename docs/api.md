@@ -33,6 +33,7 @@ runtime seed, while GPU code must use deterministic shader inputs instead.
 | Tier 1 | `mouse_y()` | `float` | Host | `mouseY` |
 | Tier 1 | `key_down(key: str)` | `bool` | Host | `keyDown` |
 | Tier 1 | `random(a: float, b: float)` | `float` | Host | `random` |
+| Tier 2 | `material_shader(name: str)` | `Material` | Host | `materialShader` |
 
 `time()` maps to the automatic `u_time` uniform in GPU code. All other
 Tier 1 drawing, input, matrix, and canvas operations are Host-only.

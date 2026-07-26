@@ -27,6 +27,7 @@ enum Dependency<'module> {
 pub fn split(module: &Module) -> Result<SplitProgram, Diagnostics> {
     let mut validator = Validator::new(module);
     validator.validate_shader_pairs();
+    validator.validate_material_references();
     validator.validate_gpu_graph();
     if validator.diagnostics.has_errors() {
         return Err(validator.diagnostics);
@@ -323,6 +324,64 @@ impl<'module> Validator<'module> {
                 fragment.span,
                 "return a vec4 color",
             );
+        }
+    }
+
+    fn validate_material_references(&mut self) {
+        let material_operation = BuiltinTable::find("material_shader")
+            .expect("material_shader is a canonical builtin")
+            .runtime_op;
+        let mut pairs: HashMap<&str, (bool, bool)> = HashMap::new();
+        for entry in &self.module.entries {
+            match &entry.kind {
+                EntryKind::Vertex(name) => pairs.entry(name).or_default().0 = true,
+                EntryKind::Fragment(name) => pairs.entry(name).or_default().1 = true,
+                EntryKind::Setup | EntryKind::Frame | EntryKind::OnEvent => {}
+            }
+        }
+        let mut available = pairs
+            .into_iter()
+            .filter_map(|(name, stages)| (stages == (true, true)).then_some(name))
+            .collect::<Vec<_>>();
+        available.sort_unstable();
+
+        let mut references = Vec::new();
+        for entry in &self.module.entries {
+            collect_material_references_block(&entry.body, material_operation, &mut references);
+        }
+        for function in &self.module.functions {
+            collect_material_references_block(&function.body, material_operation, &mut references);
+        }
+        for constant in &self.module.constants {
+            collect_material_references_expr(&constant.value, material_operation, &mut references);
+        }
+
+        for (name, span) in references {
+            let Some(name) = name else {
+                self.error(
+                    "E0405",
+                    "material_shader requires a string literal shader name",
+                    span,
+                    "pass a literal such as material_shader(\"main\")",
+                );
+                continue;
+            };
+            if !available.contains(&name.as_str()) {
+                let suggestion = if available.is_empty() {
+                    "define matching vertex_<name> and fragment_<name> entries".to_owned()
+                } else {
+                    format!(
+                        "use one of the declared shader pairs: {}",
+                        available.join(", ")
+                    )
+                };
+                self.error(
+                    "E0405",
+                    format!("material_shader references unknown shader pair `{name}`"),
+                    span,
+                    suggestion,
+                );
+            }
         }
     }
 
@@ -1042,6 +1101,125 @@ fn collect_expr_calls(expression: &Expr, calls: &mut Vec<String>) {
     }
 }
 
+fn collect_material_references_block(
+    block: &Block,
+    operation: polygl_builtins::RuntimeOp,
+    references: &mut Vec<(Option<String>, polygl_span::Span)>,
+) {
+    for statement in &block.statements {
+        match &statement.kind {
+            StatementKind::Let { init, .. } | StatementKind::Expr(init) => {
+                collect_material_references_expr(init, operation, references);
+            }
+            StatementKind::Assign { target, value } => {
+                collect_material_references_place(target, operation, references);
+                collect_material_references_expr(value, operation, references);
+            }
+            StatementKind::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                collect_material_references_expr(condition, operation, references);
+                collect_material_references_block(then_block, operation, references);
+                if let Some(else_block) = else_block {
+                    collect_material_references_block(else_block, operation, references);
+                }
+            }
+            StatementKind::While { condition, body } => {
+                collect_material_references_expr(condition, operation, references);
+                collect_material_references_block(body, operation, references);
+            }
+            StatementKind::For { range, body, .. } => {
+                collect_material_references_expr(&range.start, operation, references);
+                collect_material_references_expr(&range.end, operation, references);
+                collect_material_references_block(body, operation, references);
+            }
+            StatementKind::Return(value) => {
+                if let Some(value) = value {
+                    collect_material_references_expr(value, operation, references);
+                }
+            }
+            StatementKind::Break | StatementKind::Continue => {}
+        }
+    }
+}
+
+fn collect_material_references_place(
+    place: &Place,
+    operation: polygl_builtins::RuntimeOp,
+    references: &mut Vec<(Option<String>, polygl_span::Span)>,
+) {
+    match &place.kind {
+        PlaceKind::Variable(_) => {}
+        PlaceKind::Index { base, index } => {
+            collect_material_references_expr(base, operation, references);
+            collect_material_references_expr(index, operation, references);
+        }
+        PlaceKind::Field { base, .. } => {
+            collect_material_references_expr(base, operation, references);
+        }
+    }
+}
+
+fn collect_material_references_expr(
+    expression: &Expr,
+    operation: polygl_builtins::RuntimeOp,
+    references: &mut Vec<(Option<String>, polygl_span::Span)>,
+) {
+    match &expression.kind {
+        ExprKind::Call { target, args } => {
+            if matches!(target, CallTarget::Runtime(candidate) if *candidate == operation) {
+                references.push((
+                    args.first().and_then(|argument| {
+                        if let ExprKind::Literal(Literal::Str(name)) = &argument.kind {
+                            Some(name.clone())
+                        } else {
+                            None
+                        }
+                    }),
+                    args.first()
+                        .map_or(expression.span, |argument| argument.span),
+                ));
+            }
+            for argument in args {
+                collect_material_references_expr(argument, operation, references);
+            }
+        }
+        ExprKind::Binary { left, right, .. }
+        | ExprKind::Index {
+            base: left,
+            index: right,
+        } => {
+            collect_material_references_expr(left, operation, references);
+            collect_material_references_expr(right, operation, references);
+        }
+        ExprKind::Unary { operand, .. }
+        | ExprKind::Field { base: operand, .. }
+        | ExprKind::IsNil(operand)
+        | ExprKind::IsFalsy(operand) => {
+            collect_material_references_expr(operand, operation, references);
+        }
+        ExprKind::Array(items) | ExprKind::Vector { args: items, .. } => {
+            for item in items {
+                collect_material_references_expr(item, operation, references);
+            }
+        }
+        ExprKind::Map(entries) => {
+            for entry in entries {
+                collect_material_references_expr(&entry.key, operation, references);
+                collect_material_references_expr(&entry.value, operation, references);
+            }
+        }
+        ExprKind::Struct { fields, .. } => {
+            for field in fields {
+                collect_material_references_expr(&field.value, operation, references);
+            }
+        }
+        ExprKind::Literal(_) | ExprKind::Variable(_) | ExprKind::Constant(_) => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use polygl_builtins::BuiltinTable;
@@ -1239,6 +1417,54 @@ mod tests {
         assert!(codes.contains("E0403"));
         assert!(codes.contains("E0404"));
         assert!(codes.contains("E0405"));
+    }
+
+    #[test]
+    fn resolves_material_shader_literal_names_at_split_time() {
+        let material = BuiltinTable::find("material_shader").unwrap();
+        let setup_with = |argument: Expr| EntryPoint {
+            kind: EntryKind::Setup,
+            params: Vec::new(),
+            result: Type::Unit,
+            body: Block {
+                statements: vec![Statement::new(
+                    StatementKind::Expr(expression(
+                        ExprKind::Call {
+                            target: CallTarget::Runtime(material.runtime_op),
+                            args: vec![argument],
+                        },
+                        Type::Opaque(OpaqueType::Material),
+                    )),
+                    span(),
+                )],
+                span: span(),
+            },
+            domain: Domain::Host,
+            span: span(),
+        };
+
+        let mut valid = valid_pair(vec![return_vector4()]);
+        valid.entries.push(setup_with(expression(
+            ExprKind::Literal(Literal::Str("main".to_owned())),
+            Type::Str,
+        )));
+        split(&valid).expect("a literal declared shader pair resolves");
+
+        let mut missing = valid_pair(vec![return_vector4()]);
+        missing.entries.push(setup_with(expression(
+            ExprKind::Literal(Literal::Str("missing".to_owned())),
+            Type::Str,
+        )));
+        let diagnostics = split(&missing).expect_err("missing shader names must fail");
+        assert!(codes(&diagnostics).contains("E0405"));
+
+        let mut dynamic = valid_pair(vec![return_vector4()]);
+        dynamic.entries.push(setup_with(expression(
+            ExprKind::Variable("name".to_owned()),
+            Type::Str,
+        )));
+        let diagnostics = split(&dynamic).expect_err("dynamic shader names must fail");
+        assert!(codes(&diagnostics).contains("E0405"));
     }
 
     #[test]

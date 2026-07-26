@@ -444,7 +444,7 @@ mod tests {
         let source = temporary.join("triangle.rb");
         fs::write(
             &source,
-            "def setup\n  size(320, 180)\n  fill(1.0, 0.0, 0.0)\n  triangle(10.0, 10.0, 50.0, 10.0, 30.0, 40.0)\nend\n\ndef vertex_plasma\n  vec4(0.0, 0.0, 0.0, 1.0)\nend\n\ndef fragment_plasma\n  vec4(time(), 0.0, 0.0, 1.0)\nend\n",
+            "def setup\n  size(320, 180)\n  material_shader(\"plasma\")\n  fill(1.0, 0.0, 0.0)\n  triangle(10.0, 10.0, 50.0, 10.0, 30.0, 40.0)\nend\n\ndef vertex_plasma\n  vec4(0.0, 0.0, 0.0, 1.0)\nend\n\ndef fragment_plasma\n  vec4(time(), 0.0, 0.0, 1.0)\nend\n",
         )
         .unwrap();
 
@@ -462,6 +462,7 @@ mod tests {
         let debug_javascript = fs::read_to_string(debug.join("app.js")).unwrap();
         assert!(debug_javascript.contains("const __pglSpans"));
         assert!(debug_javascript.contains("__pglRuntime.triangle"));
+        assert!(debug_javascript.contains("__pglRuntime.materialShader(\"plasma\")"));
         assert!(debug.join("app.js.map").is_file());
         assert!(debug.join("runtime.js").is_file());
         let debug_shaders = fs::read_to_string(debug.join("shaders.js")).unwrap();
@@ -514,6 +515,21 @@ mod tests {
         assert!(error.contains("E0200"));
         assert!(error.contains("invalid.rb"));
         assert!(error.contains("regular `def name` declaration"));
+
+        let missing_shader = temporary.join("missing_shader.rb");
+        fs::write(
+            &missing_shader,
+            "def setup\n  material_shader(\"missing\")\nend\n",
+        )
+        .unwrap();
+        let error = run(
+            arguments(["check", missing_shader.to_str().unwrap()]),
+            &mut Vec::new(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("E0405"));
+        assert!(error.contains("unknown shader pair `missing`"));
 
         let valid = temporary.join("valid.rb");
         fs::write(&valid, "def setup\n  value = 1\nend\n").unwrap();

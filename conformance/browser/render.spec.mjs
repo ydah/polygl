@@ -5,13 +5,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const CASES = [
+const RENDER_CASES = [
   "background",
   "circle",
   "rectangle",
   "seeded-random",
   "triangle",
 ];
+const BUILD_CASES = [...RENDER_CASES, "plasma"];
 const workspaceRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../..",
@@ -24,7 +25,7 @@ let buildRoot;
 test.beforeAll(async () => {
   run("cargo", ["build", "--quiet", "-p", "polygl-cli"]);
   buildRoot = await mkdtemp(path.join(tmpdir(), "polygl-conformance-"));
-  for (const name of CASES) {
+  for (const name of BUILD_CASES) {
     run(executable, [
       "build",
       path.join(conformanceRoot, "cases", name, "main.rb"),
@@ -41,7 +42,7 @@ test.afterAll(async () => {
   }
 });
 
-for (const name of CASES) {
+for (const name of RENDER_CASES) {
   test(`${name} matches the SwiftShader framebuffer`, async ({ page }) => {
     await page.addInitScript(() => {
       const originalGetContext = HTMLCanvasElement.prototype.getContext;
@@ -58,23 +59,7 @@ for (const name of CASES) {
         );
       };
     });
-    await page.route("http://polygl.test/**", async (route) => {
-      const url = new URL(route.request().url());
-      const file = path.resolve(buildRoot, `.${decodeURIComponent(url.pathname)}`);
-      if (!file.startsWith(`${path.resolve(buildRoot)}${path.sep}`)) {
-        await route.fulfill({ status: 403, body: "forbidden" });
-        return;
-      }
-      try {
-        await route.fulfill({
-          status: 200,
-          body: await readFile(file),
-          contentType: contentType(file),
-        });
-      } catch {
-        await route.fulfill({ status: 404, body: "not found" });
-      }
-    });
+    await routeBuild(page);
     await page.goto(`http://polygl.test/${name}/index.html`);
     await page.evaluate(() => globalThis.__polyglReady);
     const frame = await page.evaluate(() => {
@@ -121,6 +106,43 @@ for (const name of CASES) {
       await writeFile(baselinePath, baseline);
     } else {
       expect(baseline).toBe(await readFile(baselinePath, "utf8"));
+    }
+  });
+}
+
+test("plasma shader compiles and resolves its material in SwiftShader", async ({
+  page,
+}) => {
+  await routeBuild(page);
+  await page.goto("http://polygl.test/plasma/index.html");
+  await page.evaluate(() => globalThis.__polyglReady);
+  const renderer = await page.evaluate(() => {
+    const canvas = document.querySelector("canvas");
+    const gl = canvas.getContext("webgl2");
+    const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
+    return debugInfo === null
+      ? gl.getParameter(gl.RENDERER)
+      : gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
+  });
+  expect(renderer).toContain("SwiftShader");
+});
+
+async function routeBuild(page) {
+  await page.route("http://polygl.test/**", async (route) => {
+    const url = new URL(route.request().url());
+    const file = path.resolve(buildRoot, `.${decodeURIComponent(url.pathname)}`);
+    if (!file.startsWith(`${path.resolve(buildRoot)}${path.sep}`)) {
+      await route.fulfill({ status: 403, body: "forbidden" });
+      return;
+    }
+    try {
+      await route.fulfill({
+        status: 200,
+        body: await readFile(file),
+        contentType: contentType(file),
+      });
+    } catch {
+      await route.fulfill({ status: 404, body: "not found" });
     }
   });
 }

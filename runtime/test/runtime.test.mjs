@@ -11,6 +11,7 @@ const {
   circle,
   fill,
   formatRuntimeError,
+  materialShader,
   random,
   rect,
   roundToInt,
@@ -28,6 +29,7 @@ test("exports generated runtime metadata", () => {
   assert.equal(runtimeOps.background, "background");
   assert.equal(runtimeOps.no_stroke, "noStroke");
   assert.equal(runtimeOps.time, "time");
+  assert.equal(runtimeOps.material_shader, "materialShader");
   assert.equal(runtimeVersion, "0.0.0");
 });
 
@@ -200,6 +202,7 @@ test("compiles reflected shaders and uploads automatic and user uniforms", async
   } = fakeWebGl2();
   const canvas = fakeCanvas();
   const frames = [];
+  let material;
   const bundle = shaderBundle([
     {
       name: "plasma",
@@ -224,6 +227,7 @@ test("compiles reflected shaders and uploads automatic and user uniforms", async
     {
       __polyglShaderBundle: bundle,
       setup() {
+        material = materialShader("plasma");
         const tint = [0.2, 0.4, 0.6];
         setShaderUniform("plasma", "tint", tint);
         tint[0] = Number.NaN;
@@ -245,6 +249,7 @@ test("compiles reflected shaders and uploads automatic and user uniforms", async
 
   assert.deepEqual(uniform1fValues, [0]);
   assert.deepEqual(uniform3fvValues, [[0.2, 0.4, 0.6]]);
+  assert.deepEqual(material, { kind: "shader", shaderName: "plasma" });
   frames[0](1_000);
   frames[1](1_016);
   assert.deepEqual(uniform1fValues, [0, 0, 0.016]);

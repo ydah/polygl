@@ -1,6 +1,7 @@
 mod core;
 mod drawing;
 mod environment;
+mod materials;
 mod structures;
 
 use crate::{
@@ -67,6 +68,7 @@ pub(crate) static BUILTINS: &[Builtin] = &[
     environment::MOUSE_Y,
     environment::KEY_DOWN,
     environment::RANDOM,
+    materials::MATERIAL_SHADER,
 ];
 
 pub(crate) static BUILTIN_STRUCTS: &[crate::BuiltinStruct] = &[structures::EVENT];

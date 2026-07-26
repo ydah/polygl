@@ -42,12 +42,23 @@ fn registry_is_valid_and_contains_every_tier_one_function() {
             "random",
         ]
     );
+    assert_eq!(
+        BuiltinTable::find("material_shader").unwrap().tier,
+        BuiltinTier::Tier2
+    );
 }
 
 #[test]
 fn domains_and_defaults_match_the_public_contract() {
     assert_eq!(BuiltinTable::find("time").unwrap().domain, Domain::Both);
     assert_eq!(BuiltinTable::find("random").unwrap().domain, Domain::Host);
+    assert_eq!(
+        BuiltinTable::find("material_shader")
+            .unwrap()
+            .signature
+            .result,
+        BuiltinType::Opaque(polygl_hir::OpaqueType::Material)
+    );
     let fill = BuiltinTable::find("fill").unwrap();
     assert_eq!(fill.signature.params[3].name, "a");
     assert!(fill.signature.params[3].default.is_some());
@@ -73,6 +84,7 @@ fn public_parameter_names_match_the_design_contract() {
     assert_eq!(names("circle"), ["x", "y", "r"]);
     assert_eq!(names("text"), ["s", "x", "y"]);
     assert_eq!(names("random"), ["a", "b"]);
+    assert_eq!(names("material_shader"), ["name"]);
 }
 
 #[test]

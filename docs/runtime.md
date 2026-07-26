@@ -30,6 +30,11 @@ when set; debug builds additionally reject an unset active user uniform after
 `setup`, while release builds retain WebGL's zero/default value until one is
 set. Registry programs are deleted with the runtime session.
 
+`material_shader("<name>")` returns an immutable handle backed by the eager
+registry. Split requires a literal name and resolves it against complete shader
+pairs, so the runtime lookup is a defensive invariant check rather than normal
+string-based discovery.
+
 GPU split warnings such as W0401 and W0402 are rendered by both `check` and
 `build`; successful compilation no longer discards non-fatal diagnostics.
 

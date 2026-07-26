@@ -27,6 +27,7 @@ export const runtimeOps = Object.freeze({
     mouse_y: "mouseY",
     key_down: "keyDown",
     random: "random",
+    material_shader: "materialShader",
 });
 export const runtimeSignatures = Object.freeze({
     floor: { domain: "both", params: [{ name: "value", type: "float" }], result: "int" },
@@ -54,6 +55,7 @@ export const runtimeSignatures = Object.freeze({
     mouse_y: { domain: "host", params: [], result: "float" },
     key_down: { domain: "host", params: [{ name: "key", type: "str" }], result: "bool" },
     random: { domain: "host", params: [{ name: "a", type: "float" }, { name: "b", type: "float" }], result: "float" },
+    material_shader: { domain: "host", params: [{ name: "name", type: "str" }], result: "Material" },
 });
 const OVERLAY_ID = "polygl-error-overlay";
 export function runtimeError(message, location) {
@@ -362,6 +364,16 @@ export class WebGL2ShaderRegistry {
         }
         validateUniformValue(this.gl, binding, value, shader.artifact.fragmentLocation);
         shader.userValues.set(uniformName, Array.isArray(value) ? Object.freeze([...value]) : value);
+    }
+    material(shaderName) {
+        const shader = this.shaders.get(shaderName);
+        if (shader === undefined) {
+            throw new Error(`unknown shader pair \`${shaderName}\``);
+        }
+        return Object.freeze({
+            kind: "shader",
+            shaderName: shader.artifact.name,
+        });
     }
     updateAutomaticUniforms(elapsedSeconds, width, height) {
         for (const shader of this.shaders.values()) {
@@ -691,6 +703,9 @@ export class RuntimeSession {
     setShaderUniform(shaderName, uniformName, value) {
         this.shaderRegistry.setUniform(shaderName, uniformName, value);
     }
+    materialShader(shaderName) {
+        return this.shaderRegistry.material(shaderName);
+    }
     installInputListeners() {
         this.canvas.addEventListener("pointermove", this.handlePointerMove);
         this.documentObject?.addEventListener("keydown", this.handleKeyDown);
@@ -786,6 +801,9 @@ export function random(a, b) {
 }
 export function setShaderUniform(shaderName, uniformName, value) {
     session().setShaderUniform(shaderName, uniformName, value);
+}
+export function materialShader(shaderName) {
+    return session().materialShader(shaderName);
 }
 export function floorToInt(value) {
     return Math.floor(value) | 0;
