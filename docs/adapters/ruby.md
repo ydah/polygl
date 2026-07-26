@@ -34,7 +34,8 @@ Place `# @pgl name: type` immediately before the containing `def` for a
 parameter, or immediately before a local variable's first assignment, when
 inference needs help. Scalar, array, `Map<str, T>`, `Option<T>`, vector, matrix,
 opaque graphics handle, and named struct types are accepted. Invalid, unused,
-or non-adjacent directives produce E0314.
+or non-adjacent directives produce E0314. The complete placement and spelling
+rules are in [Source annotation directives](../annotations.md).
 
 ## Semantic expansion
 

@@ -34,4 +34,5 @@ recover.
 `check` performs parsing, Common Core lowering, type inference, and
 monomorphization without writing artifacts. `dump-hir` performs the same checks
 and prints fully typed HIR. Adapter and type errors use stable diagnostic codes,
-source excerpts, and suggestions where required.
+source excerpts, and suggestions where required. See
+[Diagnostic codes](errors.md) for the complete code table.

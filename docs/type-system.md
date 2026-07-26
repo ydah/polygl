@@ -85,38 +85,13 @@ reached.
 
 ## Ruby annotation directives
 
-Place an annotation immediately before a function parameter declaration or the
-first assignment to a local:
-
-```ruby
-# @pgl radius: float
-radius = 12
-```
-
-Supported spellings are:
-
-- `int`, `float`, `bool`, and `str`;
-- `T[]`, `Map<str, T>`, and `Option<T>`;
-- `vec2` through `vec4` and `mat2` through `mat4`;
-- `Mesh`, `Node`, `Material`, and `Texture`;
-- a named struct beginning with an uppercase letter.
-
-Malformed directives and directives that do not match a later declaration are
-errors rather than silently ignored comments.
+See [Source annotation directives](annotations.md) for placement rules, type
+spellings, class-field inference, and diagnostics.
 
 ## Diagnostics
 
-| Code | Meaning |
-|---|---|
-| E0301 | condition is not `bool` |
-| E0303 | inferred and required types do not match |
-| E0305 | unknown variable or function |
-| E0306 | wrong argument count |
-| E0310 | per-function specialization limit exceeded |
-| E0311 | reassignment changes a variable type |
-| E0312 | type remains unresolved or is recursive within itself |
-| E0313 | recursive function specialization cannot be inferred |
-| E0314 | malformed or unmatched source annotation |
+See [Diagnostic codes](errors.md) for the complete stable code table and
+suggestion policy.
 
 The accepted strategy and its tradeoffs are recorded in
 [ADR 0009](decisions/0009-type-inference-strategy.md).

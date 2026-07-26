@@ -54,12 +54,15 @@ files must be committed and pass `cargo xtask gen-runtime --check`.
 
 ```console
 cargo run -p polygl-cli -- build examples/triangle.rb -o dist
+cargo run -p polygl-cli -- serve examples/interactive.rb --watch
 ```
 
 The build writes `index.html`, `app.js`, `app.js.map`, and the embedded
 `runtime.js`. Serve the output directory through an HTTP server so browser ES
 modules can load. Debug checks are enabled by default; pass `--release` to
-remove compiler-inserted collection and nil checks.
+remove compiler-inserted collection and nil checks. The interactive example
+exercises pointer and keyboard input, events, transforms, text, collections,
+blocks, and a struct-like Ruby class.
 
 Use `polygl check source.rb` for diagnostics without output or
 `polygl dump-hir source.rb` to inspect typed HIR. See [the CLI

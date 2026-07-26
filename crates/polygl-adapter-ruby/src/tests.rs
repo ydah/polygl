@@ -112,6 +112,30 @@ fn rejects_instance_methods_that_conflict_with_direct_syntax_lowering() {
 }
 
 #[test]
+fn every_common_core_rejection_in_the_ruby_corpus_has_a_suggestion() {
+    for source in [
+        "value = 1\n",
+        "def helper(value = 1)\n  value\nend\n",
+        "def setup\n  [1].map { |value| value }\nend\n",
+        "class Child < Parent\nend\n",
+        "class Counter\n  def ==(other)\n    false\n  end\nend\n",
+    ] {
+        let diagnostics = lower(source).expect_err("the source must be outside Common Core");
+        let rejections = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code.starts_with("E02"))
+            .collect::<Vec<_>>();
+        assert!(!rejections.is_empty(), "{diagnostics:?}");
+        assert!(
+            rejections
+                .iter()
+                .all(|diagnostic| diagnostic.suggestion.is_some()),
+            "{diagnostics:?}"
+        );
+    }
+}
+
+#[test]
 fn lowers_arrays_maps_and_index_places() {
     let module = lower(
         r#"
