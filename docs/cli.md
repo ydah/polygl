@@ -3,10 +3,10 @@
 The CLI accepts one source file and runs the shared compiler pipeline.
 
 ```text
-polygl build <source.rb> [-o <directory>] [--debug | --release]
-polygl serve <source.rb> [--port <port>] [--watch]
-polygl check <source.rb>
-polygl dump-hir <source.rb>
+polygl build <source.rb|source.php> [-o <directory>] [--debug | --release]
+polygl serve <source.rb|source.php> [--port <port>] [--watch]
+polygl check <source.rb|source.php>
+polygl dump-hir <source.rb|source.php>
 ```
 
 `build` defaults to `dist` and debug mode. It writes:
@@ -36,3 +36,7 @@ monomorphization without writing artifacts. `dump-hir` performs the same checks
 and prints fully typed HIR. Adapter and type errors use stable diagnostic codes,
 source excerpts, and suggestions where required. See
 [Diagnostic codes](errors.md) for the complete code table.
+
+The source extension selects the adapter: `.rb` uses the Ruby adapter and
+`.php` uses the PHP adapter. Both continue through the same type, HIR/LIR,
+JavaScript, GLSL, and runtime pipeline.

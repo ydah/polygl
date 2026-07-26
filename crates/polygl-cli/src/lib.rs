@@ -8,6 +8,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use polygl_adapter_api::{LanguageAdapter, LowerCtx};
+use polygl_adapter_php::PhpAdapter;
 use polygl_adapter_ruby::RubyAdapter;
 use polygl_backend_glsl::{GlslArtifacts, GlslBackend, UniformSource};
 use polygl_backend_js::{BuildMode, JavaScriptBackend};
@@ -378,18 +379,23 @@ fn js_string(value: &str) -> String {
 }
 
 fn compile_frontend(source_path: &Path) -> Result<(SourceFile, TypedModule), CliError> {
-    match source_path
+    let adapter: &dyn LanguageAdapter = match source_path
         .extension()
         .and_then(|extension| extension.to_str())
     {
-        Some("rb") => {}
+        Some("rb") => &RubyAdapter,
+        Some("php") => &PhpAdapter,
         Some(extension) => {
             return Err(CliError::new(format!(
-                "unsupported source extension `.{extension}`; M1 supports `.rb`"
+                "unsupported source extension `.{extension}`; supported extensions are `.rb` and `.php`"
             )));
         }
-        None => return Err(CliError::new("source file must have a `.rb` extension")),
-    }
+        None => {
+            return Err(CliError::new(
+                "source file must have a `.rb` or `.php` extension",
+            ));
+        }
+    };
 
     let bytes = fs::read(source_path).map_err(|error| {
         CliError::new(format!(
@@ -405,7 +411,7 @@ fn compile_frontend(source_path: &Path) -> Result<(SourceFile, TypedModule), Cli
     .map_err(|error| CliError::new(error.to_string()))?;
 
     let mut context = LowerCtx::new(&BuiltinTable);
-    let hir = RubyAdapter
+    let hir = adapter
         .lower(&source, &mut context)
         .map_err(|diagnostics| diagnostic_error(&diagnostics, &source))?;
     let typed = polygl_types::analyze(&hir)
@@ -448,10 +454,10 @@ fn write_artifact(path: &Path, contents: &[u8]) -> Result<(), CliError> {
 fn usage() -> String {
     "\
 usage:
-  polygl build <source.rb> [-o <directory>] [--debug | --release]
-  polygl serve <source.rb> [--port <port>] [--watch]
-  polygl check <source.rb>
-  polygl dump-hir <source.rb>
+  polygl build <source.rb|source.php> [-o <directory>] [--debug | --release]
+  polygl serve <source.rb|source.php> [--port <port>] [--watch]
+  polygl check <source.rb|source.php>
+  polygl dump-hir <source.rb|source.php>
 "
     .to_owned()
 }
@@ -706,6 +712,40 @@ end
         assert!(javascript.contains("[\"x\"] ="));
         assert!(javascript.contains("__pglRuntime.circle"));
         assert!(javascript.contains("return 99;"));
+        fs::remove_dir_all(temporary).unwrap();
+    }
+
+    #[test]
+    fn builds_php_browser_artifacts() {
+        let temporary = temporary_directory();
+        let source = temporary.join("triangle.php");
+        fs::write(
+            &source,
+            r#"<?php
+function setup() {
+    size(320, 180);
+    background(0.1, 0.2, 0.3);
+    fill(1.0, 0.0, 0.0);
+    triangle(10.0, 10.0, 50.0, 10.0, 30.0, 40.0);
+}
+"#,
+        )
+        .unwrap();
+        let output = temporary.join("web");
+        run(
+            arguments([
+                "build",
+                source.to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+            ]),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let javascript = fs::read_to_string(output.join("app.js")).unwrap();
+        assert!(javascript.contains("__pglRuntime.background"));
+        assert!(javascript.contains("__pglRuntime.triangle"));
+        assert!(output.join("index.html").is_file());
         fs::remove_dir_all(temporary).unwrap();
     }
 

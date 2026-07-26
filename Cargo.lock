@@ -653,6 +653,11 @@ dependencies = [
  "mago-syntax",
  "mago-syntax-core",
  "mago-text-edit",
+ "polygl-adapter-api",
+ "polygl-core",
+ "polygl-hir",
+ "polygl-span",
+ "polygl-types",
 ]
 
 [[package]]
@@ -704,6 +709,7 @@ name = "polygl-cli"
 version = "0.0.0"
 dependencies = [
  "polygl-adapter-api",
+ "polygl-adapter-php",
  "polygl-adapter-ruby",
  "polygl-backend-glsl",
  "polygl-backend-js",
@@ -721,6 +727,7 @@ version = "0.0.0"
 dependencies = [
  "insta",
  "polygl-adapter-api",
+ "polygl-adapter-php",
  "polygl-adapter-ruby",
  "polygl-backend-glsl",
  "polygl-core",

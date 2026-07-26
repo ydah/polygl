@@ -1,8 +1,8 @@
 # L1: render equivalence
 
-Baselines are keyed by renderer identity. M1 builds each source in
-`conformance/cases`, executes it in pinned Chromium with SwiftShader, reads the
-WebGL framebuffer, and compares exact RGBA bytes. Run:
+Baselines are keyed by renderer identity. Each Ruby and PHP L1 source is built,
+executed in pinned Chromium with SwiftShader, and compared against the same
+exact RGBA bytes. Run:
 
 ```console
 pnpm --dir conformance/browser test

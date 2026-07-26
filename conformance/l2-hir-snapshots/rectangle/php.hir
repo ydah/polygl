@@ -1,0 +1,10 @@
+module
+{
+  entry setup() [host]
+  {
+    builtin#3(4, 4);
+    builtin#4(0.0, 0.0, 0.0);
+    builtin#5(0.0, 1.0, 0.25);
+    builtin#8(1.0, 1.0, 2.0, 2.0);
+  }
+}

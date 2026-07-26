@@ -7,7 +7,8 @@ be recovered from use.
 
 Annotations are constraints, not casts. A value must still be assignable to the
 declared type, and later assignments keep that type. Function return
-annotations are not currently exposed in source adapters.
+annotations may also come from a source language's supported native type
+hints.
 
 ## Ruby
 
@@ -60,6 +61,47 @@ and its target. An ordinary comment or executable statement breaks adjacency.
 Inline comments, `# @pgl...` text without a separating space, and directives
 inside a different function are ordinary comments or unmatched directives;
 they never silently constrain another declaration.
+
+## PHP
+
+PHP uses a DocBlock with this exact directive form:
+
+```php
+/** @pgl $name: type */
+```
+
+For parameters, place one or more DocBlocks immediately before the containing
+function or method. A matching native PHP type hint consumes a redundant
+directive; a conflict produces E0303 and suggests removing the directive:
+
+```php
+/** @pgl $values: float[] */
+function scaled_total(float $scale, $values): float {
+    // ...
+}
+```
+
+For a local or constructor field, place the directive immediately before the
+first assignment:
+
+```php
+function setup() {
+    /** @pgl $points: float[] */
+    $points = [];
+}
+
+class Dot {
+    function __construct() {
+        /** @pgl $x: float */
+        $this->x = 0;
+    }
+}
+```
+
+Only whitespace may separate a PHP DocBlock from its target. The target name
+always includes `$` in the directive, including constructor fields. A
+constructor assignment from a typed parameter also transfers that parameter
+type to the field.
 
 ## Type spellings
 

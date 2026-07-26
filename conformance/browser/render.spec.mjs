@@ -13,6 +13,10 @@ const RENDER_CASES = [
   "triangle",
 ];
 const BUILD_CASES = [...RENDER_CASES, "plasma"];
+const LANGUAGES = [
+  ["ruby", "main.rb"],
+  ["php", "main.php"],
+];
 const workspaceRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../..",
@@ -26,13 +30,25 @@ test.beforeAll(async () => {
   run("cargo", ["build", "--quiet", "-p", "polygl-cli"]);
   buildRoot = await mkdtemp(path.join(tmpdir(), "polygl-conformance-"));
   for (const name of BUILD_CASES) {
-    run(executable, [
-      "build",
-      path.join(conformanceRoot, "cases", name, "main.rb"),
-      "-o",
-      path.join(buildRoot, name),
-      "--release",
-    ]);
+    if (name === "plasma") {
+      run(executable, [
+        "build",
+        path.join(conformanceRoot, "cases", name, "main.rb"),
+        "-o",
+        path.join(buildRoot, name, "ruby"),
+        "--release",
+      ]);
+      continue;
+    }
+    for (const [language, file] of LANGUAGES) {
+      run(executable, [
+        "build",
+        path.join(conformanceRoot, "cases", name, file),
+        "-o",
+        path.join(buildRoot, name, language),
+        "--release",
+      ]);
+    }
   }
 });
 
@@ -43,78 +59,82 @@ test.afterAll(async () => {
 });
 
 for (const name of RENDER_CASES) {
-  test(`${name} matches the SwiftShader framebuffer`, async ({ page }) => {
-    await page.addInitScript(() => {
-      const originalGetContext = HTMLCanvasElement.prototype.getContext;
-      HTMLCanvasElement.prototype.getContext = function getContext(
-        contextId,
-        options,
-      ) {
-        return originalGetContext.call(
-          this,
+  for (const [language] of LANGUAGES) {
+    test(`${name} in ${language} matches the SwiftShader framebuffer`, async ({
+      page,
+    }) => {
+      await page.addInitScript(() => {
+        const originalGetContext = HTMLCanvasElement.prototype.getContext;
+        HTMLCanvasElement.prototype.getContext = function getContext(
           contextId,
-          contextId === "webgl2"
-            ? { ...options, preserveDrawingBuffer: true }
-            : options,
+          options,
+        ) {
+          return originalGetContext.call(
+            this,
+            contextId,
+            contextId === "webgl2"
+              ? { ...options, preserveDrawingBuffer: true }
+              : options,
+          );
+        };
+      });
+      await routeBuild(page);
+      await page.goto(`http://polygl.test/${name}/${language}/index.html`);
+      await page.evaluate(() => globalThis.__polyglReady);
+      const frame = await page.evaluate(() => {
+        const canvas = document.querySelector("canvas");
+        const gl = canvas.getContext("webgl2");
+        gl.finish();
+        const pixels = new Uint8Array(canvas.width * canvas.height * 4);
+        gl.readPixels(
+          0,
+          0,
+          canvas.width,
+          canvas.height,
+          gl.RGBA,
+          gl.UNSIGNED_BYTE,
+          pixels,
         );
-      };
-    });
-    await routeBuild(page);
-    await page.goto(`http://polygl.test/${name}/index.html`);
-    await page.evaluate(() => globalThis.__polyglReady);
-    const frame = await page.evaluate(() => {
-      const canvas = document.querySelector("canvas");
-      const gl = canvas.getContext("webgl2");
-      gl.finish();
-      const pixels = new Uint8Array(canvas.width * canvas.height * 4);
-      gl.readPixels(
-        0,
-        0,
-        canvas.width,
-        canvas.height,
-        gl.RGBA,
-        gl.UNSIGNED_BYTE,
-        pixels,
-      );
-      const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
-      return {
-        width: canvas.width,
-        height: canvas.height,
-        pixels: Array.from(pixels),
-        renderer:
-          debugInfo === null
-            ? gl.getParameter(gl.RENDERER)
-            : gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL),
-      };
-    });
-    expect(frame.renderer).toContain("SwiftShader");
-    expect(
-      frame.pixels.some((value, index) => index % 4 === 3 && value !== 0),
-    ).toBe(true);
+        const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
+        return {
+          width: canvas.width,
+          height: canvas.height,
+          pixels: Array.from(pixels),
+          renderer:
+            debugInfo === null
+              ? gl.getParameter(gl.RENDERER)
+              : gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL),
+        };
+      });
+      expect(frame.renderer).toContain("SwiftShader");
+      expect(
+        frame.pixels.some((value, index) => index % 4 === 3 && value !== 0),
+      ).toBe(true);
 
-    const baseline = `${frame.width}x${frame.height}\n${Buffer.from(
-      frame.pixels,
-    ).toString("hex")}\n`;
-    const baselinePath = path.join(
-      conformanceRoot,
-      "l1-render",
-      name,
-      "swiftshader.rgba",
-    );
-    if (process.env.UPDATE_BASELINES === "1") {
-      await mkdir(path.dirname(baselinePath), { recursive: true });
-      await writeFile(baselinePath, baseline);
-    } else {
-      expect(baseline).toBe(await readFile(baselinePath, "utf8"));
-    }
-  });
+      const baseline = `${frame.width}x${frame.height}\n${Buffer.from(
+        frame.pixels,
+      ).toString("hex")}\n`;
+      const baselinePath = path.join(
+        conformanceRoot,
+        "l1-render",
+        name,
+        "swiftshader.rgba",
+      );
+      if (process.env.UPDATE_BASELINES === "1") {
+        await mkdir(path.dirname(baselinePath), { recursive: true });
+        await writeFile(baselinePath, baseline);
+      } else {
+        expect(baseline).toBe(await readFile(baselinePath, "utf8"));
+      }
+    });
+  }
 }
 
 test("plasma shader compiles and resolves its material in SwiftShader", async ({
   page,
 }) => {
   await routeBuild(page);
-  await page.goto("http://polygl.test/plasma/index.html");
+  await page.goto("http://polygl.test/plasma/ruby/index.html");
   await page.evaluate(() => globalThis.__polyglReady);
   const renderer = await page.evaluate(() => {
     const canvas = document.querySelector("canvas");
@@ -129,7 +149,7 @@ test("plasma shader compiles and resolves its material in SwiftShader", async ({
 
 test("text overlay follows and restores a custom canvas", async ({ page }) => {
   await routeBuild(page);
-  await page.goto("http://polygl.test/rectangle/index.html");
+  await page.goto("http://polygl.test/rectangle/ruby/index.html");
   await page.evaluate(() => globalThis.__polyglReady);
   const result = await page.evaluate(async () => {
     const runtime = await import("./runtime.js");
