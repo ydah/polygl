@@ -1,3 +1,6 @@
+---
+---
+
 # 0006: Make behavior the primary conformance criterion
 
 - Status: Accepted

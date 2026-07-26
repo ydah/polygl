@@ -1,3 +1,6 @@
+---
+---
+
 # 0014: Separate the builtin registry from pipeline orchestration
 
 - Status: Accepted

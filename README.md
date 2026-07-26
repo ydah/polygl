@@ -1,43 +1,108 @@
 # PolyGL
 
-PolyGL is an experimental compiler and WebGL framework for writing graphics
-programs in Ruby, PHP, Perl, and other host languages. It lowers each
-language's supported Common Core into shared HIR and LIR, then emits JavaScript
-and GLSL ES 3.00 for WebGL 2.
-
-Ruby and PHP Common Core source can be lowered, type-checked, emitted as ES2020
-with source maps, and run through the batched WebGL2 browser runtime. Shader
-and Tier 1 support are available; Tier 2 and the third-language adapter remain
-in progress.
-
-## Architecture
+PolyGL is an experimental compiler and WebGL framework for writing graphics in
+Ruby, PHP, or Perl. It lowers each language's supported Common Core into shared
+typed HIR and LIR, then emits ES2020 JavaScript and GLSL ES 3.00 for WebGL 2.
 
 ```text
-source -> language adapter -> HIR -> analysis -> LIR -> JS / GLSL -> WebGL 2
+Ruby / PHP / Perl -> adapter -> HIR -> types -> LIR -> JS / GLSL -> WebGL 2
 ```
 
-- `crates/`: compiler, backends, adapters, and CLI crates.
-- `runtime/`: strict TypeScript WebGL runtime.
-- `conformance/`: L1 rendering, L2 snapshots, and L3 neutral-HIR tests.
-- `xtask/`: repository generation and validation commands.
-- `docs/`: spike reports and architectural decisions.
+Ruby, PHP, and Perl support Tier 1 drawing and input, user shaders, and retained
+Tier 2 meshes, cameras, lights, materials, and textures. PolyGL compiles a
+documented portable subset; it does not embed or execute the source-language
+runtime.
 
-See the [adapter authoring guide](docs/adapter-guide.md) for the tested process
-for adding another source language.
+## Run your first sketch
 
-Rust improves compilation speed. Runtime performance is determined by the
-generated JavaScript and the runtime's rendering batches.
+Install a tagged native build from npm:
 
-## Requirements
+```console
+npm install --global @polygl/cli
+polygl languages
+```
 
-- Rust 1.96.1 (selected automatically by `rust-toolchain.toml`)
-- Node.js 24.14.1 (pinned by `.node-version`)
-- pnpm 10.33.0
-- [just](https://github.com/casey/just)
+The npm launcher supports Linux x64/arm64, macOS x64/arm64, and Windows x64.
+It selects a platform package through `optionalDependencies` and does not
+download executables from an install script. The same binaries and SHA-256
+checksums are available from
+[GitHub Releases](https://github.com/ydah/polygl/releases). A Rust installation
+can use `cargo install polygl-cli` once the compiler crates are published.
+
+Create `sketch.rb`:
+
+```ruby
+def setup
+  size(640, 360)
+  background(0.03, 0.04, 0.08)
+  fill(0.2, 0.75, 1.0)
+  triangle(80.0, 300.0, 320.0, 55.0, 560.0, 300.0)
+end
+```
+
+Check it, start the local development server, and open
+<http://127.0.0.1:4173>:
+
+```console
+polygl check sketch.rb
+polygl serve sketch.rb --watch
+```
+
+Successful saves rebuild and reload the page. A failed rebuild keeps the last
+valid sketch running and shows a source-located diagnostic in the browser.
+
+Use the language-specific guides for the equivalent first program:
+
+- [Ruby](docs/getting-started/ruby.md)
+- [PHP](docs/getting-started/php.md)
+- [Perl](docs/getting-started/perl.md)
+
+The complete documentation is published at
+[ydah.github.io/polygl](https://ydah.github.io/polygl/).
+
+## CLI
+
+```text
+polygl build <source.rb|source.php|source.pl> [-o <directory>] [--debug | --release]
+polygl serve <source.rb|source.php|source.pl> [--port <port>] [--watch]
+polygl check <source.rb|source.php|source.pl>
+polygl dump-hir <source.rb|source.php|source.pl>
+polygl languages
+polygl new-adapter <language> [-o <directory>]
+```
+
+`build` writes a self-contained browser application with `index.html`,
+`app.js`, source maps, reflected shaders, packaged texture assets, and the
+embedded runtime. Debug checks are enabled by default; `--release` removes
+compiler-inserted collection, vector/matrix, and absence checks. See the
+[CLI reference](docs/cli.md) for exact behavior.
+
+## Examples
+
+The repository includes runnable 2D, interactive, shader, and 3D sketches:
+
+```console
+polygl serve examples/triangle.rb --watch
+polygl serve examples/triangle.pl --watch
+polygl serve examples/interactive.rb --watch
+polygl serve examples/plasma.rb --watch
+polygl serve examples/rotating_cubes.php --watch
+polygl serve examples/rotating_cubes.pl --watch
+polygl serve examples/terrain.rb --watch
+```
+
+## Performance model
+
+Rust improves parsing, type inference, specialization, and code-generation
+speed. It does not make the browser execute user code as native Rust. Runtime
+performance is determined by the generated JavaScript, the WebGL 2 batching
+runtime, shader work, and the browser/GPU. See the
+[performance guide](docs/performance.md) for measurement boundaries.
 
 ## Development
 
-Install runtime dependencies and run the local gates:
+The repository pins Rust 1.96.1, Node.js 24.14.1, and pnpm 10.33.0. Install the
+runtime and browser-test dependencies, then run the local gates:
 
 ```console
 corepack enable
@@ -50,27 +115,17 @@ just conformance
 just gen-check
 ```
 
-The equivalent generation command is `cargo xtask gen-runtime`. Generated
-files must be committed and pass `cargo xtask gen-runtime --check`.
+The main directories are:
 
-## Compile a sketch
+- `crates/`: compiler, backends, adapters, and CLI
+- `runtime/`: strict TypeScript WebGL runtime
+- `conformance/`: L1 rendering, L2 snapshots, and L3 neutral-HIR checks
+- `xtask/`: generated-file and conformance orchestration
+- `docs/`: specifications, language guides, and architectural decisions
+- `npm/`: platform packages and release staging
 
-```console
-cargo run -p polygl-cli -- build examples/triangle.rb -o dist
-cargo run -p polygl-cli -- serve examples/interactive.rb --watch
-cargo run -p polygl-cli -- build path/to/sketch.php -o dist-php
-```
-
-The build writes `index.html`, `app.js`, `app.js.map`, and the embedded
-`runtime.js`. Serve the output directory through an HTTP server so browser ES
-modules can load. Debug checks are enabled by default; pass `--release` to
-remove compiler-inserted collection and nil checks. The interactive example
-exercises pointer and keyboard input, events, transforms, text, collections,
-blocks, and a struct-like Ruby class.
-
-Use `polygl check source.rb` or `polygl check source.php` for diagnostics
-without output, and `polygl dump-hir` to inspect typed HIR. See [the CLI
-reference](docs/cli.md) for details.
+Start with the [architecture contracts](docs/common-core.md) or the
+[adapter authoring guide](docs/adapter-guide.md) when contributing a language.
 
 ## License
 

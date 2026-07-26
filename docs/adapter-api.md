@@ -1,3 +1,6 @@
+---
+---
+
 # Language adapter API
 
 Adapters implement the object-safe `LanguageAdapter` trait:

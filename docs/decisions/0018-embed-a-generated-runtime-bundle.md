@@ -1,3 +1,6 @@
+---
+---
+
 # 0018: Embed a generated runtime bundle
 
 - Status: Accepted

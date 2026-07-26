@@ -1,3 +1,6 @@
+---
+---
+
 # 0023: Keep the development server local and stateful
 
 - Status: Accepted

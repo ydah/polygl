@@ -1,3 +1,6 @@
+---
+---
+
 # Diagnostic codes
 
 PolyGL diagnostics use stable codes so editor integrations and conformance

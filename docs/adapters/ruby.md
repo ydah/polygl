@@ -1,3 +1,6 @@
+---
+---
+
 # Ruby adapter
 
 The Ruby adapter parses UTF-8 source with Prism 1.9.0 and lowers accepted syntax

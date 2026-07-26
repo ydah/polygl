@@ -1,3 +1,6 @@
+---
+---
+
 # 0009: Infer locally and monomorphize at call sites
 
 - Status: Accepted

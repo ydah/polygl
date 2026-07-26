@@ -1,3 +1,6 @@
+---
+---
+
 # S-2: Type inference and call-site monomorphization
 
 - Date: 2026-07-25

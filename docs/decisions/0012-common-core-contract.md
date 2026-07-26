@@ -1,3 +1,6 @@
+---
+---
+
 # 0012: Freeze the v1 Common Core contract
 
 - Status: Accepted

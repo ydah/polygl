@@ -1,3 +1,6 @@
+---
+---
+
 # PHP adapter
 
 The PHP adapter parses UTF-8 PHP source with Mago 1.43.0 and lowers accepted

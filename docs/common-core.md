@@ -1,3 +1,6 @@
+---
+---
+
 # PolyGL Common Core v1
 
 This document is the normative language contract between adapters and PolyGL's

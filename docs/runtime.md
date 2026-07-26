@@ -1,3 +1,6 @@
+---
+---
+
 # Browser runtime
 
 `@polygl/runtime` executes a generated ES2020 module in a WebGL2 canvas. The

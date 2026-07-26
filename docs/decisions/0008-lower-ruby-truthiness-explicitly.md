@@ -1,3 +1,6 @@
+---
+---
+
 # 0008: Lower Ruby truthiness explicitly
 
 - Status: Accepted

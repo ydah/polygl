@@ -1,3 +1,6 @@
+---
+---
+
 # Low-level intermediate representation
 
 `polygl-lir` is the backend input boundary. `polygl_lir::lower` accepts only a

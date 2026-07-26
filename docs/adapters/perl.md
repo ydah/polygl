@@ -1,3 +1,6 @@
+---
+---
+
 # Perl adapter
 
 The Perl adapter parses UTF-8 Perl 5 source with `ts-parser-perl` 1.2.1 and

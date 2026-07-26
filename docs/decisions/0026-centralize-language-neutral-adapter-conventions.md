@@ -1,3 +1,6 @@
+---
+---
+
 # 0026: Centralize language-neutral adapter conventions
 
 - Status: Accepted

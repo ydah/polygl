@@ -1,0 +1,14 @@
+title: PolyGL
+description: Write WebGL graphics in Ruby, PHP, or Perl.
+url: https://ydah.github.io
+baseurl: /polygl
+markdown: kramdown
+highlighter: rouge
+permalink: pretty
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
+exclude:
+  - .DS_Store

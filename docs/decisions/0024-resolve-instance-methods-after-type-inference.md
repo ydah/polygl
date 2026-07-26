@@ -1,3 +1,6 @@
+---
+---
+
 # 0024: Resolve instance methods after receiver type inference
 
 - Status: Accepted

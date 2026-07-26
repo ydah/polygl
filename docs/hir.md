@@ -1,3 +1,6 @@
+---
+---
+
 # High-level intermediate representation
 
 HIR is the sole output contract of language adapters. It is source-oriented

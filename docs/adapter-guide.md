@@ -1,3 +1,6 @@
+---
+---
+
 # Language adapter authoring guide
 
 This guide is the required workflow for adding a source language to PolyGL.
@@ -35,7 +38,17 @@ lowering. Parser types must not leave the adapter crate.
 
 ## 2. Add the crate and adapter shell
 
-Create `crates/polygl-adapter-<language>` and implement:
+Generate a standalone shell, or create the equivalent crate inside the
+workspace:
+
+```console
+polygl new-adapter example -o crates/polygl-adapter-example
+```
+
+The command refuses to overwrite an existing path. Add the adapter to compiler
+orchestration only after its shell compiles, then confirm that `polygl
+languages` shows its stable identifier and extension. The generated
+implementation has this shape:
 
 ```rust
 use polygl_adapter_api::{FeatureTag, LanguageAdapter, LowerCtx};
@@ -208,8 +221,10 @@ the compiler.
 - Every rejection has a source span and suggestion.
 - At least ten language-specific diagnostic cases pass.
 - CLI build, check, and typed HIR dump accept the extension.
+- `polygl languages` reports the adapter identifier and extension.
 - L1 behavior, L2 snapshots, and applicable L3 direct comparisons pass.
 - Intentional non-Neutral differences have explicit tests.
 - `cargo fmt`, Clippy with warnings denied, workspace tests, runtime tests,
   generation freshness, Rust conformance, and browser conformance pass.
-- Public API and behavior changes are reflected in the corresponding specifications.
+- Public API and behavior changes are reflected in the corresponding
+  specifications.

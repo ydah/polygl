@@ -1,3 +1,6 @@
+---
+---
+
 # S-3: WebGL2 screenshot stability
 
 - Date: 2026-07-25

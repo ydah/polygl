@@ -1,3 +1,6 @@
+---
+---
+
 # NNNN: Decision title
 
 - Status: Proposed

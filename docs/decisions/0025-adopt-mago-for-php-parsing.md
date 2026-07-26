@@ -1,3 +1,6 @@
+---
+---
+
 # 0025: Adopt Mago for PHP parsing
 
 - Status: Accepted

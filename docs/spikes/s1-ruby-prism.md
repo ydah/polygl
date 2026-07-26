@@ -1,3 +1,6 @@
+---
+---
+
 # S-1: Ruby Prism source fidelity
 
 - Date: 2026-07-25

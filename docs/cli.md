@@ -1,3 +1,6 @@
+---
+---
+
 # Command-line interface
 
 The CLI accepts one source file and runs the shared compiler pipeline.

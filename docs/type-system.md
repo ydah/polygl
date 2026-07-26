@@ -1,3 +1,6 @@
+---
+---
+
 # Type inference and specialization
 
 `polygl-types` turns adapter-produced HIR into fully typed HIR. Successful
