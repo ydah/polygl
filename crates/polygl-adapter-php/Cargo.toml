@@ -7,5 +7,15 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[dependencies]
+mago-allocator = "=1.43.0"
+mago-database = "=1.43.0"
+mago-php-version = "=1.43.0"
+mago-reporting = "=1.43.0"
+mago-span = "=1.43.0"
+mago-syntax = "=1.43.0"
+mago-syntax-core = "=1.43.0"
+mago-text-edit = "=1.43.0"
+
 [lints]
 workspace = true
