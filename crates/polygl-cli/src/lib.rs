@@ -15,6 +15,8 @@ use polygl_core::BuiltinTable;
 use polygl_span::{Diagnostics, SourceFile, SourceId};
 use polygl_types::TypedModule;
 
+mod serve;
+
 const RUNTIME_BUNDLE: &[u8] = include_bytes!("../assets/runtime.js");
 const INDEX_HTML: &str = r#"<!doctype html>
 <html lang="en">
@@ -76,6 +78,11 @@ enum Command {
     Check {
         source: PathBuf,
     },
+    Serve {
+        source: PathBuf,
+        watch: bool,
+        port: u16,
+    },
     DumpHir {
         source: PathBuf,
     },
@@ -98,6 +105,11 @@ pub fn run(
             write_diagnostics(&warnings, &source, output)?;
             Ok(())
         }
+        Command::Serve {
+            source,
+            watch,
+            port,
+        } => serve::serve(&source, watch, port, output),
         Command::DumpHir { source } => {
             let (_, typed) = compile_frontend(&source)?;
             output
@@ -117,6 +129,7 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Command, CliEr
     };
     match command.to_str() {
         Some("build") => parse_build(args),
+        Some("serve") => parse_serve(args),
         Some("check") => parse_single_source(args, |source| Command::Check { source }),
         Some("dump-hir") => parse_single_source(args, |source| Command::DumpHir { source }),
         Some("help" | "--help" | "-h") => {
@@ -129,6 +142,36 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Command, CliEr
         ))),
         None => Err(CliError::new("command name is not valid UTF-8")),
     }
+}
+
+fn parse_serve(mut args: impl Iterator<Item = OsString>) -> Result<Command, CliError> {
+    let source = required_path(args.next(), "serve requires a source file")?;
+    let mut watch = false;
+    let mut port = 4173;
+    while let Some(argument) = args.next() {
+        match argument.to_str() {
+            Some("--watch") if !watch => watch = true,
+            Some("--watch") => return Err(CliError::new("watch may only be specified once")),
+            Some("--port") => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| CliError::new("port option requires a number"))?;
+                let value = value
+                    .to_str()
+                    .ok_or_else(|| CliError::new("port is not valid UTF-8"))?;
+                port = value.parse::<u16>().map_err(|_| {
+                    CliError::new(format!("port `{value}` must be between 0 and 65535"))
+                })?;
+            }
+            Some(other) => return Err(CliError::new(format!("unknown serve option `{other}`"))),
+            None => return Err(CliError::new("serve option is not valid UTF-8")),
+        }
+    }
+    Ok(Command::Serve {
+        source,
+        watch,
+        port,
+    })
 }
 
 fn parse_build(mut args: impl Iterator<Item = OsString>) -> Result<Command, CliError> {
@@ -406,6 +449,7 @@ fn usage() -> String {
     "\
 usage:
   polygl build <source.rb> [-o <directory>] [--debug | --release]
+  polygl serve <source.rb> [--port <port>] [--watch]
   polygl check <source.rb>
   polygl dump-hir <source.rb>
 "
@@ -436,6 +480,21 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("only be specified once"));
+
+        assert_eq!(
+            parse_args(arguments(["serve", "main.rb", "--watch", "--port", "8080"])).unwrap(),
+            Command::Serve {
+                source: "main.rb".into(),
+                watch: true,
+                port: 8080,
+            }
+        );
+        assert!(
+            parse_args(arguments(["serve", "main.rb", "--port", "invalid"]))
+                .unwrap_err()
+                .to_string()
+                .contains("between 0 and 65535")
+        );
     }
 
     #[test]
