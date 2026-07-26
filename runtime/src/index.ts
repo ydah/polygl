@@ -30,6 +30,7 @@ export type {
   ShaderAttribute,
   ShaderBundle,
   ShaderMaterial,
+  NumericSequence,
   ShaderUniform,
   ShaderUniformValue,
   ShaderValueType,
@@ -54,6 +55,7 @@ import type {
 } from "./session.js";
 import type { ShaderUniformValue } from "./shader.js";
 import type { ShaderMaterial } from "./shader.js";
+import type { NumericSequence } from "./shader.js";
 import type {
   BasicMaterial,
   MaterialHandle,
@@ -239,7 +241,7 @@ export function meshFrom(
   return session().meshFrom(vertices, indices);
 }
 
-export function materialBasic(color: readonly number[]): BasicMaterial {
+export function materialBasic(color: NumericSequence): BasicMaterial {
   return session().materialBasic(color);
 }
 
@@ -286,16 +288,16 @@ export function cameraPerspective(
 }
 
 export function cameraLookAt(
-  eye: readonly number[],
-  target: readonly number[],
-  up: readonly number[],
+  eye: NumericSequence,
+  target: NumericSequence,
+  up: NumericSequence,
 ): void {
   session().cameraLookAt(eye, target, up);
 }
 
 export function lightDirectional(
-  direction: readonly number[],
-  color: readonly number[],
+  direction: NumericSequence,
+  color: NumericSequence,
 ): void {
   session().lightDirectional(direction, color);
 }

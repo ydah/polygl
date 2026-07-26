@@ -866,7 +866,7 @@ export class WebGL2ShaderRegistry {
             throw runtimeError(`shader \`${shaderName}\` has no user uniform \`${uniformName}\``, shader.artifact.fragmentLocation);
         }
         validateUniformValue(this.gl, binding, value, shader.artifact.fragmentLocation);
-        shader.userValues.set(uniformName, Array.isArray(value) ? Object.freeze([...value]) : value);
+        shader.userValues.set(uniformName, copyUniformValue(value));
         shader.globalUniformsSet = true;
     }
     material(shaderName) {
@@ -886,7 +886,7 @@ export class WebGL2ShaderRegistry {
             throw runtimeError(`shader \`${shader.artifact.name}\` has no user uniform \`${uniformName}\``, shader.artifact.fragmentLocation);
         }
         validateUniformValue(this.gl, binding, value, shader.artifact.fragmentLocation);
-        return Array.isArray(value) ? Object.freeze([...value]) : value;
+        return copyUniformValue(value);
     }
     bindForDraw(material, userValues, automatic) {
         const shader = this.requireMaterial(material);
@@ -1148,11 +1148,17 @@ function validateUniformValue(gl, binding, value, location) {
     }
 }
 function validateNumericArray(value, length, invalid) {
-    if (!Array.isArray(value) ||
+    if (!isNumericSequence(value) ||
         value.length !== length ||
         value.some((item) => typeof item !== "number" || !Number.isFinite(item))) {
         invalid();
     }
+}
+function copyUniformValue(value) {
+    return isNumericSequence(value) ? Object.freeze(Array.from(value)) : value;
+}
+function isNumericSequence(value) {
+    return Array.isArray(value) || value instanceof Float32Array;
 }
 const sceneOwnerBrand = Symbol("SceneOwner");
 export class WebGL2SceneRenderer {
@@ -1626,12 +1632,12 @@ function brand(value, owner) {
     return value;
 }
 function fixedVector(value, length, label) {
-    if (!Array.isArray(value) ||
-        value.length !== length ||
-        value.some((component) => !Number.isFinite(component))) {
+    const components = Array.from(value);
+    if (components.length !== length ||
+        components.some((item) => !Number.isFinite(item))) {
         throw new RangeError(`${label} must contain ${length} finite numbers`);
     }
-    return Object.freeze([...value]);
+    return Object.freeze(components);
 }
 function fixedVec3(value, label) {
     return fixedVector(value, 3, label);

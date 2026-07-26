@@ -42,10 +42,12 @@ export interface ShaderBundle {
   readonly shaders: readonly ShaderArtifact[];
 }
 
+export type NumericSequence = readonly number[] | Float32Array;
+
 export type ShaderUniformValue =
   | number
   | boolean
-  | readonly number[]
+  | NumericSequence
   | WebGLTexture;
 
 export interface ShaderAutomaticUniforms {
@@ -142,7 +144,7 @@ export class WebGL2ShaderRegistry {
     );
     shader.userValues.set(
       uniformName,
-      Array.isArray(value) ? Object.freeze([...value]) : value,
+      copyUniformValue(value),
     );
     shader.globalUniformsSet = true;
   }
@@ -180,7 +182,7 @@ export class WebGL2ShaderRegistry {
       value,
       shader.artifact.fragmentLocation,
     );
-    return Array.isArray(value) ? Object.freeze([...value]) : value;
+    return copyUniformValue(value);
   }
 
   public bindForDraw(
@@ -535,10 +537,20 @@ function validateNumericArray(
   invalid: () => never,
 ): void {
   if (
-    !Array.isArray(value) ||
+    !isNumericSequence(value) ||
     value.length !== length ||
     value.some((item) => typeof item !== "number" || !Number.isFinite(item))
   ) {
     invalid();
   }
+}
+
+function copyUniformValue(value: ShaderUniformValue): ShaderUniformValue {
+  return isNumericSequence(value) ? Object.freeze(Array.from(value)) : value;
+}
+
+function isNumericSequence(
+  value: ShaderUniformValue,
+): value is NumericSequence {
+  return Array.isArray(value) || value instanceof Float32Array;
 }

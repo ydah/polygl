@@ -15,6 +15,7 @@ import {
 } from "./mesh.js";
 import type { MeshData } from "./mesh.js";
 import type {
+  NumericSequence,
   ShaderAttribute,
   ShaderMaterial,
   ShaderUniformValue,
@@ -50,7 +51,7 @@ export type MaterialHandle = BasicMaterial | ShaderMaterial;
 export type SceneShaderValue =
   | number
   | boolean
-  | readonly number[]
+  | NumericSequence
   | TextureHandle;
 export type RuntimeImageLoader = (url: string) => Promise<TexImageSource>;
 
@@ -162,7 +163,7 @@ export class WebGL2SceneRenderer {
   }
 
   public materialBasic(
-    color: readonly number[],
+    color: NumericSequence,
   ): BasicMaterial {
     const safeColor = fixedVector(color, 4, "basic material color");
     const material = {
@@ -233,9 +234,9 @@ export class WebGL2SceneRenderer {
   }
 
   public cameraLookAt(
-    eye: readonly number[],
-    target: readonly number[],
-    up: readonly number[],
+    eye: NumericSequence,
+    target: NumericSequence,
+    up: NumericSequence,
   ): void {
     const safeEye = fixedVec3(eye, "camera eye");
     const safeTarget = fixedVec3(target, "camera target");
@@ -250,8 +251,8 @@ export class WebGL2SceneRenderer {
   }
 
   public lightDirectional(
-    direction: readonly number[],
-    color: readonly number[],
+    direction: NumericSequence,
+    color: NumericSequence,
   ): void {
     const safeColor = fixedVec3(color, "directional light color");
     if (safeColor.some((value) => value < 0)) {
@@ -748,21 +749,21 @@ function brand<T extends object>(value: T, owner: object): T {
 }
 
 function fixedVector(
-  value: readonly number[],
+  value: NumericSequence,
   length: number,
   label: string,
 ): readonly number[] {
+  const components = Array.from(value);
   if (
-    !Array.isArray(value) ||
-    value.length !== length ||
-    value.some((component) => !Number.isFinite(component))
+    components.length !== length ||
+    components.some((item) => !Number.isFinite(item))
   ) {
     throw new RangeError(`${label} must contain ${length} finite numbers`);
   }
-  return Object.freeze([...value]);
+  return Object.freeze(components);
 }
 
-function fixedVec3(value: readonly number[], label: string): Vec3 {
+function fixedVec3(value: NumericSequence, label: string): Vec3 {
   return fixedVector(value, 3, label) as Vec3;
 }
 

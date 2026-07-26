@@ -13,6 +13,7 @@ import type {
 } from "./scene.js";
 import { WebGL2ShaderRegistry } from "./shader.js";
 import type {
+  NumericSequence,
   ShaderBundle,
   ShaderMaterial,
   ShaderUniformValue,
@@ -199,7 +200,7 @@ export class RuntimeSession implements RuntimeHandle {
     return this.scene.meshFrom(vertices, indices);
   }
 
-  public materialBasic(color: readonly number[]): BasicMaterial {
+  public materialBasic(color: NumericSequence): BasicMaterial {
     return this.scene.materialBasic(color);
   }
 
@@ -243,16 +244,16 @@ export class RuntimeSession implements RuntimeHandle {
   }
 
   public cameraLookAt(
-    eye: readonly number[],
-    target: readonly number[],
-    up: readonly number[],
+    eye: NumericSequence,
+    target: NumericSequence,
+    up: NumericSequence,
   ): void {
     this.scene.cameraLookAt(eye, target, up);
   }
 
   public lightDirectional(
-    direction: readonly number[],
-    color: readonly number[],
+    direction: NumericSequence,
+    color: NumericSequence,
   ): void {
     this.scene.lightDirectional(direction, color);
   }

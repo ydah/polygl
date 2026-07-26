@@ -374,10 +374,9 @@ test("compiles reflected shaders and uploads automatic and user uniforms", async
       __polyglShaderBundle: bundle,
       setup() {
         material = materialShader("plasma");
-        const tint = [0.2, 0.4, 0.6];
+        const tint = new Float32Array([0.2, 0.4, 0.6]);
         setShaderUniform("plasma", "tint", tint);
         tint[0] = Number.NaN;
-        tint.length = 0;
       },
       frame() {},
     },
@@ -394,7 +393,9 @@ test("compiles reflected shaders and uploads automatic and user uniforms", async
   );
 
   assert.deepEqual(uniform1fValues, [0]);
-  assert.deepEqual(uniform3fvValues, [[0.2, 0.4, 0.6]]);
+  assert.deepEqual(uniform3fvValues, [
+    Array.from(new Float32Array([0.2, 0.4, 0.6])),
+  ]);
   assert.deepEqual(material, { kind: "shader", shaderName: "plasma" });
   assert.equal(Object.isFrozen(material), true);
   assert.strictEqual(materialShader("plasma"), material);
@@ -475,9 +476,18 @@ test("renders retained 3D primitives and rejects handles from old sessions", asy
       setup() {
         size(400, 240);
         cameraPerspective(Math.PI / 3, 0.1, 50);
-        cameraLookAt([4, 3, 6], [0, 0, 0], [0, 1, 0]);
-        lightDirectional([-1, -2, -1], [1, 0.9, 0.8]);
-        const material = materialBasic([0.2, 0.6, 0.9, 1]);
+        cameraLookAt(
+          new Float32Array([4, 3, 6]),
+          new Float32Array([0, 0, 0]),
+          new Float32Array([0, 1, 0]),
+        );
+        lightDirectional(
+          new Float32Array([-1, -2, -1]),
+          new Float32Array([1, 0.9, 0.8]),
+        );
+        const material = materialBasic(
+          new Float32Array([0.2, 0.6, 0.9, 1]),
+        );
         oldNode = nodeAdd(meshBox(1, 2, 3), material);
         nodeSetPos(oldNode, -2, 0, 0);
         nodeSetRot(oldNode, 0.1, 0.2, 0.3);
@@ -570,8 +580,8 @@ test("uploads custom shader uniforms independently for each node", async () => {
         const right = nodeAdd(mesh, material);
         nodeSetPos(left, -1.5, 0, 0);
         nodeSetPos(right, 1.5, 0, 0);
-        shaderSet(left, "tint", [1, 0, 0]);
-        shaderSet(right, "tint", [0, 0, 1]);
+        shaderSet(left, "tint", new Float32Array([1, 0, 0]));
+        shaderSet(right, "tint", new Float32Array([0, 0, 1]));
       },
     },
     {
