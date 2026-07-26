@@ -20,6 +20,7 @@ pub(crate) struct Lowerer<'source, 'context, 'resolver> {
     pub(crate) class_methods: HashMap<String, HashSet<String>>,
     pub(crate) current_class: Option<String>,
     pub(crate) function_names: HashSet<String>,
+    pub(crate) constant_names: HashSet<String>,
     pub(crate) shader_annotation_anchor: Option<usize>,
 }
 
@@ -42,6 +43,7 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
             class_methods: HashMap::new(),
             current_class: None,
             function_names: HashSet::new(),
+            constant_names: HashSet::new(),
             shader_annotation_anchor: None,
         }
     }
@@ -57,6 +59,9 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
             } else if let Some(definition) = node.as_def_node() {
                 self.function_names
                     .insert(self.name(definition.name().as_slice()));
+            } else if let Some(constant) = node.as_constant_write_node() {
+                self.constant_names
+                    .insert(self.name(constant.name().as_slice()));
             }
         }
         for node in program.statements().body().iter() {
@@ -69,6 +74,10 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
         for node in program.statements().body().iter() {
             if let Some(definition) = node.as_def_node() {
                 if let Some(item) = self.lower_def(&definition) {
+                    items.push(item);
+                }
+            } else if let Some(constant) = node.as_constant_write_node() {
+                if let Some(item) = self.lower_constant(&constant) {
                     items.push(item);
                 }
             } else if node

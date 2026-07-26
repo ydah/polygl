@@ -231,6 +231,33 @@ end
 }
 
 #[test]
+fn lowers_top_level_constants_and_references() {
+    let module = lower(
+        r#"
+SCALE = 1.5
+MESH = mesh_box(SCALE, SCALE, SCALE)
+
+def setup
+  node_add(MESH, material_basic(vec4(1.0, 0.5, 0.25, 1.0)))
+end
+"#,
+    )
+    .expect("Common Core constants should lower");
+    let text = dump(&module);
+    assert!(text.contains("const SCALE = 1.5;"));
+    assert!(text.contains("const MESH = builtin#26(SCALE, SCALE, SCALE);"));
+    assert!(text.contains("builtin#31(MESH, builtin#30("));
+
+    let diagnostics =
+        lower("def setup\n  line(MISSING, 0, 1, 1)\nend\n").expect_err("unknown constants fail");
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "E0200"
+            && diagnostic.message.contains("constant is not declared")
+            && diagnostic.suggestion.is_some()
+    }));
+}
+
+#[test]
 fn lowers_functions_parameters_implicit_returns_and_draw_alias() {
     let module = lower(
         r#"

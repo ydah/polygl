@@ -13,6 +13,7 @@ execute Ruby code or load gems.
 | Frame entry | `def frame(dt)` or `def draw(dt)` | `EntryPoint::Frame` |
 | Event entry | `def on_event(event)` | `EntryPoint::OnEvent` |
 | Shader entry | `def vertex_name` / `def fragment_name` | named GPU entry |
+| Constant | top-level `NAME = value` | `Item::Const` |
 | Local declaration/write | `name = value` | first write is `Let`, later writes are `Assign` |
 | Conditional | `if` / `elsif` / `else` | structured `If` |
 | Loop | `while condition` | structured `While` |

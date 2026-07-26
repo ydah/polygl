@@ -79,6 +79,17 @@ impl Lowerer<'_, '_, '_> {
                 return None;
             }
             ExprKind::Var(Symbol::new(name))
+        } else if let Some(constant) = node.as_constant_read_node() {
+            let name = self.name(constant.name().as_slice());
+            if !self.constant_names.contains(&name) {
+                self.unsupported(
+                    node,
+                    "this constant is not declared in the current Common Core file",
+                    "declare it with a top-level `NAME = value` assignment",
+                );
+                return None;
+            }
+            ExprKind::Var(Symbol::new(name))
         } else if let Some(array) = node.as_array_node() {
             return self.lower_array(&array);
         } else if let Some(hash) = node.as_hash_node() {

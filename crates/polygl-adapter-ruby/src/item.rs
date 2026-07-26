@@ -1,13 +1,23 @@
 use polygl_adapter_api::canonical_entry_kind;
 use polygl_hir::{
-    Block, DomainHint, EntryPoint, EntryPointKind, Expr, ExprKind, Function, Item, Literal, Param,
-    PlaceKind, Stmt, StmtKind, Symbol,
+    Block, ConstDef, DomainHint, EntryPoint, EntryPointKind, Expr, ExprKind, Function, Item,
+    Literal, Param, PlaceKind, Stmt, StmtKind, Symbol,
 };
-use ruby_prism::DefNode;
+use ruby_prism::{ConstantWriteNode, DefNode};
 
 use crate::lowerer::Lowerer;
 
 impl Lowerer<'_, '_, '_> {
+    pub(crate) fn lower_constant(&mut self, constant: &ConstantWriteNode<'_>) -> Option<Item> {
+        let name = self.name(constant.name().as_slice());
+        Some(Item::Const(ConstDef {
+            name: Symbol::new(name),
+            ty: None,
+            value: self.lower_expression(&constant.value())?,
+            span: self.span(constant.location()),
+        }))
+    }
+
     pub(crate) fn lower_def(&mut self, definition: &DefNode<'_>) -> Option<Item> {
         if definition.receiver().is_some() {
             self.unsupported(
