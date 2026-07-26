@@ -1,0 +1,13 @@
+{
+  "name": "@polygl/cli-darwin-x64",
+  "version": "0.0.0",
+  "description": "PolyGL native executable for macOS x64",
+  "os": ["darwin"],
+  "cpu": ["x64"],
+  "files": ["bin"],
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ydah/polygl.git"
+  }
+}

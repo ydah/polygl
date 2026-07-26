@@ -7,6 +7,8 @@ polygl build <source.rb|source.php|source.pl> [-o <directory>] [--debug | --rele
 polygl serve <source.rb|source.php|source.pl> [--port <port>] [--watch]
 polygl check <source.rb|source.php|source.pl>
 polygl dump-hir <source.rb|source.php|source.pl>
+polygl languages
+polygl new-adapter <language> [-o <directory>]
 ```
 
 `build` defaults to `dist` and debug mode. It writes:
@@ -48,3 +50,26 @@ source excerpts, and suggestions where required. See
 The source extension selects the adapter: `.rb` uses Ruby, `.php` uses PHP, and
 `.pl` uses Perl. All three continue through the same type, HIR/LIR, JavaScript,
 GLSL, and runtime pipeline.
+
+`languages` prints the stable adapter identifier and accepted extension for
+every adapter in the executable. `new-adapter` creates a standalone Rust crate
+containing a `LanguageAdapter` implementation shell and compatible PolyGL
+dependencies. The language identifier must start with a lowercase ASCII letter
+and contain only lowercase letters or digits. The default destination is
+`polygl-adapter-<language>`; `-o` selects another directory. Existing
+destinations are never overwritten.
+
+## Installation
+
+The `@polygl/cli` npm package uses an optional dependency selected by operating
+system and CPU. It supports Linux x64/arm64, macOS x64/arm64, and Windows x64.
+The package does not run a download script during installation:
+
+```console
+npm install --global @polygl/cli
+polygl languages
+```
+
+The same native executables are attached to tagged GitHub Releases as
+target-named archives with a `SHA256SUMS` file. A Rust installation can use
+`cargo install polygl-cli` after the compiler crates have been published.

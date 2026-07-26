@@ -1,0 +1,160 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build / ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            package: linux-x64
+            binary: polygl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            package: linux-arm64
+            binary: polygl
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            package: darwin-x64
+            binary: polygl
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            package: darwin-arm64
+            binary: polygl
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            package: win32-x64
+            binary: polygl.exe
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Validate release tag
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "release tag must be v followed by a SemVer value" >&2
+            exit 1
+          fi
+
+      - name: Select pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Add release target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build native executable
+        run: cargo build --locked --release --target ${{ matrix.target }} -p polygl-cli
+
+      - name: Verify native executable
+        shell: bash
+        run: target/${{ matrix.target }}/release/${{ matrix.binary }} --help
+
+      - name: Stage npm and release artifacts
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p "bundle/${{ matrix.package }}" release/stage
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" \
+            "bundle/${{ matrix.package }}/${{ matrix.binary }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" \
+            "release/stage/${{ matrix.binary }}"
+          tar -C release/stage -czf \
+            "release/polygl-${version}-${{ matrix.target }}.tar.gz" \
+            "${{ matrix.binary }}"
+
+      - name: Upload native artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.target }}
+          path: |
+            bundle
+            release/*.tar.gz
+          if-no-files-found: error
+
+  github-release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download native artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd artifacts/release
+          sha256sum ./*.tar.gz > SHA256SUMS
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          artifacts/release/*.tar.gz
+          artifacts/release/SHA256SUMS
+          --repo "$GITHUB_REPOSITORY"
+          --verify-tag
+          --title "$GITHUB_REF_NAME"
+          --generate-notes
+
+  npm-publish:
+    name: Publish npm packages
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          registry-url: https://registry.npmjs.org
+
+      - name: Download native artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: native-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Prepare packages from the same native artifacts
+        run: node npm/scripts/prepare-release.mjs "${GITHUB_REF_NAME#v}" artifacts
+
+      - name: Publish platform packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm publish npm/platforms/darwin-arm64 --access public --provenance
+          npm publish npm/platforms/darwin-x64 --access public --provenance
+          npm publish npm/platforms/linux-arm64 --access public --provenance
+          npm publish npm/platforms/linux-x64 --access public --provenance
+          npm publish npm/platforms/win32-x64 --access public --provenance
+
+      - name: Publish launcher
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish npm/cli --access public --provenance

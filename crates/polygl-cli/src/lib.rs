@@ -94,6 +94,11 @@ enum Command {
     DumpHir {
         source: PathBuf,
     },
+    Languages,
+    NewAdapter {
+        language: String,
+        output: PathBuf,
+    },
     Help,
 }
 
@@ -124,6 +129,11 @@ pub fn run(
                 .write_all(polygl_hir::dump(typed.as_hir()).as_bytes())
                 .map_err(|error| CliError::new(format!("failed to write HIR dump: {error}")))
         }
+        Command::Languages => write_languages(output),
+        Command::NewAdapter {
+            language,
+            output: destination,
+        } => new_adapter(&language, &destination, output),
         Command::Help => output
             .write_all(usage().as_bytes())
             .map_err(|error| CliError::new(format!("failed to write help: {error}"))),
@@ -140,6 +150,11 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Command, CliEr
         Some("serve") => parse_serve(args),
         Some("check") => parse_single_source(args, |source| Command::Check { source }),
         Some("dump-hir") => parse_single_source(args, |source| Command::DumpHir { source }),
+        Some("languages") => {
+            ensure_empty(args)?;
+            Ok(Command::Languages)
+        }
+        Some("new-adapter") => parse_new_adapter(args),
         Some("help" | "--help" | "-h") => {
             ensure_empty(args)?;
             Ok(Command::Help)
@@ -150,6 +165,34 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Command, CliEr
         ))),
         None => Err(CliError::new("command name is not valid UTF-8")),
     }
+}
+
+fn parse_new_adapter(mut args: impl Iterator<Item = OsString>) -> Result<Command, CliError> {
+    let language = args
+        .next()
+        .ok_or_else(|| CliError::new("new-adapter requires a language identifier"))?
+        .into_string()
+        .map_err(|_| CliError::new("language identifier is not valid UTF-8"))?;
+    if !valid_language_id(&language) {
+        return Err(CliError::new(
+            "language identifier must start with a lowercase ASCII letter and contain only lowercase letters or digits",
+        ));
+    }
+    let mut output = PathBuf::from(format!("polygl-adapter-{language}"));
+    while let Some(argument) = args.next() {
+        match argument.to_str() {
+            Some("-o" | "--output") => {
+                output = required_path(args.next(), "output option requires a directory")?;
+            }
+            Some(other) => {
+                return Err(CliError::new(format!(
+                    "unknown new-adapter option `{other}`"
+                )));
+            }
+            None => return Err(CliError::new("new-adapter option is not valid UTF-8")),
+        }
+    }
+    Ok(Command::NewAdapter { language, output })
 }
 
 fn parse_serve(mut args: impl Iterator<Item = OsString>) -> Result<Command, CliError> {
@@ -511,6 +554,77 @@ fn write_assets(destination: &Path, assets: Vec<PreparedAsset>) -> Result<(), Cl
     Ok(())
 }
 
+fn write_languages(output: &mut dyn Write) -> Result<(), CliError> {
+    for adapter in [
+        &RubyAdapter as &dyn LanguageAdapter,
+        &PhpAdapter,
+        &PerlAdapter,
+    ] {
+        writeln!(
+            output,
+            "{}\t{}",
+            adapter.id(),
+            adapter
+                .file_extensions()
+                .iter()
+                .map(|extension| format!(".{extension}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+        .map_err(|error| CliError::new(format!("failed to write language list: {error}")))?;
+    }
+    Ok(())
+}
+
+fn new_adapter(language: &str, destination: &Path, output: &mut dyn Write) -> Result<(), CliError> {
+    if destination.exists() {
+        return Err(CliError::new(format!(
+            "refusing to overwrite existing adapter directory {}",
+            destination.display()
+        )));
+    }
+    let source_directory = destination.join("src");
+    fs::create_dir_all(&source_directory).map_err(|error| {
+        CliError::new(format!(
+            "failed to create adapter directory {}: {error}",
+            destination.display()
+        ))
+    })?;
+    let version = env!("CARGO_PKG_VERSION");
+    let crate_name = format!("polygl-adapter-{language}");
+    let manifest = format!(
+        "[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"MIT OR Apache-2.0\"\n\n[dependencies]\npolygl-adapter-api = \"={version}\"\npolygl-hir = \"={version}\"\npolygl-span = \"={version}\"\n\n[lints.rust]\nunsafe_code = \"forbid\"\n"
+    );
+    let adapter_name = format!("{}Adapter", pascal_case(language));
+    let implementation = format!(
+        "use polygl_adapter_api::{{FeatureTag, LanguageAdapter, LowerCtx}};\nuse polygl_hir::Module;\nuse polygl_span::{{Diagnostic, Diagnostics, Severity, SourceFile, Suggestion}};\n\n#[derive(Clone, Copy, Debug, Default)]\npub struct {adapter_name};\n\nimpl LanguageAdapter for {adapter_name} {{\n    fn id(&self) -> &'static str {{\n        \"{language}\"\n    }}\n\n    fn file_extensions(&self) -> &'static [&'static str] {{\n        &[\"{language}\"]\n    }}\n\n    fn lower(\n        &self,\n        source: &SourceFile,\n        _context: &mut LowerCtx<'_>,\n    ) -> Result<Module, Diagnostics> {{\n        let span = source.span(0, source.len()).expect(\"complete source span\");\n        let mut diagnostics = Diagnostics::new();\n        diagnostics.push(\n            Diagnostic::new(\n                Severity::Error,\n                \"E0200\",\n                \"the {language} adapter lowering is not implemented\",\n                span,\n            )\n            .with_suggestion(Suggestion::rewrite(\n                span,\n                \"implement parser-specific lowering to Common Core HIR\",\n            )),\n        );\n        Err(diagnostics)\n    }}\n\n    fn capabilities(&self) -> &'static [FeatureTag] {{\n        &[]\n    }}\n}}\n"
+    );
+    write_artifact(&destination.join("Cargo.toml"), manifest.as_bytes())?;
+    write_artifact(&source_directory.join("lib.rs"), implementation.as_bytes())?;
+    writeln!(
+        output,
+        "created {} for the `{language}` adapter",
+        destination.display()
+    )
+    .map_err(|error| CliError::new(format!("failed to write scaffold result: {error}")))
+}
+
+fn valid_language_id(language: &str) -> bool {
+    let mut characters = language.chars();
+    characters
+        .next()
+        .is_some_and(|first| first.is_ascii_lowercase())
+        && characters.all(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
+}
+
+fn pascal_case(language: &str) -> String {
+    let mut characters = language.chars();
+    let Some(first) = characters.next() else {
+        return String::new();
+    };
+    first.to_ascii_uppercase().to_string() + characters.as_str()
+}
+
 fn usage() -> String {
     "\
 usage:
@@ -518,6 +632,8 @@ usage:
   polygl serve <source.rb|source.php|source.pl> [--port <port>] [--watch]
   polygl check <source.rb|source.php|source.pl>
   polygl dump-hir <source.rb|source.php|source.pl>
+  polygl languages
+  polygl new-adapter <language> [-o <directory>]
 "
     .to_owned()
 }
@@ -561,6 +677,43 @@ mod tests {
                 .to_string()
                 .contains("between 0 and 65535")
         );
+    }
+
+    #[test]
+    fn lists_languages_and_scaffolds_an_adapter_without_overwriting() {
+        let mut languages = Vec::new();
+        run(arguments(["languages"]), &mut languages).unwrap();
+        assert_eq!(
+            String::from_utf8(languages).unwrap(),
+            "ruby\t.rb\nphp\t.php\nperl\t.pl\n"
+        );
+
+        let temporary = temporary_directory();
+        let adapter = temporary.join("polygl-adapter-toy");
+        let mut output = Vec::new();
+        run(
+            arguments(["new-adapter", "toy", "-o", adapter.to_str().unwrap()]),
+            &mut output,
+        )
+        .unwrap();
+        assert!(
+            fs::read_to_string(adapter.join("Cargo.toml"))
+                .unwrap()
+                .contains("name = \"polygl-adapter-toy\"")
+        );
+        let implementation = fs::read_to_string(adapter.join("src/lib.rs")).unwrap();
+        assert!(implementation.contains("pub struct ToyAdapter;"));
+        assert!(implementation.contains("impl LanguageAdapter for ToyAdapter"));
+        assert!(
+            run(
+                arguments(["new-adapter", "toy", "-o", adapter.to_str().unwrap(),]),
+                &mut Vec::new(),
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("refusing to overwrite")
+        );
+        fs::remove_dir_all(temporary).unwrap();
     }
 
     #[test]

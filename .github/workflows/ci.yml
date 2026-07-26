@@ -80,6 +80,21 @@ jobs:
       - name: Test runtime
         run: pnpm --dir runtime test
 
+  npm-cli:
+    name: npm CLI wrapper
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+
+      - name: Test platform resolution
+        run: node --test npm/cli/test/*.test.mjs
+
   conformance:
     name: Conformance
     runs-on: ubuntu-24.04

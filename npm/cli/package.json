@@ -1,0 +1,31 @@
+{
+  "name": "@polygl/cli",
+  "version": "0.0.0",
+  "description": "Multi-language compiler and WebGL framework",
+  "type": "module",
+  "bin": {
+    "polygl": "bin/polygl.js"
+  },
+  "files": [
+    "bin",
+    "lib"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "optionalDependencies": {
+    "@polygl/cli-darwin-arm64": "0.0.0",
+    "@polygl/cli-darwin-x64": "0.0.0",
+    "@polygl/cli-linux-arm64": "0.0.0",
+    "@polygl/cli-linux-x64": "0.0.0",
+    "@polygl/cli-win32-x64": "0.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ydah/polygl.git"
+  }
+}

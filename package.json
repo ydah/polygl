@@ -1,6 +1,9 @@
 {
   "name": "polygl-workspace",
   "private": true,
+  "scripts": {
+    "test:npm-cli": "node --test npm/cli/test/*.test.mjs"
+  },
   "engines": {
     "node": "24.14.1"
   },

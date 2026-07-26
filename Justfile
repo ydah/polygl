@@ -10,6 +10,7 @@ build:
 test:
     cargo test --workspace
     pnpm --dir runtime test
+    pnpm test:npm-cli
 
 conformance:
     cargo xtask conformance
