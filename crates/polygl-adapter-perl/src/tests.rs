@@ -41,8 +41,9 @@ sub helper {
 }
 
 sub setup {
+    my $clock = time();
     size(8, 6);
-    background(helper($SCALE), 0.25, 0.5);
+    background(helper($SCALE) + $clock, 0.25, 0.5);
 }
 "#,
     )
@@ -52,6 +53,7 @@ sub setup {
     assert!(text.contains("fn helper(value)"));
     assert!(text.contains("/float"));
     assert!(text.contains("%trunc"));
+    assert!(text.contains("builtin#20()"));
     assert!(text.contains("entry setup()"));
 }
 

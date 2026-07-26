@@ -685,7 +685,10 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
             "array_element_expression" | "hash_element_expression" => {
                 return self.lower_index_or_field(node);
             }
-            "function_call_expression" | "ambiguous_function_call_expression" => {
+            "function_call_expression"
+            | "ambiguous_function_call_expression"
+            | "func0op_call_expression"
+            | "func1op_call_expression" => {
                 return self.lower_call(node);
             }
             "method_call_expression" => return self.lower_method_call(node),
@@ -854,9 +857,19 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
     }
 
     fn lower_call(&mut self, node: Node<'_>) -> Option<Expr> {
-        let function = first_named_field(node, "function")
-            .or_else(|| named_children(node).into_iter().next())?;
-        let name = node_text(self.source, function).trim();
+        let name = first_named_field(node, "function")
+            .or_else(|| named_children(node).into_iter().next())
+            .map_or_else(
+                || {
+                    node_text(self.source, node)
+                        .trim()
+                        .split(['(', ' ', '\t'])
+                        .next()
+                        .unwrap_or_default()
+                        .to_owned()
+                },
+                |function| node_text(self.source, function).trim().to_owned(),
+            );
         let args = self.lower_arguments(node)?;
         let span = node_span(self.source, node);
         if name == "defined" && args.len() == 1 {
@@ -871,14 +884,14 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
                 span,
             ));
         }
-        if let Some(size) = vector_constructor_size(name) {
+        if let Some(size) = vector_constructor_size(&name) {
             return Some(Expr::new(ExprKind::Vector { size, args }, span));
         }
         if let Some(class) = &self.current_class
             && self
                 .class_methods
                 .get(class)
-                .is_some_and(|methods| methods.contains(name))
+                .is_some_and(|methods| methods.contains(&name))
         {
             let mut args_with_self = Vec::with_capacity(args.len() + 1);
             args_with_self.push(Expr::new(ExprKind::Var(Symbol::new("self")), span));
@@ -891,9 +904,9 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
                 span,
             ));
         }
-        let callee = if let Some(builtin) = self.context.resolve_builtin(name) {
+        let callee = if let Some(builtin) = self.context.resolve_builtin(&name) {
             Callee::Builtin(builtin)
-        } else if self.function_names.contains(name) {
+        } else if self.function_names.contains(&name) {
             Callee::User(Symbol::new(name))
         } else {
             self.unsupported(

@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use polygl_adapter_api::{LanguageAdapter, LowerCtx};
+use polygl_adapter_perl::PerlAdapter;
 use polygl_adapter_php::PhpAdapter;
 use polygl_adapter_ruby::RubyAdapter;
 use polygl_core::BuiltinTable;
@@ -45,9 +46,11 @@ pub fn verify_smoke(root: &Path) -> Result<ConformanceReport, ConformanceError> 
     for case in M1_CASES {
         let ruby = compile_ruby(root, case)?;
         let php = compile_php(root, case)?;
+        let perl = compile_perl(root, case)?;
         l1.load(case, BASELINE_RENDERER)?;
         l2.verify("ruby", case, &dump(&ruby))?;
         l2.verify("php", case, &dump(&php))?;
+        l2.verify("perl", case, &dump(&perl))?;
         if NEUTRAL_CASES.contains(case) {
             compare_neutral_hir(
                 case,
@@ -60,6 +63,10 @@ pub fn verify_smoke(root: &Path) -> Result<ConformanceReport, ConformanceError> 
                         language: "php",
                         module: &php,
                     },
+                    NeutralProgram {
+                        language: "perl",
+                        module: &perl,
+                    },
                 ],
             )?;
             l3.verify(case, &ruby)?;
@@ -68,6 +75,7 @@ pub fn verify_smoke(root: &Path) -> Result<ConformanceReport, ConformanceError> 
     for case in M5_CASES {
         compile_ruby(root, case)?;
         compile_php(root, case)?;
+        compile_perl(root, case)?;
         l1.load(case, BASELINE_RENDERER)?;
     }
     for (case, expected_error) in GPU_CASES {
@@ -76,7 +84,7 @@ pub fn verify_smoke(root: &Path) -> Result<ConformanceReport, ConformanceError> 
 
     Ok(ConformanceReport {
         l1_cases: M1_CASES.len() + M5_CASES.len(),
-        l2_cases: M1_CASES.len() * 2,
+        l2_cases: M1_CASES.len() * 3,
         l3_cases: NEUTRAL_CASES.len(),
         gpu_cases: GPU_CASES.len(),
     })
@@ -90,11 +98,29 @@ fn compile_php(root: &Path, case: &str) -> Result<Module, ConformanceError> {
     compile_typed(root, case, "main.php", &PhpAdapter).map(polygl_types::TypedModule::into_hir)
 }
 
+fn compile_perl(root: &Path, case: &str) -> Result<Module, ConformanceError> {
+    compile_typed(root, case, "main.pl", &PerlAdapter).map(polygl_types::TypedModule::into_hir)
+}
+
 fn compile_ruby_typed(
     root: &Path,
     case: &str,
 ) -> Result<polygl_types::TypedModule, ConformanceError> {
     compile_typed(root, case, "main.rb", &RubyAdapter)
+}
+
+fn compile_php_typed(
+    root: &Path,
+    case: &str,
+) -> Result<polygl_types::TypedModule, ConformanceError> {
+    compile_typed(root, case, "main.php", &PhpAdapter)
+}
+
+fn compile_perl_typed(
+    root: &Path,
+    case: &str,
+) -> Result<polygl_types::TypedModule, ConformanceError> {
+    compile_typed(root, case, "main.pl", &PerlAdapter)
 }
 
 fn compile_typed(
@@ -123,28 +149,44 @@ fn verify_gpu_case(
     case: &str,
     expected_error: Option<&str>,
 ) -> Result<(), ConformanceError> {
-    let typed = compile_ruby_typed(root, case)?;
+    let programs = [
+        ("ruby", compile_ruby_typed(root, case)?),
+        ("php", compile_php_typed(root, case)?),
+        ("perl", compile_perl_typed(root, case)?),
+    ];
+    for (language, typed) in programs {
+        verify_gpu_program(case, language, typed, expected_error)?;
+    }
+    Ok(())
+}
+
+fn verify_gpu_program(
+    case: &str,
+    language: &str,
+    typed: polygl_types::TypedModule,
+    expected_error: Option<&str>,
+) -> Result<(), ConformanceError> {
     let lir = polygl_lir::lower(&typed);
     match (polygl_lir::split(&lir), expected_error) {
         (Ok(split), None) => {
             let artifacts = polygl_backend_glsl::GlslBackend::new()
                 .generate(&split.gpu)
                 .map_err(|error| ConformanceError::Compile {
-                    case: case.to_owned(),
+                    case: format!("{case}/{language}"),
                     message: error.to_string(),
                 })?;
             let shader = artifacts
                 .shaders
                 .first()
                 .ok_or_else(|| ConformanceError::Compile {
-                    case: case.to_owned(),
+                    case: format!("{case}/{language}"),
                     message: "positive GPU case did not emit a shader pair".to_owned(),
                 })?;
             if !shader.vertex.starts_with("#version 300 es")
                 || !shader.fragment.contains("uniform float u_time;")
             {
                 return Err(ConformanceError::Compile {
-                    case: case.to_owned(),
+                    case: format!("{case}/{language}"),
                     message: "positive GPU artifact is missing its GLSL version or u_time ABI"
                         .to_owned(),
                 });
@@ -157,7 +199,7 @@ fn verify_gpu_case(
             Ok(())
         }
         (Err(diagnostics), expected) => Err(ConformanceError::Compile {
-            case: case.to_owned(),
+            case: format!("{case}/{language}"),
             message: format!(
                 "expected GPU diagnostic {expected:?}, found {:?}",
                 diagnostics
@@ -167,7 +209,7 @@ fn verify_gpu_case(
             ),
         }),
         (Ok(_), Some(expected)) => Err(ConformanceError::Compile {
-            case: case.to_owned(),
+            case: format!("{case}/{language}"),
             message: format!("expected GPU diagnostic {expected}, but split succeeded"),
         }),
     }
@@ -192,6 +234,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use polygl_adapter_api::{LanguageAdapter, LowerCtx};
+    use polygl_adapter_perl::PerlAdapter;
     use polygl_adapter_php::PhpAdapter;
     use polygl_adapter_ruby::RubyAdapter;
     use polygl_core::BuiltinTable;
@@ -200,7 +243,9 @@ mod tests {
 
     use crate::{NeutralProgram, compare_neutral_hir};
 
-    use super::{GPU_CASES, M1_CASES, M5_CASES, NEUTRAL_CASES, compile_php, compile_ruby};
+    use super::{
+        GPU_CASES, M1_CASES, M5_CASES, NEUTRAL_CASES, compile_perl, compile_php, compile_ruby,
+    };
 
     #[test]
     fn case_inventory_has_six_render_and_two_neutral_cases() {
@@ -212,6 +257,7 @@ mod tests {
         let root = conformance_root();
         for case in M1_CASES.iter().chain(M5_CASES.iter()) {
             assert!(root.join("cases").join(case).join("main.php").is_file());
+            assert!(root.join("cases").join(case).join("main.pl").is_file());
         }
     }
 
@@ -238,11 +284,12 @@ mod tests {
     }
 
     #[test]
-    fn neutral_cases_compare_ruby_and_php_before_snapshot_verification() {
+    fn neutral_cases_compare_all_languages_before_snapshot_verification() {
         let root = conformance_root();
         for case in NEUTRAL_CASES {
             let ruby = compile_ruby(&root, case).unwrap();
             let php = compile_php(&root, case).unwrap();
+            let perl = compile_perl(&root, case).unwrap();
             compare_neutral_hir(
                 case,
                 &[
@@ -253,6 +300,10 @@ mod tests {
                     NeutralProgram {
                         language: "php",
                         module: &php,
+                    },
+                    NeutralProgram {
+                        language: "perl",
+                        module: &perl,
                     },
                 ],
             )
@@ -272,8 +323,14 @@ mod tests {
             "<?php function half($value) { return $value / 2; }",
             &PhpAdapter,
         );
+        let perl = lower_text(
+            "main.pl",
+            "sub half { my ($value) = @_; return $value / 2; }\n",
+            &PerlAdapter,
+        );
         assert!(dump(&ruby).contains("(value /int 2)"));
         assert!(dump(&php).contains("(value /float 2)"));
+        assert!(dump(&perl).contains("(value /float 2)"));
     }
 
     fn lower_text(name: &str, text: &str, adapter: &dyn LanguageAdapter) -> polygl_hir::Module {

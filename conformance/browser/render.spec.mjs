@@ -17,6 +17,7 @@ const BUILD_CASES = [...RENDER_CASES, "plasma"];
 const LANGUAGES = [
   ["ruby", "main.rb"],
   ["php", "main.php"],
+  ["perl", "main.pl"],
 ];
 const workspaceRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -31,16 +32,6 @@ test.beforeAll(async () => {
   run("cargo", ["build", "--quiet", "-p", "polygl-cli"]);
   buildRoot = await mkdtemp(path.join(tmpdir(), "polygl-conformance-"));
   for (const name of BUILD_CASES) {
-    if (name === "plasma") {
-      run(executable, [
-        "build",
-        path.join(conformanceRoot, "cases", name, "main.rb"),
-        "-o",
-        path.join(buildRoot, name, "ruby"),
-        "--release",
-      ]);
-      continue;
-    }
     for (const [language, file] of LANGUAGES) {
       run(executable, [
         "build",
@@ -131,22 +122,24 @@ for (const name of RENDER_CASES) {
   }
 }
 
-test("plasma shader compiles and resolves its material in SwiftShader", async ({
-  page,
-}) => {
-  await routeBuild(page);
-  await page.goto("http://polygl.test/plasma/ruby/index.html");
-  await page.evaluate(() => globalThis.__polyglReady);
-  const renderer = await page.evaluate(() => {
-    const canvas = document.querySelector("canvas");
-    const gl = canvas.getContext("webgl2");
-    const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
-    return debugInfo === null
-      ? gl.getParameter(gl.RENDERER)
-      : gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
+for (const [language] of LANGUAGES) {
+  test(`plasma shader in ${language} compiles and resolves its material`, async ({
+    page,
+  }) => {
+    await routeBuild(page);
+    await page.goto(`http://polygl.test/plasma/${language}/index.html`);
+    await page.evaluate(() => globalThis.__polyglReady);
+    const renderer = await page.evaluate(() => {
+      const canvas = document.querySelector("canvas");
+      const gl = canvas.getContext("webgl2");
+      const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
+      return debugInfo === null
+        ? gl.getParameter(gl.RENDERER)
+        : gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
+    });
+    expect(renderer).toContain("SwiftShader");
   });
-  expect(renderer).toContain("SwiftShader");
-});
+}
 
 test("text overlay follows and restores a custom canvas", async ({ page }) => {
   await routeBuild(page);

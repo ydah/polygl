@@ -747,6 +747,7 @@ version = "0.0.0"
 dependencies = [
  "insta",
  "polygl-adapter-api",
+ "polygl-adapter-perl",
  "polygl-adapter-php",
  "polygl-adapter-ruby",
  "polygl-backend-glsl",

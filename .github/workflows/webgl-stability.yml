@@ -40,7 +40,7 @@ jobs:
         run: pnpm --dir spikes/webgl-stability test
 
   conformance:
-    name: Ruby framebuffer conformance
+    name: Three-language framebuffer conformance
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -68,5 +68,5 @@ jobs:
       - name: Install pinned Chromium
         run: pnpm --dir conformance/browser exec playwright install --with-deps chromium
 
-      - name: Compare Ruby framebuffers
+      - name: Compare Ruby, PHP, and Perl framebuffers
         run: pnpm --dir conformance/browser test
