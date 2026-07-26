@@ -12,6 +12,7 @@ const FLOATS_PER_VERTEX = 6;
 const CIRCLE_SEGMENTS = 32;
 const IDENTITY_TRANSFORM: Matrix2D = [1, 0, 0, 1, 0, 0];
 const STROKE_WIDTH = 1;
+const MAX_FLOAT32 = 3.4028234663852886e38;
 
 export class WebGL2BatchRenderer {
   private readonly gl: WebGL2RenderingContext;
@@ -30,6 +31,8 @@ export class WebGL2BatchRenderer {
     context?: WebGL2RenderingContext,
     documentObject?: Document,
   ) {
+    const initialWidth = positiveInteger(canvas.width, "canvas width");
+    const initialHeight = positiveInteger(canvas.height, "canvas height");
     const gl =
       context ??
       canvas.getContext("webgl2", {
@@ -80,8 +83,17 @@ export class WebGL2BatchRenderer {
       FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT,
       2 * Float32Array.BYTES_PER_ELEMENT,
     );
-    this.textOverlay = Canvas2DTextOverlay.attach(canvas, documentObject);
-    this.resize(canvas.width, canvas.height);
+    let overlay: Canvas2DTextOverlay | undefined;
+    try {
+      overlay = Canvas2DTextOverlay.attach(canvas, documentObject);
+      this.textOverlay = overlay;
+      this.resize(initialWidth, initialHeight);
+    } catch (error) {
+      overlay?.dispose();
+      gl.deleteBuffer(this.buffer);
+      gl.deleteProgram(this.program);
+      throw error;
+    }
   }
 
   public get context(): WebGL2RenderingContext {
@@ -205,9 +217,11 @@ export class WebGL2BatchRenderer {
   }
 
   public translate(x: number, y: number): void {
-    this.transform = multiply(
-      this.transform,
-      [1, 0, 0, 1, coordinate(x), coordinate(y)],
+    this.transform = finiteMatrix(
+      multiply(
+        this.transform,
+        [1, 0, 0, 1, coordinate(x), coordinate(y)],
+      ),
     );
   }
 
@@ -215,16 +229,20 @@ export class WebGL2BatchRenderer {
     const angle = coordinate(radians);
     const cosine = Math.cos(angle);
     const sine = Math.sin(angle);
-    this.transform = multiply(
-      this.transform,
-      [cosine, sine, -sine, cosine, 0, 0],
+    this.transform = finiteMatrix(
+      multiply(
+        this.transform,
+        [cosine, sine, -sine, cosine, 0, 0],
+      ),
     );
   }
 
   public scale(x: number, y: number): void {
-    this.transform = multiply(
-      this.transform,
-      [coordinate(x), 0, 0, coordinate(y), 0, 0],
+    this.transform = finiteMatrix(
+      multiply(
+        this.transform,
+        [coordinate(x), 0, 0, coordinate(y), 0, 0],
+      ),
     );
   }
 
@@ -276,10 +294,8 @@ export class WebGL2BatchRenderer {
     y2: number,
     color: Color,
   ): void {
-    const startX = coordinate(x1);
-    const startY = coordinate(y1);
-    const endX = coordinate(x2);
-    const endY = coordinate(y2);
+    const [startX, startY] = this.transformPoint(x1, y1);
+    const [endX, endY] = this.transformPoint(x2, y2);
     const dx = endX - startX;
     const dy = endY - startY;
     const length = Math.hypot(dx, dy);
@@ -288,23 +304,31 @@ export class WebGL2BatchRenderer {
     }
     const offsetX = (-dy / length) * (STROKE_WIDTH / 2);
     const offsetY = (dx / length) * (STROKE_WIDTH / 2);
-    this.vertex(startX + offsetX, startY + offsetY, color);
-    this.vertex(endX + offsetX, endY + offsetY, color);
-    this.vertex(endX - offsetX, endY - offsetY, color);
-    this.vertex(startX + offsetX, startY + offsetY, color);
-    this.vertex(endX - offsetX, endY - offsetY, color);
-    this.vertex(startX - offsetX, startY - offsetY, color);
+    this.screenVertex(startX + offsetX, startY + offsetY, color);
+    this.screenVertex(endX + offsetX, endY + offsetY, color);
+    this.screenVertex(endX - offsetX, endY - offsetY, color);
+    this.screenVertex(startX + offsetX, startY + offsetY, color);
+    this.screenVertex(endX - offsetX, endY - offsetY, color);
+    this.screenVertex(startX - offsetX, startY - offsetY, color);
   }
 
   private vertex(x: number, y: number, color: Color): void {
+    const [screenX, screenY] = this.transformPoint(x, y);
+    this.screenVertex(screenX, screenY, color);
+  }
+
+  private transformPoint(x: number, y: number): readonly [number, number] {
     const safeX = coordinate(x);
     const safeY = coordinate(y);
     const [a, b, c, d, e, f] = this.transform;
-    this.vertices.push(
-      a * safeX + c * safeY + e,
-      b * safeX + d * safeY + f,
-      ...color,
-    );
+    return [
+      drawableCoordinate(a * safeX + c * safeY + e),
+      drawableCoordinate(b * safeX + d * safeY + f),
+    ];
+  }
+
+  private screenVertex(x: number, y: number, color: Color): void {
+    this.vertices.push(drawableCoordinate(x), drawableCoordinate(y), ...color);
   }
 }
 
@@ -312,6 +336,10 @@ class Canvas2DTextOverlay {
   private constructor(
     private readonly canvas: HTMLCanvasElement,
     private readonly context: CanvasRenderingContext2D,
+    private readonly target: HTMLCanvasElement,
+    private readonly wrapper: HTMLDivElement,
+    private readonly originalDisplay: string,
+    private readonly originalGridArea: string,
   ) {}
 
   public static attach(
@@ -331,15 +359,37 @@ class Canvas2DTextOverlay {
     if (context === null) {
       return undefined;
     }
+    const wrapper = documentObject.createElement("div");
+    const originalDisplay = target.style.display;
+    const originalGridArea = target.style.gridArea;
     canvas.id = target.id === "" ? "polygl-text-overlay" : `${target.id}-text`;
     canvas.setAttribute("aria-hidden", "true");
-    Object.assign(target.style, { gridArea: "1 / 1" });
-    Object.assign(canvas.style, {
-      gridArea: "1 / 1",
-      pointerEvents: "none",
+    Object.assign(wrapper.style, {
+      display: "inline-block",
+      lineHeight: "0",
+      position: "relative",
     });
-    parent.append(canvas);
-    return new Canvas2DTextOverlay(canvas, context);
+    Object.assign(target.style, {
+      display: "block",
+      gridArea: "1 / 1",
+    });
+    Object.assign(canvas.style, {
+      inset: "0",
+      height: "100%",
+      pointerEvents: "none",
+      position: "absolute",
+      width: "100%",
+    });
+    parent.insertBefore(wrapper, target);
+    wrapper.append(target, canvas);
+    return new Canvas2DTextOverlay(
+      canvas,
+      context,
+      target,
+      wrapper,
+      originalDisplay,
+      originalGridArea,
+    );
   }
 
   public resize(width: number, height: number): void {
@@ -368,7 +418,9 @@ class Canvas2DTextOverlay {
   }
 
   public dispose(): void {
-    this.canvas.remove();
+    this.target.style.display = this.originalDisplay;
+    this.target.style.gridArea = this.originalGridArea;
+    this.wrapper.replaceWith(this.target);
   }
 }
 
@@ -390,6 +442,20 @@ function coordinate(value: number): number {
     throw new RangeError("shape coordinates must be finite numbers");
   }
   return value;
+}
+
+function drawableCoordinate(value: number): number {
+  if (!Number.isFinite(value) || Math.abs(value) > MAX_FLOAT32) {
+    throw new RangeError("transformed coordinates must fit in a finite float");
+  }
+  return value;
+}
+
+function finiteMatrix(matrix: Matrix2D): Matrix2D {
+  if (matrix.some((value) => !Number.isFinite(value))) {
+    throw new RangeError("the current transform must remain finite");
+  }
+  return matrix;
 }
 
 function createProgram(gl: WebGL2RenderingContext): WebGLProgram {

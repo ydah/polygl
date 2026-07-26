@@ -49,6 +49,7 @@ export class RuntimeSession implements RuntimeHandle {
   public elapsedSeconds = 0;
   private readonly pressedKeys = new Set<string>();
   private readonly documentObject: Document | undefined;
+  private readonly windowObject: Window | undefined;
   private readonly requestFrame: (callback: FrameRequestCallback) => number;
   private readonly cancelFrame: (handle: number) => void;
   private readonly onError: (reason: unknown) => void;
@@ -64,6 +65,7 @@ export class RuntimeSession implements RuntimeHandle {
     options: RuntimeOptions,
   ) {
     this.documentObject = options.document ?? globalThis.document;
+    this.windowObject = this.documentObject?.defaultView ?? undefined;
     this.renderer = new WebGL2BatchRenderer(
       canvas,
       options.context,
@@ -124,8 +126,10 @@ export class RuntimeSession implements RuntimeHandle {
     this.canvas.removeEventListener("pointermove", this.handlePointerMove);
     this.canvas.removeEventListener("pointerdown", this.handlePointerDown);
     this.canvas.removeEventListener("pointerup", this.handlePointerUp);
+    this.canvas.removeEventListener("pointercancel", this.handlePointerCancel);
     this.documentObject?.removeEventListener("keydown", this.handleKeyDown);
     this.documentObject?.removeEventListener("keyup", this.handleKeyUp);
+    this.windowObject?.removeEventListener("blur", this.handleBlur);
     this.renderer.dispose();
     this.shaderRegistry.dispose();
     this.onStop();
@@ -179,32 +183,53 @@ export class RuntimeSession implements RuntimeHandle {
     this.canvas.addEventListener("pointermove", this.handlePointerMove);
     this.canvas.addEventListener("pointerdown", this.handlePointerDown);
     this.canvas.addEventListener("pointerup", this.handlePointerUp);
+    this.canvas.addEventListener("pointercancel", this.handlePointerCancel);
     this.documentObject?.addEventListener("keydown", this.handleKeyDown);
     this.documentObject?.addEventListener("keyup", this.handleKeyUp);
+    this.windowObject?.addEventListener("blur", this.handleBlur);
   }
 
   private readonly handlePointerMove = (event: PointerEvent): void => {
-    this.updatePointerPosition(event);
+    if (!this.updatePointerPosition(event)) {
+      return;
+    }
     this.dispatchPointerEvent("pointermove");
   };
 
   private readonly handlePointerDown = (event: PointerEvent): void => {
-    this.updatePointerPosition(event);
+    if (!this.updatePointerPosition(event)) {
+      return;
+    }
+    this.canvas.setPointerCapture?.(event.pointerId);
     this.dispatchPointerEvent("pointerdown");
   };
 
   private readonly handlePointerUp = (event: PointerEvent): void => {
-    this.updatePointerPosition(event);
-    this.dispatchPointerEvent("pointerup");
+    if (this.updatePointerPosition(event)) {
+      this.dispatchPointerEvent("pointerup");
+    }
+    if (this.canvas.hasPointerCapture?.(event.pointerId)) {
+      this.canvas.releasePointerCapture(event.pointerId);
+    }
   };
 
-  private updatePointerPosition(event: PointerEvent): void {
+  private readonly handlePointerCancel = (event: PointerEvent): void => {
+    if (this.updatePointerPosition(event)) {
+      this.dispatchPointerEvent("pointercancel");
+    }
+    if (this.canvas.hasPointerCapture?.(event.pointerId)) {
+      this.canvas.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  private updatePointerPosition(event: PointerEvent): boolean {
     const bounds = this.canvas.getBoundingClientRect();
     if (bounds.width <= 0 || bounds.height <= 0) {
-      return;
+      return false;
     }
     this.mouseX = ((event.clientX - bounds.left) / bounds.width) * this.canvas.width;
     this.mouseY = ((event.clientY - bounds.top) / bounds.height) * this.canvas.height;
+    return Number.isFinite(this.mouseX) && Number.isFinite(this.mouseY);
   }
 
   private dispatchPointerEvent(kind: string): void {
@@ -234,6 +259,10 @@ export class RuntimeSession implements RuntimeHandle {
       y: this.mouseY,
       key: event.key,
     });
+  };
+
+  private readonly handleBlur = (): void => {
+    this.pressedKeys.clear();
   };
 
   private dispatchEvent(event: RuntimeEvent): void {

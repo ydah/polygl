@@ -127,6 +127,60 @@ test("plasma shader compiles and resolves its material in SwiftShader", async ({
   expect(renderer).toContain("SwiftShader");
 });
 
+test("text overlay follows and restores a custom canvas", async ({ page }) => {
+  await routeBuild(page);
+  await page.goto("http://polygl.test/rectangle/index.html");
+  await page.evaluate(() => globalThis.__polyglReady);
+  const result = await page.evaluate(async () => {
+    const runtime = await import("./runtime.js");
+    const host = document.createElement("section");
+    host.style.display = "flex";
+    host.style.padding = "7px";
+    const canvas = document.createElement("canvas");
+    canvas.id = "custom-canvas";
+    canvas.width = 64;
+    canvas.height = 48;
+    canvas.style.width = "128px";
+    canvas.style.height = "96px";
+    host.append(canvas);
+    document.body.append(host);
+
+    const handle = await runtime.start(
+      {
+        setup() {
+          runtime.text("overlay", 4, 12);
+        },
+      },
+      { canvas },
+    );
+    const overlay = document.getElementById("custom-canvas-text");
+    const canvasBounds = canvas.getBoundingClientRect();
+    const overlayBounds = overlay.getBoundingClientRect();
+    const aligned = {
+      height: overlayBounds.height === canvasBounds.height,
+      left: overlayBounds.left === canvasBounds.left,
+      top: overlayBounds.top === canvasBounds.top,
+      width: overlayBounds.width === canvasBounds.width,
+    };
+    const wrapperTag = canvas.parentElement.tagName;
+    handle.stop();
+    return {
+      aligned,
+      restored: canvas.parentElement === host,
+      wrapperTag,
+    };
+  });
+
+  expect(result.aligned).toEqual({
+    height: true,
+    left: true,
+    top: true,
+    width: true,
+  });
+  expect(result.wrapperTag).toBe("DIV");
+  expect(result.restored).toBe(true);
+});
+
 async function routeBuild(page) {
   await page.route("http://polygl.test/**", async (route) => {
     const url = new URL(route.request().url());

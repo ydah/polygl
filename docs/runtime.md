@@ -10,12 +10,12 @@ and then calls `frame(dt)` from `requestAnimationFrame`. The first `dt` is zero
 and later values are elapsed seconds. A second start is rejected while loading
 or setup is still in progress.
 
-The Tier 1 renderer batches `rect`, `circle`, `triangle`, and one-pixel `line`
-geometry as colored triangles in one dynamic vertex buffer. `stroke` enables
-outlines for later shapes, while `no_stroke` disables them; a standalone line
-falls back to the fill color when no stroke is active. `background` flushes
-pending geometry before clearing, and `fill` changes the color recorded for
-later vertices.
+The Tier 1 renderer batches `rect`, `circle`, `triangle`, and screen-space
+one-pixel `line` geometry as colored triangles in one dynamic vertex buffer.
+`stroke` enables outlines for later shapes, while `no_stroke` disables them; a
+standalone line falls back to the fill color when no stroke is active.
+`background` flushes pending geometry before clearing, and `fill` changes the
+color recorded for later vertices.
 
 `push_matrix` and `pop_matrix` preserve a checked affine transform stack.
 `translate`, `rotate`, and `scale` post-multiply the current transform before

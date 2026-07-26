@@ -116,6 +116,14 @@ end
     assert!(text.contains("entry on_event(event) [host]"));
     assert!(text.contains("event.kind"));
     assert!(text.contains("builtin#10(event.x, event.y"));
+
+    let diagnostics = lower("def inspect(value)\n  value.length\nend\n")
+        .expect_err("method dispatch is rejected");
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("method dispatch"))
+    );
 }
 
 #[test]

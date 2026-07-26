@@ -163,6 +163,9 @@ test("applies strokes and transforms while dispatching input events", async () =
         translate(10, 20);
         rotate(0);
         scale(2, 3);
+        stroke(0, 1, 0);
+        line(0, 0, 1, 0);
+        noStroke();
         triangle(0, 0, 1, 0, 0, 1);
         popMatrix();
       },
@@ -183,6 +186,10 @@ test("applies strokes and transforms while dispatching input events", async () =
   for (let index = 0; index < uploads[0].length; index += 6) {
     positions.push(uploads[0].slice(index, index + 2));
   }
+  assert.deepEqual(
+    positions.slice(6, 12).map((position) => position[1]),
+    [20.5, 20.5, 19.5, 20.5, 19.5, 19.5],
+  );
   assert.deepEqual(positions.slice(-3), [[10, 20], [12, 20], [10, 23]]);
   assert.throws(
     () => popMatrix(),
@@ -193,16 +200,29 @@ test("applies strokes and transforms while dispatching input events", async () =
     /attached browser canvas with Canvas2D support/,
   );
 
-  canvas.listeners.get("pointerdown")({ clientX: 32, clientY: 16 });
+  canvas.listeners.get("pointerdown")({
+    clientX: 32,
+    clientY: 16,
+    pointerId: 7,
+  });
   assert.equal(mouseX(), 32);
   assert.equal(mouseY(), 16);
+  assert.equal(canvas.captured.has(7), true);
+  canvas.listeners.get("pointerup")({
+    clientX: 40,
+    clientY: 24,
+    pointerId: 7,
+  });
+  assert.equal(canvas.captured.has(7), false);
   documentObject.listeners.get("keydown")({ key: "ArrowLeft" });
   assert.equal(keyDown("ArrowLeft"), true);
+  documentObject.defaultView.listeners.get("blur")();
+  assert.equal(keyDown("ArrowLeft"), false);
   documentObject.listeners.get("keyup")({ key: "ArrowLeft" });
   assert.equal(keyDown("ArrowLeft"), false);
   assert.deepEqual(
     events.map((event) => event.kind),
-    ["pointerdown", "keydown", "keyup"],
+    ["pointerdown", "pointerup", "keydown", "keyup"],
   );
   assert.deepEqual(events[0], {
     kind: "pointerdown",
@@ -529,9 +549,11 @@ function shaderBundle(shaders) {
 
 function fakeCanvas() {
   const listeners = new Map();
+  const captured = new Set();
   return {
     width: 64,
     height: 64,
+    captured,
     listeners,
     addEventListener(name, listener) {
       listeners.set(name, listener);
@@ -544,12 +566,33 @@ function fakeCanvas() {
     getBoundingClientRect() {
       return { left: 0, top: 0, width: this.width, height: this.height };
     },
+    hasPointerCapture(pointerId) {
+      return captured.has(pointerId);
+    },
+    releasePointerCapture(pointerId) {
+      captured.delete(pointerId);
+    },
+    setPointerCapture(pointerId) {
+      captured.add(pointerId);
+    },
   };
 }
 
 function fakeDocument() {
   const listeners = new Map();
+  const windowListeners = new Map();
   return {
+    defaultView: {
+      listeners: windowListeners,
+      addEventListener(name, listener) {
+        windowListeners.set(name, listener);
+      },
+      removeEventListener(name, listener) {
+        if (windowListeners.get(name) === listener) {
+          windowListeners.delete(name);
+        }
+      },
+    },
     listeners,
     addEventListener(name, listener) {
       listeners.set(name, listener);
@@ -599,14 +642,31 @@ function fakeTextOverlay(canvas) {
     },
     setAttribute() {},
   };
+  const wrapper = {
+    style: {},
+    append(target, overlay) {
+      assert.equal(target, canvas);
+      assert.equal(overlay, overlayCanvas);
+    },
+    replaceWith(target) {
+      assert.equal(target, canvas);
+      removed = true;
+    },
+  };
   canvas.id = "test-canvas";
   canvas.style = {};
   canvas.parentElement = {
-    append() {},
+    insertBefore(inserted, target) {
+      assert.equal(inserted, wrapper);
+      assert.equal(target, canvas);
+    },
   };
   documentObject.createElement = (name) => {
-    assert.equal(name, "canvas");
-    return overlayCanvas;
+    if (name === "canvas") {
+      return overlayCanvas;
+    }
+    assert.equal(name, "div");
+    return wrapper;
   };
   return {
     clears,

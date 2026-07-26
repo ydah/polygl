@@ -149,6 +149,7 @@ const FLOATS_PER_VERTEX = 6;
 const CIRCLE_SEGMENTS = 32;
 const IDENTITY_TRANSFORM = [1, 0, 0, 1, 0, 0];
 const STROKE_WIDTH = 1;
+const MAX_FLOAT32 = 3.4028234663852886e38;
 export class WebGL2BatchRenderer {
     constructor(canvas, context, documentObject) {
         this.canvas = canvas;
@@ -156,6 +157,8 @@ export class WebGL2BatchRenderer {
         this.fillColor = [1, 1, 1, 1];
         this.transform = IDENTITY_TRANSFORM;
         this.transformStack = [];
+        const initialWidth = positiveInteger(canvas.width, "canvas width");
+        const initialHeight = positiveInteger(canvas.height, "canvas height");
         const gl = context ??
             canvas.getContext("webgl2", {
                 alpha: true,
@@ -189,8 +192,18 @@ export class WebGL2BatchRenderer {
         gl.vertexAttribPointer(position, 2, gl.FLOAT, false, FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT, 0);
         gl.enableVertexAttribArray(color);
         gl.vertexAttribPointer(color, 4, gl.FLOAT, false, FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT, 2 * Float32Array.BYTES_PER_ELEMENT);
-        this.textOverlay = Canvas2DTextOverlay.attach(canvas, documentObject);
-        this.resize(canvas.width, canvas.height);
+        let overlay;
+        try {
+            overlay = Canvas2DTextOverlay.attach(canvas, documentObject);
+            this.textOverlay = overlay;
+            this.resize(initialWidth, initialHeight);
+        }
+        catch (error) {
+            overlay?.dispose();
+            gl.deleteBuffer(this.buffer);
+            gl.deleteProgram(this.program);
+            throw error;
+        }
     }
     get context() {
         return this.gl;
@@ -278,16 +291,16 @@ export class WebGL2BatchRenderer {
         this.transform = transform;
     }
     translate(x, y) {
-        this.transform = multiply(this.transform, [1, 0, 0, 1, coordinate(x), coordinate(y)]);
+        this.transform = finiteMatrix(multiply(this.transform, [1, 0, 0, 1, coordinate(x), coordinate(y)]));
     }
     rotate(radians) {
         const angle = coordinate(radians);
         const cosine = Math.cos(angle);
         const sine = Math.sin(angle);
-        this.transform = multiply(this.transform, [cosine, sine, -sine, cosine, 0, 0]);
+        this.transform = finiteMatrix(multiply(this.transform, [cosine, sine, -sine, cosine, 0, 0]));
     }
     scale(x, y) {
-        this.transform = multiply(this.transform, [coordinate(x), 0, 0, coordinate(y), 0, 0]);
+        this.transform = finiteMatrix(multiply(this.transform, [coordinate(x), 0, 0, coordinate(y), 0, 0]));
     }
     flush() {
         if (this.vertices.length === 0) {
@@ -313,10 +326,8 @@ export class WebGL2BatchRenderer {
         this.vertex(x3, y3, this.fillColor);
     }
     strokeLine(x1, y1, x2, y2, color) {
-        const startX = coordinate(x1);
-        const startY = coordinate(y1);
-        const endX = coordinate(x2);
-        const endY = coordinate(y2);
+        const [startX, startY] = this.transformPoint(x1, y1);
+        const [endX, endY] = this.transformPoint(x2, y2);
         const dx = endX - startX;
         const dy = endY - startY;
         const length = Math.hypot(dx, dy);
@@ -325,24 +336,38 @@ export class WebGL2BatchRenderer {
         }
         const offsetX = (-dy / length) * (STROKE_WIDTH / 2);
         const offsetY = (dx / length) * (STROKE_WIDTH / 2);
-        this.vertex(startX + offsetX, startY + offsetY, color);
-        this.vertex(endX + offsetX, endY + offsetY, color);
-        this.vertex(endX - offsetX, endY - offsetY, color);
-        this.vertex(startX + offsetX, startY + offsetY, color);
-        this.vertex(endX - offsetX, endY - offsetY, color);
-        this.vertex(startX - offsetX, startY - offsetY, color);
+        this.screenVertex(startX + offsetX, startY + offsetY, color);
+        this.screenVertex(endX + offsetX, endY + offsetY, color);
+        this.screenVertex(endX - offsetX, endY - offsetY, color);
+        this.screenVertex(startX + offsetX, startY + offsetY, color);
+        this.screenVertex(endX - offsetX, endY - offsetY, color);
+        this.screenVertex(startX - offsetX, startY - offsetY, color);
     }
     vertex(x, y, color) {
+        const [screenX, screenY] = this.transformPoint(x, y);
+        this.screenVertex(screenX, screenY, color);
+    }
+    transformPoint(x, y) {
         const safeX = coordinate(x);
         const safeY = coordinate(y);
         const [a, b, c, d, e, f] = this.transform;
-        this.vertices.push(a * safeX + c * safeY + e, b * safeX + d * safeY + f, ...color);
+        return [
+            drawableCoordinate(a * safeX + c * safeY + e),
+            drawableCoordinate(b * safeX + d * safeY + f),
+        ];
+    }
+    screenVertex(x, y, color) {
+        this.vertices.push(drawableCoordinate(x), drawableCoordinate(y), ...color);
     }
 }
 class Canvas2DTextOverlay {
-    constructor(canvas, context) {
+    constructor(canvas, context, target, wrapper, originalDisplay, originalGridArea) {
         this.canvas = canvas;
         this.context = context;
+        this.target = target;
+        this.wrapper = wrapper;
+        this.originalDisplay = originalDisplay;
+        this.originalGridArea = originalGridArea;
     }
     static attach(target, documentObject) {
         const parent = target.parentElement;
@@ -356,15 +381,30 @@ class Canvas2DTextOverlay {
         if (context === null) {
             return undefined;
         }
+        const wrapper = documentObject.createElement("div");
+        const originalDisplay = target.style.display;
+        const originalGridArea = target.style.gridArea;
         canvas.id = target.id === "" ? "polygl-text-overlay" : `${target.id}-text`;
         canvas.setAttribute("aria-hidden", "true");
-        Object.assign(target.style, { gridArea: "1 / 1" });
-        Object.assign(canvas.style, {
-            gridArea: "1 / 1",
-            pointerEvents: "none",
+        Object.assign(wrapper.style, {
+            display: "inline-block",
+            lineHeight: "0",
+            position: "relative",
         });
-        parent.append(canvas);
-        return new Canvas2DTextOverlay(canvas, context);
+        Object.assign(target.style, {
+            display: "block",
+            gridArea: "1 / 1",
+        });
+        Object.assign(canvas.style, {
+            inset: "0",
+            height: "100%",
+            pointerEvents: "none",
+            position: "absolute",
+            width: "100%",
+        });
+        parent.insertBefore(wrapper, target);
+        wrapper.append(target, canvas);
+        return new Canvas2DTextOverlay(canvas, context, target, wrapper, originalDisplay, originalGridArea);
     }
     resize(width, height) {
         this.canvas.width = width;
@@ -383,7 +423,9 @@ class Canvas2DTextOverlay {
         this.context.restore();
     }
     dispose() {
-        this.canvas.remove();
+        this.target.style.display = this.originalDisplay;
+        this.target.style.gridArea = this.originalGridArea;
+        this.wrapper.replaceWith(this.target);
     }
 }
 function multiply(left, right) {
@@ -403,6 +445,18 @@ function coordinate(value) {
         throw new RangeError("shape coordinates must be finite numbers");
     }
     return value;
+}
+function drawableCoordinate(value) {
+    if (!Number.isFinite(value) || Math.abs(value) > MAX_FLOAT32) {
+        throw new RangeError("transformed coordinates must fit in a finite float");
+    }
+    return value;
+}
+function finiteMatrix(matrix) {
+    if (matrix.some((value) => !Number.isFinite(value))) {
+        throw new RangeError("the current transform must remain finite");
+    }
+    return matrix;
 }
 function createProgram(gl) {
     const vertex = compileShader(gl, gl.VERTEX_SHADER, `#version 300 es
@@ -768,16 +822,33 @@ export class RuntimeSession {
             }
         };
         this.handlePointerMove = (event) => {
-            this.updatePointerPosition(event);
+            if (!this.updatePointerPosition(event)) {
+                return;
+            }
             this.dispatchPointerEvent("pointermove");
         };
         this.handlePointerDown = (event) => {
-            this.updatePointerPosition(event);
+            if (!this.updatePointerPosition(event)) {
+                return;
+            }
+            this.canvas.setPointerCapture?.(event.pointerId);
             this.dispatchPointerEvent("pointerdown");
         };
         this.handlePointerUp = (event) => {
-            this.updatePointerPosition(event);
-            this.dispatchPointerEvent("pointerup");
+            if (this.updatePointerPosition(event)) {
+                this.dispatchPointerEvent("pointerup");
+            }
+            if (this.canvas.hasPointerCapture?.(event.pointerId)) {
+                this.canvas.releasePointerCapture(event.pointerId);
+            }
+        };
+        this.handlePointerCancel = (event) => {
+            if (this.updatePointerPosition(event)) {
+                this.dispatchPointerEvent("pointercancel");
+            }
+            if (this.canvas.hasPointerCapture?.(event.pointerId)) {
+                this.canvas.releasePointerCapture(event.pointerId);
+            }
         };
         this.handleKeyDown = (event) => {
             this.pressedKeys.add(event.key);
@@ -797,7 +868,11 @@ export class RuntimeSession {
                 key: event.key,
             });
         };
+        this.handleBlur = () => {
+            this.pressedKeys.clear();
+        };
         this.documentObject = options.document ?? globalThis.document;
+        this.windowObject = this.documentObject?.defaultView ?? undefined;
         this.renderer = new WebGL2BatchRenderer(canvas, options.context, this.documentObject);
         this.shaderRegistry = WebGL2ShaderRegistry.fromBundle(this.renderer.context);
         this.initialShaderBundle = options.shaderBundle;
@@ -851,8 +926,10 @@ export class RuntimeSession {
         this.canvas.removeEventListener("pointermove", this.handlePointerMove);
         this.canvas.removeEventListener("pointerdown", this.handlePointerDown);
         this.canvas.removeEventListener("pointerup", this.handlePointerUp);
+        this.canvas.removeEventListener("pointercancel", this.handlePointerCancel);
         this.documentObject?.removeEventListener("keydown", this.handleKeyDown);
         this.documentObject?.removeEventListener("keyup", this.handleKeyUp);
+        this.windowObject?.removeEventListener("blur", this.handleBlur);
         this.renderer.dispose();
         this.shaderRegistry.dispose();
         this.onStop();
@@ -873,16 +950,19 @@ export class RuntimeSession {
         this.canvas.addEventListener("pointermove", this.handlePointerMove);
         this.canvas.addEventListener("pointerdown", this.handlePointerDown);
         this.canvas.addEventListener("pointerup", this.handlePointerUp);
+        this.canvas.addEventListener("pointercancel", this.handlePointerCancel);
         this.documentObject?.addEventListener("keydown", this.handleKeyDown);
         this.documentObject?.addEventListener("keyup", this.handleKeyUp);
+        this.windowObject?.addEventListener("blur", this.handleBlur);
     }
     updatePointerPosition(event) {
         const bounds = this.canvas.getBoundingClientRect();
         if (bounds.width <= 0 || bounds.height <= 0) {
-            return;
+            return false;
         }
         this.mouseX = ((event.clientX - bounds.left) / bounds.width) * this.canvas.width;
         this.mouseY = ((event.clientY - bounds.top) / bounds.height) * this.canvas.height;
+        return Number.isFinite(this.mouseX) && Number.isFinite(this.mouseY);
     }
     dispatchPointerEvent(kind) {
         this.dispatchEvent({

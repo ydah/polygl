@@ -14,14 +14,16 @@ not possible after that canvas has acquired a WebGL2 context.
 
 ## Decision
 
-Keep primitive fills and one-pixel strokes in the WebGL2 triangle batch. Apply
-a session-local affine matrix to vertices as they enter the batch, with an
-explicit push/pop stack and a checked underflow error.
+Keep primitive fills and screen-space one-pixel strokes in the WebGL2 triangle
+batch. Apply a session-local affine matrix to filled vertices as they enter the
+batch, with an explicit push/pop stack and a checked underflow error. Transform
+stroke endpoints first and construct their one-pixel quad in screen space.
 
-Attach a same-sized, pointer-transparent Canvas2D canvas above the WebGL canvas
-for text. Text uses the current fill color and affine transform. Resizing keeps
-both drawing buffers aligned, `background` clears both layers, and stopping the
-session removes the owned overlay.
+Place the WebGL canvas and a same-sized, pointer-transparent Canvas2D canvas in
+a runtime-owned grid wrapper for text. Text uses the current fill color and
+affine transform. Resizing keeps both drawing buffers aligned, `background`
+clears both layers, and stopping the session removes the owned wrapper while
+restoring the WebGL canvas to its original parent.
 
 ## Consequences
 

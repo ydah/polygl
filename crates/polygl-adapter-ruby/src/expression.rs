@@ -98,7 +98,7 @@ impl Lowerer<'_, '_, '_> {
                 let operand = self.lower_expression(&receiver)?;
                 return Some(Expr::new(ExprKind::FalsyCheck(Box::new(operand)), span));
             }
-            if arguments.is_empty() {
+            if arguments.is_empty() && is_builtin_event_field(&name) {
                 let base = self.lower_expression(&receiver)?;
                 return Some(Expr::new(
                     ExprKind::Field {
@@ -177,4 +177,8 @@ fn vector_size(name: &str) -> Option<u8> {
         "vec4" => Some(4),
         _ => None,
     }
+}
+
+fn is_builtin_event_field(name: &str) -> bool {
+    matches!(name, "kind" | "x" | "y" | "key")
 }
