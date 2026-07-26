@@ -14,6 +14,7 @@ pub(crate) struct Lowerer<'source, 'context, 'resolver> {
     pub(crate) declared: HashSet<String>,
     pub(crate) annotations: Annotations,
     pub(crate) loop_depth: usize,
+    pub(crate) temporary_index: usize,
 }
 
 impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
@@ -29,6 +30,7 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
             declared: HashSet::new(),
             annotations,
             loop_depth: 0,
+            temporary_index: 0,
         }
     }
 
@@ -99,7 +101,7 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
             self.lower_statements(Some(statements), fallback)
         } else {
             let span = self.span(body.location());
-            let statements = self.lower_statement(&body).into_iter().collect();
+            let statements = self.lower_statement(&body).unwrap_or_default();
             Block { statements, span }
         }
     }
@@ -119,6 +121,7 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
         let lowered = body
             .iter()
             .filter_map(|node| self.lower_statement(&node))
+            .flatten()
             .collect();
         Block {
             statements: lowered,
@@ -138,11 +141,32 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
     }
 
     pub(crate) fn unsupported(&mut self, node: &Node<'_>, message: &str, suggestion: &str) {
+        self.unsupported_with_code(node, "E0200", message, suggestion);
+    }
+
+    pub(crate) fn unsupported_with_code(
+        &mut self,
+        node: &Node<'_>,
+        code: &str,
+        message: &str,
+        suggestion: &str,
+    ) {
         let span = self.span(node.location());
         self.diagnostics.push(
-            Diagnostic::new(Severity::Error, "E0200", message, span)
+            Diagnostic::new(Severity::Error, code, message, span)
                 .with_suggestion(Suggestion::rewrite(span, suggestion)),
         );
+    }
+
+    pub(crate) fn temporary(&mut self, purpose: &str) -> String {
+        loop {
+            let index = self.temporary_index;
+            self.temporary_index += 1;
+            let name = format!("__pgl_{purpose}_{index}");
+            if !self.declared.contains(&name) {
+                return name;
+            }
+        }
     }
 
     pub(crate) fn span(&self, location: Location<'_>) -> Span {

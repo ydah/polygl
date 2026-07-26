@@ -16,13 +16,18 @@ execute Ruby code or load gems.
 | Local declaration/write | `name = value` | first write is `Let`, later writes are `Assign` |
 | Conditional | `if` / `elsif` / `else` | structured `If` |
 | Loop | `while condition` | structured `While` |
+| Counted block | `n.times { |i| ... }` | exclusive range `For` from zero |
+| Collection block | range/array `.each { |item| ... }` | range or index-ascending `For` |
 | Loop control | `break` / `next` | `Break` / `Continue` |
+| Array | `[a, b]`, `values[index]` | homogeneous `Array`, `Index` |
+| String-keyed map | `{"key" => value}` or `{key: value}` | homogeneous `Map`, `Index` |
 | Function result | explicit `return` or final expression | `Return` in ordinary functions |
 | Call | `name(args)` | builtin ID when registered, otherwise user function |
 
-M1 supports required positional parameters, integer and float literals, UTF-8
+The adapter supports required positional parameters, integer and float literals, UTF-8
 strings, booleans, `nil`, local variables, arithmetic, comparison, boolean
-operators, parentheses, and plain calls.
+operators, parentheses, plain calls, homogeneous arrays and maps, and indexed
+reads and writes. Array splats and hash splats remain unsupported.
 
 Place `# @pgl name: type` immediately before the containing `def` for a
 parameter, or immediately before a local variable's first assignment, when
@@ -46,14 +51,17 @@ or non-adjacent directives produce E0314.
   lowering; write explicit `nil` when an absent value is intended.
 - Ruby `==` and `!=` map to typed HIR equality and inequality.
 - `&&` and `||` remain structured short-circuit operators.
+- `times` and `each` blocks are syntax only: they lower to structured loops and
+  never become closure values. Array receivers are evaluated once before an
+  index-ascending loop.
 
-## Deliberately unsupported in M1
+## Deliberately unsupported
 
 Top-level executable statements, optional/keyword/rest parameters, receiver
 method dispatch, dynamic method definition, post-test loops, multiple return
-values, interpolation, arrays, hashes, classes, and general blocks produce
-E02xx diagnostics with rewrite suggestions. The M3 adapter extension adds the
-specified array, hash, class, `times`, and `each` subset.
+values, interpolation, collection splats, and general blocks produce E02xx
+diagnostics with rewrite suggestions. Blocks other than direct `times` and
+`each` statements, including stored or returned blocks, produce E0202.
 
 Because HIR locals are lexical, a Ruby local first assigned inside a nested
 conditional or loop remains local to that HIR block. Initialize it in the

@@ -20,9 +20,78 @@ fn advertises_ruby_core_capabilities() {
         &[
             FeatureTag::Core,
             FeatureTag::Tier1,
+            FeatureTag::Arrays,
+            FeatureTag::Maps,
+            FeatureTag::TimesBlockSugar,
+            FeatureTag::EachBlockSugar,
             FeatureTag::TruthinessSugar
         ]
     );
+}
+
+#[test]
+fn lowers_arrays_maps_and_index_places() {
+    let module = lower(
+        r#"
+def setup
+  values = [1, 2, 3]
+  values[0] = 4
+  labels = {"left" => 5, right: 6}
+  line(values[0], labels["left"], values[1], labels[:right])
+end
+"#,
+    )
+    .expect("collection literals and indexing should lower");
+    let text = dump(&module);
+    assert!(text.contains("let values = [1, 2, 3];"));
+    assert!(text.contains("values[0] = 4;"));
+    assert!(text.contains(r#"let labels = {"left": 5, "right": 6};"#));
+    assert!(text.contains(r#"builtin#10(values[0], labels["left"], values[1], labels["right"]);"#));
+}
+
+#[test]
+fn expands_whitelisted_blocks_to_structured_loops() {
+    let module = lower(
+        r#"
+def setup
+  total = 0
+  3.times do |index|
+    total = total + index
+  end
+  (1..3).each do |value|
+    total = total + value
+  end
+  values = [4, 5]
+  values.each do |value|
+    total = total + value
+  end
+end
+"#,
+    )
+    .expect("times, range each, and array each should lower");
+    let text = dump(&module);
+    assert!(text.contains("for index in 0..3"));
+    assert!(text.contains("for value in 1..=3"));
+    assert!(text.contains("array_length(__pgl_each_values_"));
+    assert!(text.contains("__pgl_each_values_"));
+    assert!(text.contains("[__pgl_each_index_"));
+    assert_eq!(text.matches("total = (total +").count(), 3);
+}
+
+#[test]
+fn rejects_non_whitelisted_and_escaping_blocks_with_e0202() {
+    for source in [
+        "def setup\n  values = [1]\n  values.map { |value| value + 1 }\nend\n",
+        "def setup\n  callback = proc { line(0, 0, 1, 1) }\nend\n",
+        "def invoke(&callback)\n  callback.call\nend\n",
+    ] {
+        let diagnostics = lower(source).expect_err("general blocks must be rejected");
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "E0202" && diagnostic.suggestion.is_some()
+            })
+        );
+    }
 }
 
 #[test]

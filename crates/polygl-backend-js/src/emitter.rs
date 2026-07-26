@@ -517,6 +517,11 @@ impl<'source> Emitter<'source> {
                 self.write(&json_string(field));
                 self.write("]");
             }
+            ExprKind::ArrayLength(value) => {
+                self.write("(");
+                self.expression(value)?;
+                self.write(").length");
+            }
             ExprKind::Array(items) => {
                 self.write("[");
                 self.expressions(items)?;

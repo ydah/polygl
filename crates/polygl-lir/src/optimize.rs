@@ -82,6 +82,7 @@ fn optimize_expression(expression: &mut Expr, domain: Domain) {
         }
         ExprKind::Unary { operand, .. }
         | ExprKind::Field { base: operand, .. }
+        | ExprKind::ArrayLength(operand)
         | ExprKind::IsNil(operand)
         | ExprKind::IsFalsy(operand) => optimize_expression(operand, domain),
         ExprKind::Call { args, .. } | ExprKind::Array(args) | ExprKind::Vector { args, .. } => {

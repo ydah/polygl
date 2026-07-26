@@ -271,6 +271,21 @@ impl Analyzer {
                 self.annotated_field_type(&base, field.as_str())
                     .unwrap_or(Type::Unit)
             }
+            ExprKind::ArrayLength(value) => {
+                let value_type = self.annotate_expr(value, environment);
+                if !matches!(value_type, Type::Array(_)) {
+                    let element = self.solver.fresh();
+                    self.solve_error(
+                        crate::solver::SolveError::Mismatch {
+                            expected: InferType::Array(Box::new(element)),
+                            actual: InferType::from_type(&value_type),
+                        },
+                        span,
+                        "E0303",
+                    );
+                }
+                Type::Int
+            }
             ExprKind::Array(items) => {
                 let mut element = None;
                 for item in items {

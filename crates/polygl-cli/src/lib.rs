@@ -589,6 +589,50 @@ end
     }
 
     #[test]
+    fn builds_ruby_collections_and_block_sugar() {
+        let temporary = temporary_directory();
+        let source = temporary.join("collections.rb");
+        fs::write(
+            &source,
+            r#"def setup
+  total = 0
+  values = [1, 2, 3]
+  values[0] = 4
+  labels = {left: 5, "right" => 6}
+  values.each do |value|
+    total = total + value
+  end
+  2.times do |index|
+    total = total + index
+  end
+  (1..2).each do |value|
+    total = total + value
+  end
+  line(values[0], labels["left"], total, labels[:right])
+end
+"#,
+        )
+        .unwrap();
+        let output = temporary.join("web");
+        run(
+            arguments([
+                "build",
+                source.to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+            ]),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let javascript = fs::read_to_string(output.join("app.js")).unwrap();
+        assert!(javascript.contains("Object.fromEntries"));
+        assert!(javascript.contains(").length"));
+        assert!(javascript.contains("__pglRuntime.checkedIndex"));
+        assert!(javascript.contains("__pglRangeIndex"));
+        fs::remove_dir_all(temporary).unwrap();
+    }
+
+    #[test]
     fn check_renders_source_diagnostics_and_dump_hir_is_typed() {
         let temporary = temporary_directory();
         let invalid = temporary.join("invalid.rb");

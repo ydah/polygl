@@ -580,6 +580,9 @@ impl<'module> Emitter<'module> {
                 Ok(format!("(!{})", self.expression(value)?))
             }
             ExprKind::IsFalsy(value) => Ok(format!("(({}), false)", self.expression(value)?)),
+            ExprKind::ArrayLength(_) => {
+                Err(EmitError::UnsupportedExpression("dynamic array length"))
+            }
             ExprKind::Array(_) => Err(EmitError::UnsupportedExpression("dynamic array")),
             ExprKind::Map(_) => Err(EmitError::UnsupportedExpression("map")),
         }
@@ -843,6 +846,7 @@ fn expr_uses_time(expression: &Expr) -> bool {
         } => expr_uses_time(left) || expr_uses_time(right),
         ExprKind::Unary { operand, .. }
         | ExprKind::Field { base: operand, .. }
+        | ExprKind::ArrayLength(operand)
         | ExprKind::IsNil(operand)
         | ExprKind::IsFalsy(operand) => expr_uses_time(operand),
         ExprKind::Array(items) | ExprKind::Vector { args: items, .. } => {

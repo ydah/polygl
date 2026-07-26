@@ -329,6 +329,9 @@ impl Lowerer {
                 base: Box::new(self.lower_expr(base)),
                 field: field.as_str().to_owned(),
             },
+            hir::ExprKind::ArrayLength(value) => {
+                ExprKind::ArrayLength(Box::new(self.lower_expr(value)))
+            }
             hir::ExprKind::Array(items) => {
                 ExprKind::Array(items.iter().map(|item| self.lower_expr(item)).collect())
             }

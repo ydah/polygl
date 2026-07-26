@@ -18,6 +18,10 @@ use crate::lowerer::Lowerer;
 const CAPABILITIES: &[FeatureTag] = &[
     FeatureTag::Core,
     FeatureTag::Tier1,
+    FeatureTag::Arrays,
+    FeatureTag::Maps,
+    FeatureTag::TimesBlockSugar,
+    FeatureTag::EachBlockSugar,
     FeatureTag::TruthinessSugar,
 ];
 

@@ -50,6 +50,7 @@ pub enum ExprKind {
         base: Box<Expr>,
         field: String,
     },
+    ArrayLength(Box<Expr>),
     Array(Vec<Expr>),
     Map(Vec<MapEntry>),
     Struct {

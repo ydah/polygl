@@ -258,6 +258,7 @@ fn collect_expr_dependencies(
         }
         ExprKind::Unary { operand, .. }
         | ExprKind::Field { base: operand, .. }
+        | ExprKind::ArrayLength(operand)
         | ExprKind::IsNil(operand)
         | ExprKind::IsFalsy(operand) => {
             collect_expr_dependencies(operand, functions, constants);

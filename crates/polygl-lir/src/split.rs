@@ -743,6 +743,15 @@ impl<'module> Validator<'module> {
                     self.inspect_expr(item);
                 }
             }
+            ExprKind::ArrayLength(value) => {
+                self.error(
+                    "E0403",
+                    "dynamic array length is unavailable in GPU code",
+                    expression.span,
+                    "keep array iteration in Host code",
+                );
+                self.inspect_expr(value);
+            }
             ExprKind::Map(entries) => {
                 self.error(
                     "E0403",
@@ -935,6 +944,7 @@ fn collect_expr_constants(expression: &Expr, constants: &mut Vec<String>) {
         }
         ExprKind::Unary { operand, .. }
         | ExprKind::Field { base: operand, .. }
+        | ExprKind::ArrayLength(operand)
         | ExprKind::IsNil(operand)
         | ExprKind::IsFalsy(operand) => collect_expr_constants(operand, constants),
         ExprKind::Array(items) => {
@@ -1079,6 +1089,7 @@ fn collect_expr_calls(expression: &Expr, calls: &mut Vec<String>) {
         }
         ExprKind::Unary { operand, .. }
         | ExprKind::Field { base: operand, .. }
+        | ExprKind::ArrayLength(operand)
         | ExprKind::IsNil(operand)
         | ExprKind::IsFalsy(operand) => collect_expr_calls(operand, calls),
         ExprKind::Array(items) | ExprKind::Vector { args: items, .. } => {
@@ -1196,6 +1207,7 @@ fn collect_material_references_expr(
         }
         ExprKind::Unary { operand, .. }
         | ExprKind::Field { base: operand, .. }
+        | ExprKind::ArrayLength(operand)
         | ExprKind::IsNil(operand)
         | ExprKind::IsFalsy(operand) => {
             collect_material_references_expr(operand, operation, references);

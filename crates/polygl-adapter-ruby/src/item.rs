@@ -62,12 +62,20 @@ impl Lowerer<'_, '_, '_> {
         let Some(parameters) = definition.parameters() else {
             return Some(Vec::new());
         };
+        if parameters.block().is_some() {
+            self.unsupported_with_code(
+                &parameters.as_node(),
+                "E0202",
+                "block parameters would create escaping closure values",
+                "replace the block parameter with a plain function and call it directly",
+            );
+            return None;
+        }
         if !parameters.optionals().is_empty()
             || parameters.rest().is_some()
             || !parameters.posts().is_empty()
             || !parameters.keywords().is_empty()
             || parameters.keyword_rest().is_some()
-            || parameters.block().is_some()
         {
             self.unsupported(
                 &parameters.as_node(),

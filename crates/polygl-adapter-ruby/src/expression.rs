@@ -1,5 +1,5 @@
-use polygl_hir::{BinOp, Callee, Expr, ExprKind, Literal, Symbol};
-use ruby_prism::{CallNode, Node};
+use polygl_hir::{BinOp, Callee, Expr, ExprKind, Literal, MapEntry, Symbol};
+use ruby_prism::{ArrayNode, CallNode, HashNode, Node};
 
 use crate::lowerer::Lowerer;
 use crate::operator::{binary_operator, unary_operator};
@@ -23,6 +23,18 @@ impl Lowerer<'_, '_, '_> {
                     return None;
                 }
             }
+        } else if let Some(symbol) = node.as_symbol_node() {
+            match std::str::from_utf8(symbol.unescaped()) {
+                Ok(value) => ExprKind::Literal(Literal::Str(value.to_owned())),
+                Err(_) => {
+                    self.unsupported(
+                        node,
+                        "binary Ruby symbols are outside Common Core",
+                        "use a UTF-8 string literal",
+                    );
+                    return None;
+                }
+            }
         } else if node.as_true_node().is_some() {
             ExprKind::Literal(Literal::Bool(true))
         } else if node.as_false_node().is_some() {
@@ -40,6 +52,10 @@ impl Lowerer<'_, '_, '_> {
                 return None;
             }
             ExprKind::Var(Symbol::new(name))
+        } else if let Some(array) = node.as_array_node() {
+            return self.lower_array(&array);
+        } else if let Some(hash) = node.as_hash_node() {
+            return self.lower_hash(&hash);
         } else if let Some(call) = node.as_call_node() {
             return self.lower_call(&call);
         } else if let Some(and) = node.as_and_node() {
@@ -64,12 +80,12 @@ impl Lowerer<'_, '_, '_> {
         let span = self.span(call.location());
         let name = self.name(call.name().as_slice());
         if call.block().is_some() {
-            let suggestion = if name == "times" || name == "each" {
-                "rewrite this block as a `while` loop until block sugar is enabled"
-            } else {
-                "move the block body into a regular function"
-            };
-            self.unsupported(&node, "this Ruby block is outside Common Core", suggestion);
+            self.unsupported_with_code(
+                &node,
+                "E0202",
+                "Ruby blocks are only supported as direct `times` or `each` statements",
+                "rewrite this expression as a direct loop or move the block body into a plain function",
+            );
             return None;
         }
 
@@ -77,6 +93,17 @@ impl Lowerer<'_, '_, '_> {
             let arguments = call
                 .arguments()
                 .map_or_else(Vec::new, |arguments| arguments.arguments().iter().collect());
+            if name == "[]" && arguments.len() == 1 {
+                let base = self.lower_expression(&receiver)?;
+                let index = self.lower_expression(&arguments[0])?;
+                return Some(Expr::new(
+                    ExprKind::Index {
+                        base: Box::new(base),
+                        index: Box::new(index),
+                    },
+                    span,
+                ));
+            }
             if let Some(operator) = binary_operator(&name)
                 && arguments.len() == 1
             {
@@ -144,6 +171,69 @@ impl Lowerer<'_, '_, '_> {
             }
         }
         Some(result)
+    }
+
+    fn lower_array(&mut self, array: &ArrayNode<'_>) -> Option<Expr> {
+        let node = array.as_node();
+        if array.is_contains_splat() {
+            self.unsupported(
+                &node,
+                "array splats are outside Common Core",
+                "list each array element explicitly",
+            );
+            return None;
+        }
+        let mut items = Vec::new();
+        for element in array.elements().iter() {
+            items.push(self.lower_expression(&element)?);
+        }
+        Some(Expr::new(
+            ExprKind::Array(items),
+            self.span(array.location()),
+        ))
+    }
+
+    fn lower_hash(&mut self, hash: &HashNode<'_>) -> Option<Expr> {
+        let mut entries = Vec::new();
+        for element in hash.elements().iter() {
+            let Some(association) = element.as_assoc_node() else {
+                self.unsupported(
+                    &element,
+                    "hash splats are outside Common Core",
+                    "list each string-keyed hash entry explicitly",
+                );
+                return None;
+            };
+            let key_node = association.key();
+            let key = if let Some(symbol) = key_node.as_symbol_node() {
+                match std::str::from_utf8(symbol.unescaped()) {
+                    Ok(value) => Expr::new(
+                        ExprKind::Literal(Literal::Str(value.to_owned())),
+                        self.span(symbol.location()),
+                    ),
+                    Err(_) => {
+                        self.unsupported(
+                            &key_node,
+                            "binary Ruby symbols cannot be Common Core map keys",
+                            "use a UTF-8 string key",
+                        );
+                        return None;
+                    }
+                }
+            } else {
+                self.lower_expression(&key_node)?
+            };
+            let value = self.lower_expression(&association.value())?;
+            entries.push(MapEntry {
+                key,
+                value,
+                span: self.span(association.location()),
+            });
+        }
+        Some(Expr::new(
+            ExprKind::Map(entries),
+            self.span(hash.location()),
+        ))
     }
 
     fn lower_parentheses(&mut self, body: Option<Node<'_>>, parent: &Node<'_>) -> Option<Expr> {

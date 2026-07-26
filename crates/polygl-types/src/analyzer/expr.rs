@@ -70,6 +70,26 @@ impl Analyzer {
                 let base = self.solver.resolve(&inferred_base);
                 self.field_type(base, field.as_str(), span)
             }
+            ExprKind::ArrayLength(value) => {
+                let inferred = self.infer_expr(value, context);
+                let resolved = self.solver.resolve(&inferred);
+                match resolved {
+                    InferType::Array(_) => InferType::Int,
+                    InferType::Error => InferType::Error,
+                    actual => {
+                        let element = self.solver.fresh();
+                        self.solve_error(
+                            SolveError::Mismatch {
+                                expected: InferType::Array(Box::new(element)),
+                                actual,
+                            },
+                            span,
+                            "E0303",
+                        );
+                        InferType::Error
+                    }
+                }
+            }
             ExprKind::Array(items) => {
                 let mut element = self.solver.fresh();
                 for item in items {

@@ -34,6 +34,7 @@ impl Dumper {
             ExprKind::Field { base, field } => {
                 format!("{}.{}", self.expression(base), field)
             }
+            ExprKind::ArrayLength(value) => format!("array_length({})", self.expression(value)),
             ExprKind::Array(items) => self.expression_list("[", items, "]"),
             ExprKind::Map(entries) => {
                 let entries = entries

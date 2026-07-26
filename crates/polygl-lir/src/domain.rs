@@ -217,6 +217,7 @@ fn inspect_expr(expression: &Expr, facts: &mut NodeFacts) {
         }
         ExprKind::Unary { operand, .. }
         | ExprKind::Field { base: operand, .. }
+        | ExprKind::ArrayLength(operand)
         | ExprKind::IsNil(operand)
         | ExprKind::IsFalsy(operand) => inspect_expr(operand, facts),
         ExprKind::Call { target, args } => {
