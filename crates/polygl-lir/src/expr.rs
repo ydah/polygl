@@ -19,7 +19,10 @@ impl Expr {
     pub const fn is_trivially_pure(&self) -> bool {
         matches!(
             self.kind,
-            ExprKind::Literal(_) | ExprKind::Variable(_) | ExprKind::Constant(_)
+            ExprKind::Literal(_)
+                | ExprKind::Variable(_)
+                | ExprKind::Constant(_)
+                | ExprKind::Uniform(_)
         )
     }
 }
@@ -29,6 +32,7 @@ pub enum ExprKind {
     Literal(Literal),
     Variable(String),
     Constant(String),
+    Uniform(String),
     Binary {
         op: BinaryOp,
         left: Box<Expr>,

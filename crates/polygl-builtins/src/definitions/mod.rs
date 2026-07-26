@@ -2,6 +2,7 @@ mod core;
 mod drawing;
 mod environment;
 mod materials;
+mod scene;
 mod structures;
 
 use crate::{
@@ -69,6 +70,21 @@ pub(crate) static BUILTINS: &[Builtin] = &[
     environment::KEY_DOWN,
     environment::RANDOM,
     materials::MATERIAL_SHADER,
+    scene::MESH_BOX,
+    scene::MESH_SPHERE,
+    scene::MESH_PLANE,
+    scene::MESH_FROM,
+    materials::MATERIAL_BASIC,
+    scene::NODE_ADD,
+    scene::NODE_SET_POS,
+    scene::NODE_SET_ROT,
+    scene::NODE_SET_SCALE,
+    scene::CAMERA_PERSPECTIVE,
+    scene::CAMERA_LOOK_AT,
+    scene::LIGHT_DIRECTIONAL,
+    scene::TEXTURE_LOAD,
+    scene::SHADER_SET,
+    scene::SAMPLE,
 ];
 
 pub(crate) static BUILTIN_STRUCTS: &[crate::BuiltinStruct] = &[structures::EVENT];

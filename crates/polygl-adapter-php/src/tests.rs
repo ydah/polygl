@@ -67,6 +67,7 @@ fn advertises_php_capabilities() {
         &[
             FeatureTag::Core,
             FeatureTag::Tier1,
+            FeatureTag::Tier2,
             FeatureTag::Arrays,
             FeatureTag::Maps,
             FeatureTag::Classes,
@@ -98,6 +99,29 @@ function setup() {
     assert!(text.contains(r#"("x=" str++ "value")"#), "{text}");
     assert!(text.contains("let values = [1, 2, 3];"), "{text}");
     assert!(text.contains(r#""left": 4"#), "{text}");
+}
+
+#[test]
+fn lowers_annotated_user_and_automatic_shader_uniforms() {
+    let module = lower(
+        r#"<?php
+/** @pgl $position: vec3 */
+function vertex_textured($position) {
+    return $u_proj * $u_view * $u_model * vec4($position, 1.0);
+}
+
+/** @pgl $texture_map: Texture */
+function fragment_textured() {
+    return sample($texture_map, vec2(0.5, 0.5));
+}
+"#,
+    )
+    .expect("PHP shader uniforms should lower");
+    let text = dump(&module);
+    assert!(text.contains("uniform<u_proj: mat4>"), "{text}");
+    assert!(text.contains("uniform<u_model: mat4>"), "{text}");
+    assert!(text.contains("uniform<texture_map: Texture>"), "{text}");
+    polygl_types::analyze(&module).expect("shader uniforms should type-check");
 }
 
 #[test]
@@ -344,6 +368,12 @@ fn rejects_unstable_for_bounds_and_constructor_self_reads() {
 fn native_hint_annotations_are_consumed_and_conflicts_are_precise() {
     lower("<?php /** @pgl $x: float */ function scale(float $x): float { return $x; }")
         .expect("a matching redundant annotation is consumed");
+
+    let module =
+        lower("<?php function move(Node $node): void { node_set_pos($node, 1.0, 2.0, 3.0); }")
+            .expect("opaque handle hints should lower");
+    let text = dump(&module);
+    assert!(text.contains("fn move(node: Node) -> void"), "{text}");
 
     let diagnostics =
         lower("<?php /** @pgl $x: int */ function scale(float $x): float { return $x; }")

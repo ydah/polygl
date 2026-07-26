@@ -70,6 +70,9 @@ impl BuiltinResolver for BuiltinTable {
 }
 
 fn validate_signature(builtin: &Builtin) -> Result<(), BuiltinTableError> {
+    if builtin.signature.result == BuiltinType::ShaderValue {
+        return Err(BuiltinTableError::ParameterOnlyResult(builtin.name));
+    }
     let mut saw_optional = false;
     let mut names = HashSet::new();
     for param in builtin.signature.params {
@@ -181,6 +184,7 @@ pub enum BuiltinTableError {
     InvalidStructField(&'static str, &'static str),
     DuplicateStructField(&'static str, &'static str),
     VoidStructField(&'static str, &'static str),
+    ParameterOnlyResult(&'static str),
 }
 
 impl fmt::Display for BuiltinTableError {
@@ -229,6 +233,9 @@ impl fmt::Display for BuiltinTableError {
             }
             Self::VoidStructField(structure, field) => {
                 write!(formatter, "`{structure}` field `{field}` has type void")
+            }
+            Self::ParameterOnlyResult(name) => {
+                write!(formatter, "`{name}` returns a parameter-only builtin type")
             }
         }
     }

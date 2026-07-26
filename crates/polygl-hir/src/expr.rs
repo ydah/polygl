@@ -31,6 +31,10 @@ impl Expr {
 pub enum ExprKind {
     Literal(Literal),
     Var(Symbol),
+    Uniform {
+        name: Symbol,
+        declared: TypeExpr,
+    },
     Binary {
         op: BinOp,
         left: Box<Expr>,

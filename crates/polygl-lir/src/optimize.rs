@@ -71,7 +71,10 @@ fn optimize_place(place: &mut Place, domain: Domain) {
 
 fn optimize_expression(expression: &mut Expr, domain: Domain) {
     match &mut expression.kind {
-        ExprKind::Literal(_) | ExprKind::Variable(_) | ExprKind::Constant(_) => {}
+        ExprKind::Literal(_)
+        | ExprKind::Variable(_)
+        | ExprKind::Constant(_)
+        | ExprKind::Uniform(_) => {}
         ExprKind::Binary { left, right, .. }
         | ExprKind::Index {
             base: left,

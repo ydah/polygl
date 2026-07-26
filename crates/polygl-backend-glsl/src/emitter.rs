@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 
 use polygl_lir::{
@@ -7,7 +7,7 @@ use polygl_lir::{
 };
 use polygl_types::Type;
 
-use crate::{AttributeBinding, EmitError, ShaderStage};
+use crate::{AttributeBinding, EmitError, ShaderStage, UniformBinding, UniformSource};
 
 const PREAMBLE: &str = "#version 300 es\nprecision highp float;\nprecision highp int;\n\n";
 
@@ -39,6 +39,35 @@ pub(crate) fn uses_time(module: &Module) -> bool {
             .entries
             .iter()
             .any(|entry| block_uses_time(&entry.body))
+}
+
+pub(crate) fn uniform_bindings(module: &Module) -> Result<Vec<UniformBinding>, EmitError> {
+    let mut uniforms = BTreeMap::<String, Type>::new();
+    for constant in &module.constants {
+        collect_expr_uniforms(&constant.value, &mut uniforms)?;
+    }
+    for function in &module.functions {
+        collect_block_uniforms(&function.body, &mut uniforms)?;
+    }
+    for entry in &module.entries {
+        collect_block_uniforms(&entry.body, &mut uniforms)?;
+    }
+    if uses_time(module) {
+        insert_uniform(&mut uniforms, "u_time", &Type::Float)?;
+    }
+    Ok(uniforms
+        .into_iter()
+        .map(|(name, ty)| UniformBinding {
+            glsl_name: uniform_name(&name),
+            source: if is_automatic_uniform(&name) {
+                UniformSource::Automatic
+            } else {
+                UniformSource::User
+            },
+            name,
+            ty,
+        })
+        .collect())
 }
 
 pub(crate) struct Emitter<'module> {
@@ -140,8 +169,12 @@ impl<'module> Emitter<'module> {
     }
 
     fn emit_interface(&mut self) -> Result<(), EmitError> {
-        if uses_time(self.module) {
-            self.line("uniform float u_time;");
+        for uniform in uniform_bindings(self.module)? {
+            self.line(&format!(
+                "uniform {} {};",
+                glsl_type(&uniform.ty)?,
+                uniform.glsl_name
+            ));
         }
         match self.stage {
             ShaderStage::Vertex => {
@@ -521,6 +554,7 @@ impl<'module> Emitter<'module> {
             ExprKind::Literal(literal) => literal_value(literal),
             ExprKind::Variable(name) => self.binding(name),
             ExprKind::Constant(name) => Ok(constant_name(name)),
+            ExprKind::Uniform(name) => Ok(uniform_name(name)),
             ExprKind::Binary { op, left, right } => {
                 let left = self.expression(left)?;
                 let right = self.expression(right)?;
@@ -726,6 +760,7 @@ fn runtime_call(operation: &str, args: &[String]) -> Result<String, EmitError> {
             "int(({value}) < 0.0 ? ceil(({value}) - 0.5) : floor(({value}) + 0.5))"
         )),
         ("truncToInt", [value]) => Ok(format!("int(trunc({value}))")),
+        ("sampleTexture", [texture, uv]) => Ok(format!("texture({texture}, {uv})")),
         _ => Err(EmitError::UnsupportedRuntimeOp(operation.to_owned())),
     }
 }
@@ -857,5 +892,139 @@ fn expr_uses_time(expression: &Expr) -> bool {
             .any(|entry| expr_uses_time(&entry.key) || expr_uses_time(&entry.value)),
         ExprKind::Struct { fields, .. } => fields.iter().any(|field| expr_uses_time(&field.value)),
         ExprKind::Literal(_) | ExprKind::Variable(_) | ExprKind::Constant(_) => false,
+        ExprKind::Uniform(name) => name == "u_time",
+    }
+}
+
+fn collect_block_uniforms(
+    block: &Block,
+    uniforms: &mut BTreeMap<String, Type>,
+) -> Result<(), EmitError> {
+    for statement in &block.statements {
+        match &statement.kind {
+            StatementKind::Let { init, .. } | StatementKind::Expr(init) => {
+                collect_expr_uniforms(init, uniforms)?;
+            }
+            StatementKind::Assign { target, value } => {
+                collect_place_uniforms(target, uniforms)?;
+                collect_expr_uniforms(value, uniforms)?;
+            }
+            StatementKind::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                collect_expr_uniforms(condition, uniforms)?;
+                collect_block_uniforms(then_block, uniforms)?;
+                if let Some(else_block) = else_block {
+                    collect_block_uniforms(else_block, uniforms)?;
+                }
+            }
+            StatementKind::While { condition, body } => {
+                collect_expr_uniforms(condition, uniforms)?;
+                collect_block_uniforms(body, uniforms)?;
+            }
+            StatementKind::For { range, body, .. } => {
+                collect_expr_uniforms(&range.start, uniforms)?;
+                collect_expr_uniforms(&range.end, uniforms)?;
+                collect_block_uniforms(body, uniforms)?;
+            }
+            StatementKind::Return(value) => {
+                if let Some(value) = value {
+                    collect_expr_uniforms(value, uniforms)?;
+                }
+            }
+            StatementKind::Break | StatementKind::Continue => {}
+        }
+    }
+    Ok(())
+}
+
+fn collect_place_uniforms(
+    place: &Place,
+    uniforms: &mut BTreeMap<String, Type>,
+) -> Result<(), EmitError> {
+    match &place.kind {
+        PlaceKind::Variable(_) => Ok(()),
+        PlaceKind::Index { base, index } => {
+            collect_expr_uniforms(base, uniforms)?;
+            collect_expr_uniforms(index, uniforms)
+        }
+        PlaceKind::Field { base, .. } => collect_expr_uniforms(base, uniforms),
+    }
+}
+
+fn collect_expr_uniforms(
+    expression: &Expr,
+    uniforms: &mut BTreeMap<String, Type>,
+) -> Result<(), EmitError> {
+    match &expression.kind {
+        ExprKind::Uniform(name) => insert_uniform(uniforms, name, &expression.ty),
+        ExprKind::Binary { left, right, .. }
+        | ExprKind::Index {
+            base: left,
+            index: right,
+        } => {
+            collect_expr_uniforms(left, uniforms)?;
+            collect_expr_uniforms(right, uniforms)
+        }
+        ExprKind::Unary { operand, .. }
+        | ExprKind::Field { base: operand, .. }
+        | ExprKind::ArrayLength(operand)
+        | ExprKind::IsNil(operand)
+        | ExprKind::IsFalsy(operand) => collect_expr_uniforms(operand, uniforms),
+        ExprKind::Call { args, .. } | ExprKind::Array(args) | ExprKind::Vector { args, .. } => {
+            for argument in args {
+                collect_expr_uniforms(argument, uniforms)?;
+            }
+            Ok(())
+        }
+        ExprKind::Map(entries) => {
+            for entry in entries {
+                collect_expr_uniforms(&entry.key, uniforms)?;
+                collect_expr_uniforms(&entry.value, uniforms)?;
+            }
+            Ok(())
+        }
+        ExprKind::Struct { fields, .. } => {
+            for field in fields {
+                collect_expr_uniforms(&field.value, uniforms)?;
+            }
+            Ok(())
+        }
+        ExprKind::Literal(_) | ExprKind::Variable(_) | ExprKind::Constant(_) => Ok(()),
+    }
+}
+
+fn insert_uniform(
+    uniforms: &mut BTreeMap<String, Type>,
+    name: &str,
+    ty: &Type,
+) -> Result<(), EmitError> {
+    if let Some(first) = uniforms.get(name)
+        && first != ty
+    {
+        return Err(EmitError::ConflictingUniform {
+            name: name.to_owned(),
+            first: first.clone(),
+            second: ty.clone(),
+        });
+    }
+    uniforms.insert(name.to_owned(), ty.clone());
+    Ok(())
+}
+
+fn is_automatic_uniform(name: &str) -> bool {
+    matches!(
+        name,
+        "u_time" | "u_resolution" | "u_model" | "u_view" | "u_proj"
+    )
+}
+
+fn uniform_name(name: &str) -> String {
+    if is_automatic_uniform(name) {
+        name.to_owned()
+    } else {
+        encoded_name("pgl_u", name)
     }
 }

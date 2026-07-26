@@ -64,8 +64,23 @@ impl BuiltinId {
     pub const KEY_DOWN: Self = Self(23);
     pub const RANDOM: Self = Self(24);
     pub const MATERIAL_SHADER: Self = Self(25);
+    pub const MESH_BOX: Self = Self(26);
+    pub const MESH_SPHERE: Self = Self(27);
+    pub const MESH_PLANE: Self = Self(28);
+    pub const MESH_FROM: Self = Self(29);
+    pub const MATERIAL_BASIC: Self = Self(30);
+    pub const NODE_ADD: Self = Self(31);
+    pub const NODE_SET_POS: Self = Self(32);
+    pub const NODE_SET_ROT: Self = Self(33);
+    pub const NODE_SET_SCALE: Self = Self(34);
+    pub const CAMERA_PERSPECTIVE: Self = Self(35);
+    pub const CAMERA_LOOK_AT: Self = Self(36);
+    pub const LIGHT_DIRECTIONAL: Self = Self(37);
+    pub const TEXTURE_LOAD: Self = Self(38);
+    pub const SHADER_SET: Self = Self(39);
+    pub const SAMPLE: Self = Self(40);
 
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 41] = [
         Self::FLOOR,
         Self::ROUND,
         Self::TRUNC,
@@ -92,6 +107,21 @@ impl BuiltinId {
         Self::KEY_DOWN,
         Self::RANDOM,
         Self::MATERIAL_SHADER,
+        Self::MESH_BOX,
+        Self::MESH_SPHERE,
+        Self::MESH_PLANE,
+        Self::MESH_FROM,
+        Self::MATERIAL_BASIC,
+        Self::NODE_ADD,
+        Self::NODE_SET_POS,
+        Self::NODE_SET_ROT,
+        Self::NODE_SET_SCALE,
+        Self::CAMERA_PERSPECTIVE,
+        Self::CAMERA_LOOK_AT,
+        Self::LIGHT_DIRECTIONAL,
+        Self::TEXTURE_LOAD,
+        Self::SHADER_SET,
+        Self::SAMPLE,
     ];
 
     #[must_use]

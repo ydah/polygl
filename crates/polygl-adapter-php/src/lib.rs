@@ -20,6 +20,7 @@ use crate::lowerer::Lowerer;
 const CAPABILITIES: &[FeatureTag] = &[
     FeatureTag::Core,
     FeatureTag::Tier1,
+    FeatureTag::Tier2,
     FeatureTag::Arrays,
     FeatureTag::Maps,
     FeatureTag::Classes,

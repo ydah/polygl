@@ -9,7 +9,7 @@ use polygl_lir::{
 use polygl_span::{SourceFile, SourceId, Span};
 use polygl_types::Type;
 
-use crate::{EmitError, GlslBackend};
+use crate::{EmitError, GlslBackend, UniformSource};
 
 static SHADER_FILE_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -60,6 +60,49 @@ end
     assert_eq!(shader.attributes[0].name, "position");
     assert_eq!(shader.attributes[0].location, 0);
     assert_eq!(shader.uniforms[0].name, "u_time");
+    validate_with_glslang(&shader.vertex, "vert");
+    validate_with_glslang(&shader.fragment, "frag");
+}
+
+#[test]
+fn reflects_transforms_and_user_textures_from_shader_uniforms() {
+    let artifacts = compile(
+        r#"
+# @pgl position: vec3
+def vertex_textured(position)
+  u_proj * u_view * u_model * vec4(position, 1.0)
+end
+
+# @pgl texture_map: Texture
+def fragment_textured
+  sample(texture_map, vec2(0.5, 0.5))
+end
+"#,
+    );
+    let shader = &artifacts.shaders[0];
+    assert!(shader.vertex.contains("uniform mat4 u_model;"));
+    assert!(shader.vertex.contains("uniform mat4 u_view;"));
+    assert!(shader.vertex.contains("uniform mat4 u_proj;"));
+    assert!(shader.vertex.contains("u_proj * u_view"));
+    assert!(shader.vertex.contains("vec4(a_position, 1.0)"));
+    assert!(shader.fragment.contains("uniform sampler2D pgl_u_"));
+    assert!(shader.fragment.contains("texture(pgl_u_"));
+    assert_eq!(
+        shader
+            .uniforms
+            .iter()
+            .filter(|uniform| uniform.source == UniformSource::Automatic)
+            .map(|uniform| uniform.name.as_str())
+            .collect::<Vec<_>>(),
+        ["u_model", "u_proj", "u_view"]
+    );
+    let texture = shader
+        .uniforms
+        .iter()
+        .find(|uniform| uniform.name == "texture_map")
+        .expect("user texture reflection");
+    assert_eq!(texture.ty, Type::Opaque(polygl_hir::OpaqueType::Texture));
+    assert_eq!(texture.source, UniformSource::User);
     validate_with_glslang(&shader.vertex, "vert");
     validate_with_glslang(&shader.fragment, "frag");
 }

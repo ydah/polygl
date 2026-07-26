@@ -74,6 +74,18 @@ pub const fn vector_constructor_size(name: &str) -> Option<u8> {
     }
 }
 
+/// Resolves the fixed automatic shader uniform names from the shader ABI.
+#[must_use]
+pub fn automatic_uniform_type(name: &str, span: Span) -> Option<TypeExpr> {
+    let kind = match name {
+        "u_time" => TypeKind::Float,
+        "u_resolution" => TypeKind::Vector(2),
+        "u_model" | "u_view" | "u_proj" => TypeKind::Matrix(4),
+        _ => return None,
+    };
+    Some(TypeExpr::new(kind, span))
+}
+
 #[must_use]
 pub fn is_portable_identifier(value: &str) -> bool {
     let mut chars = value.chars();
@@ -97,8 +109,8 @@ mod tests {
     use polygl_span::{SourceFile, SourceId, Span};
 
     use super::{
-        canonical_entry_kind, constructor_function_name, parse_annotation_type,
-        vector_constructor_size,
+        automatic_uniform_type, canonical_entry_kind, constructor_function_name,
+        parse_annotation_type, vector_constructor_size,
     };
 
     fn span() -> Span {
@@ -125,6 +137,19 @@ mod tests {
         );
         assert!(parse_annotation_type("Map<int, float>", span()).is_none());
         assert!(parse_annotation_type("void", span()).is_none());
+    }
+
+    #[test]
+    fn resolves_only_reserved_automatic_uniforms() {
+        assert!(matches!(
+            automatic_uniform_type("u_model", span()).map(|ty| ty.kind),
+            Some(TypeKind::Matrix(4))
+        ));
+        assert!(matches!(
+            automatic_uniform_type("u_resolution", span()).map(|ty| ty.kind),
+            Some(TypeKind::Vector(2))
+        ));
+        assert!(automatic_uniform_type("tint", span()).is_none());
     }
 
     #[test]

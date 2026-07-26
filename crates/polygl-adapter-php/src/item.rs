@@ -5,7 +5,7 @@ use mago_syntax::cst::{
 };
 use polygl_adapter_api::canonical_entry_kind;
 use polygl_hir::{
-    ConstDef, DomainHint, EntryPoint, Function, Item, Param, Symbol, TypeExpr, TypeKind,
+    ConstDef, DomainHint, EntryPoint, Function, Item, OpaqueType, Param, Symbol, TypeExpr, TypeKind,
 };
 use polygl_span::{Diagnostic, Severity, Suggestion};
 
@@ -49,14 +49,26 @@ impl Lowerer<'_, '_, '_> {
             function.span().start_offset() as usize,
         )?;
         let return_type = self.lower_return_hint(function.return_type_hint.as_ref())?;
+        let kind = canonical_entry_kind(&name);
         self.declared = params
             .iter()
             .map(|parameter| parameter.name.as_str().to_owned())
             .collect();
+        let previous_shader_anchor = self.shader_annotation_anchor;
+        self.shader_annotation_anchor = kind
+            .as_ref()
+            .filter(|kind| {
+                matches!(
+                    kind,
+                    polygl_hir::EntryPointKind::Vertex(_) | polygl_hir::EntryPointKind::Fragment(_)
+                )
+            })
+            .map(|_| function.span().start_offset() as usize);
         let body = self.lower_block(&function.body);
+        self.shader_annotation_anchor = previous_shader_anchor;
         self.declared.clear();
         let span = self.span(function.span());
-        match canonical_entry_kind(&name) {
+        match kind {
             Some(kind) => Some(Item::Entry(EntryPoint {
                 kind,
                 params,
@@ -148,7 +160,13 @@ impl Lowerer<'_, '_, '_> {
                     .first()
                     .is_some_and(u8::is_ascii_uppercase) =>
             {
-                TypeKind::Struct(Symbol::new(self.name(identifier.last_segment())))
+                match self.name(identifier.last_segment()).as_str() {
+                    "Mesh" => TypeKind::Opaque(OpaqueType::Mesh),
+                    "Node" => TypeKind::Opaque(OpaqueType::Node),
+                    "Material" => TypeKind::Opaque(OpaqueType::Material),
+                    "Texture" => TypeKind::Opaque(OpaqueType::Texture),
+                    name => TypeKind::Struct(Symbol::new(name)),
+                }
             }
             _ => {
                 self.unsupported(

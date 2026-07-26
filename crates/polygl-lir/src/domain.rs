@@ -206,6 +206,9 @@ fn inspect_place(place: &Place, facts: &mut NodeFacts) {
 fn inspect_expr(expression: &Expr, facts: &mut NodeFacts) {
     match &expression.kind {
         ExprKind::Literal(_) | ExprKind::Variable(_) => {}
+        ExprKind::Uniform(_) => {
+            facts.allowed = facts.allowed.intersect(DomainSet::GPU);
+        }
         ExprKind::Constant(name) => facts.dependencies.push(Node::Constant(name.clone())),
         ExprKind::Binary { left, right, .. }
         | ExprKind::Index {

@@ -1,4 +1,6 @@
-use polygl_adapter_api::{constructor_function_name, vector_constructor_size};
+use polygl_adapter_api::{
+    automatic_uniform_type, constructor_function_name, vector_constructor_size,
+};
 use polygl_hir::{BinOp, Callee, Expr, ExprKind, Literal, MapEntry, Symbol};
 use ruby_prism::{ArrayNode, CallNode, HashNode, Node};
 
@@ -258,6 +260,22 @@ impl Lowerer<'_, '_, '_> {
         }
         if let Some(size) = vector_constructor_size(&name) {
             return Some(Expr::new(ExprKind::Vector { size, args }, span));
+        }
+        if args.is_empty()
+            && !call_has_parentheses(call)
+            && !self.function_names.contains(&name)
+            && self.context.resolve_builtin(&name).is_none()
+            && let Some(anchor) = self.shader_annotation_anchor
+            && let Some(declared) = automatic_uniform_type(&name, span)
+                .or_else(|| self.annotations.take(&name, anchor, self.source))
+        {
+            return Some(Expr::new(
+                ExprKind::Uniform {
+                    name: Symbol::new(name),
+                    declared,
+                },
+                span,
+            ));
         }
         let callee = self
             .context

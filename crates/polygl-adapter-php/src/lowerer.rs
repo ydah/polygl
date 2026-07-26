@@ -23,6 +23,7 @@ pub(crate) struct Lowerer<'source, 'context, 'resolver> {
     pub(crate) field_names: HashSet<String>,
     pub(crate) class_methods: HashMap<String, HashSet<String>>,
     pub(crate) current_class: Option<String>,
+    pub(crate) shader_annotation_anchor: Option<usize>,
 }
 
 impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
@@ -46,6 +47,7 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
             field_names: HashSet::new(),
             class_methods: HashMap::new(),
             current_class: None,
+            shader_annotation_anchor: None,
         }
     }
 

@@ -28,6 +28,7 @@ pub fn split(module: &Module) -> Result<SplitProgram, Diagnostics> {
     let mut validator = Validator::new(module);
     validator.validate_shader_pairs();
     validator.validate_material_references();
+    validator.validate_host_graph();
     validator.validate_gpu_graph();
     if validator.diagnostics.has_errors() {
         return Err(validator.diagnostics);
@@ -385,6 +386,177 @@ impl<'module> Validator<'module> {
         }
     }
 
+    fn validate_host_graph(&mut self) {
+        for entry in self
+            .module
+            .entries
+            .iter()
+            .filter(|entry| entry.domain == Domain::Host)
+        {
+            self.inspect_host_block(&entry.body);
+        }
+        for function in self
+            .module
+            .functions
+            .iter()
+            .filter(|function| function.domain != Domain::Gpu)
+        {
+            self.inspect_host_block(&function.body);
+        }
+        for constant in self
+            .module
+            .constants
+            .iter()
+            .filter(|constant| constant.domain != Domain::Gpu)
+        {
+            self.inspect_host_expr(&constant.value);
+        }
+    }
+
+    fn inspect_host_block(&mut self, block: &Block) {
+        for statement in &block.statements {
+            match &statement.kind {
+                StatementKind::Let { init, .. } | StatementKind::Expr(init) => {
+                    self.inspect_host_expr(init);
+                }
+                StatementKind::Assign { target, value } => {
+                    self.inspect_host_place(target);
+                    self.inspect_host_expr(value);
+                }
+                StatementKind::If {
+                    condition,
+                    then_block,
+                    else_block,
+                } => {
+                    self.inspect_host_expr(condition);
+                    self.inspect_host_block(then_block);
+                    if let Some(else_block) = else_block {
+                        self.inspect_host_block(else_block);
+                    }
+                }
+                StatementKind::While { condition, body } => {
+                    self.inspect_host_expr(condition);
+                    self.inspect_host_block(body);
+                }
+                StatementKind::For { range, body, .. } => {
+                    self.inspect_host_expr(&range.start);
+                    self.inspect_host_expr(&range.end);
+                    self.inspect_host_block(body);
+                }
+                StatementKind::Return(value) => {
+                    if let Some(value) = value {
+                        self.inspect_host_expr(value);
+                    }
+                }
+                StatementKind::Break | StatementKind::Continue => {}
+            }
+        }
+    }
+
+    fn inspect_host_place(&mut self, place: &Place) {
+        match &place.kind {
+            PlaceKind::Variable(_) => {}
+            PlaceKind::Index { base, index } => {
+                self.inspect_host_expr(base);
+                self.inspect_host_expr(index);
+            }
+            PlaceKind::Field { base, .. } => self.inspect_host_expr(base),
+        }
+    }
+
+    fn inspect_host_expr(&mut self, expression: &Expr) {
+        match &expression.kind {
+            ExprKind::Literal(_) | ExprKind::Variable(_) => {}
+            ExprKind::Uniform(name) => self.error(
+                "E0404",
+                format!("GPU uniform `{name}` is used by Host code"),
+                expression.span,
+                "keep shader uniforms inside shader entries",
+            ),
+            ExprKind::Constant(name) => {
+                if self
+                    .constants
+                    .get(name.as_str())
+                    .is_some_and(|constant| constant.domain == Domain::Gpu)
+                {
+                    self.error(
+                        "E0404",
+                        format!("GPU-only constant `{name}` is used by Host code"),
+                        expression.span,
+                        "keep GPU-only values inside shader entries",
+                    );
+                }
+            }
+            ExprKind::Binary { left, right, .. }
+            | ExprKind::Index {
+                base: left,
+                index: right,
+            } => {
+                self.inspect_host_expr(left);
+                self.inspect_host_expr(right);
+            }
+            ExprKind::Unary { operand, .. }
+            | ExprKind::Field { base: operand, .. }
+            | ExprKind::ArrayLength(operand)
+            | ExprKind::IsNil(operand)
+            | ExprKind::IsFalsy(operand) => self.inspect_host_expr(operand),
+            ExprKind::Call { target, args } => {
+                match target {
+                    CallTarget::Function(name) => {
+                        if self
+                            .functions
+                            .get(name.as_str())
+                            .is_some_and(|function| function.domain == Domain::Gpu)
+                        {
+                            self.error(
+                                "E0404",
+                                format!("GPU-only function `{name}` is called by Host code"),
+                                expression.span,
+                                "call GPU-only helpers from shader entries",
+                            );
+                        }
+                    }
+                    CallTarget::Runtime(operation) => {
+                        let builtin = BuiltinTable::all()
+                            .iter()
+                            .find(|builtin| builtin.runtime_op == *operation)
+                            .expect("LIR runtime operations come from the builtin registry");
+                        if builtin.domain == BuiltinDomain::Gpu {
+                            self.error(
+                                "E0404",
+                                format!(
+                                    "GPU-only builtin `{}` is called by Host code",
+                                    builtin.name
+                                ),
+                                expression.span,
+                                "call this builtin only from shader code",
+                            );
+                        }
+                    }
+                }
+                for argument in args {
+                    self.inspect_host_expr(argument);
+                }
+            }
+            ExprKind::Array(items) | ExprKind::Vector { args: items, .. } => {
+                for item in items {
+                    self.inspect_host_expr(item);
+                }
+            }
+            ExprKind::Map(entries) => {
+                for entry in entries {
+                    self.inspect_host_expr(&entry.key);
+                    self.inspect_host_expr(&entry.value);
+                }
+            }
+            ExprKind::Struct { fields, .. } => {
+                for field in fields {
+                    self.inspect_host_expr(&field.value);
+                }
+            }
+        }
+    }
+
     fn validate_gpu_graph(&mut self) {
         for entry in self
             .module
@@ -647,7 +819,7 @@ impl<'module> Validator<'module> {
                 expression.span,
                 "replace the string with a numeric or boolean shader value",
             ),
-            ExprKind::Literal(_) | ExprKind::Variable(_) => {}
+            ExprKind::Literal(_) | ExprKind::Variable(_) | ExprKind::Uniform(_) => {}
             ExprKind::Constant(name) => {
                 let Some(constant) = self.constants.get(name.as_str()).copied() else {
                     return;
@@ -963,7 +1135,7 @@ fn collect_expr_constants(expression: &Expr, constants: &mut Vec<String>) {
                 collect_expr_constants(&field.value, constants);
             }
         }
-        ExprKind::Literal(_) | ExprKind::Variable(_) => {}
+        ExprKind::Literal(_) | ExprKind::Variable(_) | ExprKind::Uniform(_) => {}
     }
 }
 
@@ -1108,7 +1280,10 @@ fn collect_expr_calls(expression: &Expr, calls: &mut Vec<String>) {
                 collect_expr_calls(&field.value, calls);
             }
         }
-        ExprKind::Literal(_) | ExprKind::Variable(_) | ExprKind::Constant(_) => {}
+        ExprKind::Literal(_)
+        | ExprKind::Variable(_)
+        | ExprKind::Constant(_)
+        | ExprKind::Uniform(_) => {}
     }
 }
 
@@ -1228,7 +1403,10 @@ fn collect_material_references_expr(
                 collect_material_references_expr(&field.value, operation, references);
             }
         }
-        ExprKind::Literal(_) | ExprKind::Variable(_) | ExprKind::Constant(_) => {}
+        ExprKind::Literal(_)
+        | ExprKind::Variable(_)
+        | ExprKind::Constant(_)
+        | ExprKind::Uniform(_) => {}
     }
 }
 

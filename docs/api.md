@@ -34,6 +34,21 @@ runtime seed, while GPU code must use deterministic shader inputs instead.
 | Tier 1 | `key_down(key: str)` | `bool` | Host | `keyDown` |
 | Tier 1 | `random(a: float, b: float)` | `float` | Host | `random` |
 | Tier 2 | `material_shader(name: str)` | `Material` | Host | `materialShader` |
+| Tier 2 | `mesh_box(w: float, h: float, d: float)` | `Mesh` | Host | `meshBox` |
+| Tier 2 | `mesh_sphere(r: float, segments: int)` | `Mesh` | Host | `meshSphere` |
+| Tier 2 | `mesh_plane(w: float, d: float, columns: int = 1, rows: int = 1)` | `Mesh` | Host | `meshPlane` |
+| Tier 2 | `mesh_from(vertices: float[], indices: int[])` | `Mesh` | Host | `meshFrom` |
+| Tier 2 | `material_basic(color: vec4)` | `Material` | Host | `materialBasic` |
+| Tier 2 | `node_add(mesh: Mesh, material: Material)` | `Node` | Host | `nodeAdd` |
+| Tier 2 | `node_set_pos(node: Node, x: float, y: float, z: float)` | `void` | Host | `nodeSetPos` |
+| Tier 2 | `node_set_rot(node: Node, x: float, y: float, z: float)` | `void` | Host | `nodeSetRot` |
+| Tier 2 | `node_set_scale(node: Node, x: float, y: float, z: float)` | `void` | Host | `nodeSetScale` |
+| Tier 2 | `camera_perspective(fov: float, near: float, far: float)` | `void` | Host | `cameraPerspective` |
+| Tier 2 | `camera_look_at(eye: vec3, target: vec3, up: vec3)` | `void` | Host | `cameraLookAt` |
+| Tier 2 | `light_directional(direction: vec3, color: vec3)` | `void` | Host | `lightDirectional` |
+| Tier 2 | `texture_load(path: str)` | `Texture` | Host | `textureLoad` |
+| Tier 2 | `shader_set(node: Node, name: str, value: ShaderValue)` | `void` | Host | `shaderSet` |
+| Tier 2 | `sample(texture: Texture, uv: vec2)` | `vec4` | GPU | `sampleTexture` |
 
 `time()` maps to the automatic `u_time` uniform in GPU code. All other
 Tier 1 drawing, input, matrix, and canvas operations are Host-only.

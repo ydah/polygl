@@ -1,12 +1,15 @@
 use crate::{BinOp, Callee, Expr, ExprKind, Literal, UnOp};
 
-use super::Dumper;
+use super::{Dumper, type_name};
 
 impl Dumper {
     pub(super) fn expression(&self, expression: &Expr) -> String {
         match &expression.kind {
             ExprKind::Literal(literal) => literal_text(literal),
             ExprKind::Var(name) => name.to_string(),
+            ExprKind::Uniform { name, declared } => {
+                format!("uniform<{name}: {}>", type_name(declared))
+            }
             ExprKind::Binary { op, left, right } => format!(
                 "({} {} {})",
                 self.expression(left),

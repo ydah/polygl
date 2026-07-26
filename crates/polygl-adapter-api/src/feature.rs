@@ -2,6 +2,7 @@
 pub enum FeatureTag {
     Core,
     Tier1,
+    Tier2,
     Arrays,
     Maps,
     Classes,
@@ -17,6 +18,7 @@ impl FeatureTag {
         match self {
             Self::Core => "core",
             Self::Tier1 => "tier1",
+            Self::Tier2 => "tier2",
             Self::Arrays => "arrays",
             Self::Maps => "maps",
             Self::Classes => "classes",

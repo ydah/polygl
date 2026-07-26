@@ -251,6 +251,131 @@ fn builtin_constraints_flow_back_to_local_bindings() {
 }
 
 #[test]
+fn tier_two_builtins_keep_handles_distinct_and_constrain_uniform_values() {
+    let builder = HirBuilder::new(span());
+    let color = expression(ExprKind::Vector {
+        size: 4,
+        args: vec![
+            builder.float(0.2),
+            builder.float(0.4),
+            builder.float(0.6),
+            builder.float(1.0),
+        ],
+    });
+    let valid = module(vec![setup(vec![
+        builder.let_value(
+            "mesh",
+            builtin(
+                polygl_hir::BuiltinId::MESH_BOX,
+                vec![builder.float(1.0), builder.float(2.0), builder.float(3.0)],
+            ),
+        ),
+        builder.let_value(
+            "material",
+            builtin(polygl_hir::BuiltinId::MATERIAL_BASIC, vec![color]),
+        ),
+        builder.let_value(
+            "node",
+            builtin(
+                polygl_hir::BuiltinId::NODE_ADD,
+                vec![builder.variable("mesh"), builder.variable("material")],
+            ),
+        ),
+        builder.expression(builtin(
+            polygl_hir::BuiltinId::SHADER_SET,
+            vec![
+                builder.variable("node"),
+                builder.string("roughness"),
+                builder.float(0.5),
+            ],
+        )),
+    ])]);
+    let typed = analyze(&valid).expect("Tier 2 handles and a float uniform should type-check");
+    let Item::Entry(entry) = &typed.as_hir().items[0] else {
+        panic!("expected setup");
+    };
+    let expected = [
+        TypeKind::Opaque(polygl_hir::OpaqueType::Mesh),
+        TypeKind::Opaque(polygl_hir::OpaqueType::Material),
+        TypeKind::Opaque(polygl_hir::OpaqueType::Node),
+    ];
+    for (statement, expected) in entry.body.statements.iter().zip(expected) {
+        let StmtKind::Let { ty: Some(ty), .. } = &statement.kind else {
+            panic!("expected typed Tier 2 binding");
+        };
+        assert_eq!(ty.kind, expected);
+    }
+
+    let invalid_handle = module(vec![setup(vec![builder.expression(builtin(
+        polygl_hir::BuiltinId::NODE_ADD,
+        vec![builder.int(1), builder.int(2)],
+    ))])]);
+    let diagnostics = analyze(&invalid_handle).expect_err("integers are not opaque handles");
+    assert!(
+        diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "E0303")
+            .count()
+            >= 2
+    );
+
+    let invalid_uniform = module(vec![setup(vec![
+        builder.let_value(
+            "mesh",
+            builtin(
+                polygl_hir::BuiltinId::MESH_BOX,
+                vec![builder.float(1.0), builder.float(1.0), builder.float(1.0)],
+            ),
+        ),
+        builder.let_value(
+            "material",
+            builtin(
+                polygl_hir::BuiltinId::MATERIAL_SHADER,
+                vec![builder.string("main")],
+            ),
+        ),
+        builder.let_value(
+            "node",
+            builtin(
+                polygl_hir::BuiltinId::NODE_ADD,
+                vec![builder.variable("mesh"), builder.variable("material")],
+            ),
+        ),
+        builder.expression(builtin(
+            polygl_hir::BuiltinId::SHADER_SET,
+            vec![
+                builder.variable("node"),
+                builder.string("label"),
+                builder.string("not a shader value"),
+            ],
+        )),
+    ])]);
+    let diagnostics = analyze(&invalid_uniform).expect_err("strings are not shader values");
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "E0303")
+    );
+}
+
+#[test]
+fn opaque_handle_names_are_reserved_for_runtime_types() {
+    let definition = Item::Struct(StructDef {
+        name: Symbol::new("Mesh"),
+        fields: Vec::new(),
+        methods: Vec::new(),
+        span: span(),
+    });
+    let diagnostics =
+        analyze(&module(vec![definition, setup(Vec::new())])).expect_err("Mesh is reserved");
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "E0306")
+    );
+}
+
+#[test]
 fn specializes_after_backward_constraints_stabilize() {
     let builder = HirBuilder::new(span());
     let consume = function(

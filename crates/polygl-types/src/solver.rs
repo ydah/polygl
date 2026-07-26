@@ -20,6 +20,7 @@ pub(crate) enum InferType {
     Vector(u8),
     Matrix(u8),
     Opaque(OpaqueType),
+    ShaderValue,
     Error,
 }
 
@@ -37,6 +38,7 @@ impl InferType {
             | Self::Vector(_)
             | Self::Matrix(_)
             | Self::Opaque(_)
+            | Self::ShaderValue
             | Self::Error => false,
         }
     }
@@ -75,6 +77,7 @@ impl fmt::Display for InferType {
             Self::Vector(size) => write!(formatter, "vec{size}"),
             Self::Matrix(size) => write!(formatter, "mat{size}"),
             Self::Opaque(kind) => write!(formatter, "{kind:?}"),
+            Self::ShaderValue => formatter.write_str("ShaderValue"),
             Self::Error => formatter.write_str("<error>"),
         }
     }
@@ -169,6 +172,7 @@ impl Solver {
             (InferType::Option(expected), actual) => {
                 Ok(InferType::Option(Box::new(self.assign(*expected, actual)?)))
             }
+            (InferType::ShaderValue, actual) if is_shader_value(&actual) => Ok(actual),
             (expected, actual) if expected == actual => Ok(expected),
             (expected, actual) => Err(SolveError::Mismatch { expected, actual }),
         }
@@ -268,6 +272,7 @@ impl Solver {
             InferType::Vector(size) => Ok(Type::Vector(size)),
             InferType::Matrix(size) => Ok(Type::Matrix(size)),
             InferType::Opaque(kind) => Ok(Type::Opaque(kind)),
+            InferType::ShaderValue => Err(SolveError::Unresolved(InferType::ShaderValue)),
             InferType::Error => Ok(Type::Unit),
         }
     }
@@ -342,4 +347,16 @@ impl Solver {
             }),
         }
     }
+}
+
+fn is_shader_value(ty: &InferType) -> bool {
+    matches!(
+        ty,
+        InferType::Int
+            | InferType::Float
+            | InferType::Bool
+            | InferType::Vector(2..=4)
+            | InferType::Matrix(2..=4)
+            | InferType::Opaque(OpaqueType::Texture)
+    )
 }

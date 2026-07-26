@@ -4,7 +4,9 @@ use mago_syntax::cst::{
     ClassLikeMemberSelector, Expression, Instantiation, Literal as PhpLiteral, UnaryPrefixOperator,
     Variable,
 };
-use polygl_adapter_api::{constructor_function_name, vector_constructor_size};
+use polygl_adapter_api::{
+    automatic_uniform_type, constructor_function_name, vector_constructor_size,
+};
 use polygl_hir::{
     BinOp, Callee, Expr, ExprKind, Literal, MapEntry, Symbol, TypeExpr, TypeKind, UnOp,
 };
@@ -32,6 +34,18 @@ impl Lowerer<'_, '_, '_> {
                     return Some(Expr::new(ExprKind::Var(Symbol::new("self")), span));
                 }
                 if !self.declared.contains(&name) {
+                    if let Some(anchor) = self.shader_annotation_anchor
+                        && let Some(declared) = automatic_uniform_type(&name, span)
+                            .or_else(|| self.annotations.take(&name, anchor, self.source))
+                    {
+                        return Some(Expr::new(
+                            ExprKind::Uniform {
+                                name: Symbol::new(name),
+                                declared,
+                            },
+                            span,
+                        ));
+                    }
                     self.unsupported(
                         expression.span(),
                         "this PHP local is not declared in the current Common Core block",

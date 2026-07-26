@@ -1,13 +1,11 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use crate::emitter::{Emitter, attribute_bindings, uniform_bindings};
+use crate::{EmitError, GlslArtifacts, ShaderArtifact, ShaderStage};
 use polygl_lir::{
     Block, CallTarget, EntryKind, EntryPoint, Expr, ExprKind, Module, Place, PlaceKind,
     StatementKind,
 };
-use polygl_types::Type;
-
-use crate::emitter::{Emitter, attribute_bindings, uses_time};
-use crate::{EmitError, GlslArtifacts, ShaderArtifact, ShaderStage, UniformBinding, UniformSource};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GlslBackend;
@@ -52,15 +50,7 @@ impl GlslBackend {
                 projected_vertex,
             )
             .emit()?;
-            let mut uniforms = Vec::new();
-            if uses_time(&pair_program) {
-                uniforms.push(UniformBinding {
-                    name: "u_time".to_owned(),
-                    glsl_name: "u_time".to_owned(),
-                    ty: Type::Float,
-                    source: UniformSource::Automatic,
-                });
-            }
+            let uniforms = uniform_bindings(&pair_program)?;
             shaders.push(ShaderArtifact {
                 name: name.to_owned(),
                 vertex: vertex_source,
@@ -279,6 +269,6 @@ fn collect_expr_dependencies(
                 collect_expr_dependencies(&field.value, functions, constants);
             }
         }
-        ExprKind::Literal(_) | ExprKind::Variable(_) => {}
+        ExprKind::Literal(_) | ExprKind::Variable(_) | ExprKind::Uniform(_) => {}
     }
 }

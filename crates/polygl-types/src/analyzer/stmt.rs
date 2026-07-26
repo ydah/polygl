@@ -207,6 +207,7 @@ fn expression_root(expression: &polygl_hir::Expr) -> Option<&polygl_hir::Symbol>
             expression_root(base)
         }
         polygl_hir::ExprKind::Literal(_)
+        | polygl_hir::ExprKind::Uniform { .. }
         | polygl_hir::ExprKind::Binary { .. }
         | polygl_hir::ExprKind::Unary { .. }
         | polygl_hir::ExprKind::Call { .. }

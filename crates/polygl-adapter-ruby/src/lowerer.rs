@@ -19,6 +19,8 @@ pub(crate) struct Lowerer<'source, 'context, 'resolver> {
     pub(crate) field_names: HashSet<String>,
     pub(crate) class_methods: HashMap<String, HashSet<String>>,
     pub(crate) current_class: Option<String>,
+    pub(crate) function_names: HashSet<String>,
+    pub(crate) shader_annotation_anchor: Option<usize>,
 }
 
 impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
@@ -39,6 +41,8 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
             field_names: HashSet::new(),
             class_methods: HashMap::new(),
             current_class: None,
+            function_names: HashSet::new(),
+            shader_annotation_anchor: None,
         }
     }
 
@@ -50,6 +54,9 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
         for node in program.statements().body().iter() {
             if let Some(class) = node.as_class_node() {
                 self.register_class_shape(&class);
+            } else if let Some(definition) = node.as_def_node() {
+                self.function_names
+                    .insert(self.name(definition.name().as_slice()));
             }
         }
         for node in program.statements().body().iter() {

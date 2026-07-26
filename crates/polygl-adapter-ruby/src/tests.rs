@@ -20,12 +20,14 @@ fn advertises_ruby_core_capabilities() {
         &[
             FeatureTag::Core,
             FeatureTag::Tier1,
+            FeatureTag::Tier2,
             FeatureTag::Arrays,
             FeatureTag::Maps,
             FeatureTag::Classes,
             FeatureTag::TimesBlockSugar,
             FeatureTag::EachBlockSugar,
-            FeatureTag::TruthinessSugar
+            FeatureTag::TruthinessSugar,
+            FeatureTag::Shaders,
         ]
     );
 }

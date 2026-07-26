@@ -21,6 +21,10 @@ impl Analyzer {
                 self.unknown_variable_error(name.as_str(), span);
                 InferType::Error
             }),
+            ExprKind::Uniform { declared, .. } => {
+                self.validate_type_annotation(declared, false);
+                Self::annotated_type(declared)
+            }
             ExprKind::Binary { op, left, right } => {
                 let left = self.infer_expr(left, context);
                 let right = self.infer_expr(right, context);
@@ -116,12 +120,36 @@ impl Analyzer {
             ExprKind::Vector { size, args } => {
                 if !(2..=4).contains(size) {
                     self.invalid_dimension_error("vector", *size, span);
-                } else if args.len() != usize::from(*size) {
-                    self.arity_error(&format!("vec{size}"), usize::from(*size), args.len(), span);
                 }
+                let mut components = 0_usize;
                 for argument in args {
                     let actual = self.infer_expr(argument, context);
-                    self.expect(InferType::Float, actual, argument.span);
+                    match self.solver.resolve(&actual) {
+                        InferType::Vector(argument_size) => {
+                            components += usize::from(argument_size);
+                        }
+                        InferType::Int | InferType::Float | InferType::Var(_) => {
+                            components += 1;
+                            self.expect(InferType::Float, actual, argument.span);
+                        }
+                        InferType::Error => {}
+                        actual => self.solve_error(
+                            SolveError::Mismatch {
+                                expected: InferType::Float,
+                                actual,
+                            },
+                            argument.span,
+                            "E0303",
+                        ),
+                    }
+                }
+                if components != usize::from(*size) {
+                    self.arity_error(
+                        &format!("vec{size} components"),
+                        usize::from(*size),
+                        components,
+                        span,
+                    );
                 }
                 InferType::Vector(*size)
             }
@@ -213,7 +241,8 @@ impl Analyzer {
                     _ => self.numeric_result(left, right, span, false),
                 }
             }
-            BinOp::Sub | BinOp::Mul | BinOp::RemFloor | BinOp::RemTrunc => {
+            BinOp::Mul => self.multiply_result(left, right, span),
+            BinOp::Sub | BinOp::RemFloor | BinOp::RemTrunc => {
                 self.numeric_result(left, right, span, false)
             }
             BinOp::DivInt => self.numeric_result(left, right, span, false),
@@ -399,6 +428,33 @@ impl Analyzer {
         }
     }
 
+    fn multiply_result(
+        &mut self,
+        left: InferType,
+        right: InferType,
+        span: polygl_span::Span,
+    ) -> InferType {
+        let resolved_left = self.solver.resolve(&left);
+        let resolved_right = self.solver.resolve(&right);
+        match (&resolved_left, &resolved_right) {
+            (InferType::Matrix(left), InferType::Matrix(right)) if left == right => {
+                InferType::Matrix(*left)
+            }
+            (InferType::Matrix(matrix), InferType::Vector(vector)) if matrix == vector => {
+                InferType::Vector(*vector)
+            }
+            (InferType::Vector(size), InferType::Int | InferType::Float) => {
+                self.expect(InferType::Float, right, span);
+                InferType::Vector(*size)
+            }
+            (InferType::Int | InferType::Float, InferType::Vector(size)) => {
+                self.expect(InferType::Float, left, span);
+                InferType::Vector(*size)
+            }
+            _ => self.numeric_result(left, right, span, false),
+        }
+    }
+
     fn expect(&mut self, expected: InferType, actual: InferType, span: polygl_span::Span) {
         if let Err(error) = self.solver.assign(expected, actual) {
             self.solve_error(error, span, "E0303");
@@ -537,6 +593,15 @@ pub(super) fn builtin_type(ty: BuiltinType) -> InferType {
         BuiltinType::Float => InferType::Float,
         BuiltinType::Bool => InferType::Bool,
         BuiltinType::Str => InferType::Str,
+        BuiltinType::IntArray => InferType::Array(Box::new(InferType::Int)),
+        BuiltinType::FloatArray => InferType::Array(Box::new(InferType::Float)),
+        BuiltinType::Vec2 => InferType::Vector(2),
+        BuiltinType::Vec3 => InferType::Vector(3),
+        BuiltinType::Vec4 => InferType::Vector(4),
+        BuiltinType::Mat2 => InferType::Matrix(2),
+        BuiltinType::Mat3 => InferType::Matrix(3),
+        BuiltinType::Mat4 => InferType::Matrix(4),
+        BuiltinType::ShaderValue => InferType::ShaderValue,
         BuiltinType::Opaque(kind) => InferType::Opaque(kind),
     }
 }

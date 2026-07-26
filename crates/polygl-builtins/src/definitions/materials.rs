@@ -12,3 +12,13 @@ pub(super) const MATERIAL_SHADER: Builtin = builtin(
     Domain::Host,
     "materialShader",
 );
+
+pub(super) const MATERIAL_BASIC: Builtin = builtin(
+    BuiltinId::MATERIAL_BASIC,
+    "material_basic",
+    BuiltinTier::Tier2,
+    &[req("color", BuiltinType::Vec4)],
+    BuiltinType::Opaque(OpaqueType::Material),
+    Domain::Host,
+    "materialBasic",
+);

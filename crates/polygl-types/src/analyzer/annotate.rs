@@ -181,6 +181,7 @@ impl Analyzer {
                 .get(name)
                 .and_then(|ty| self.resolve_expression_type(&ty, span, Some(name.as_str())))
                 .unwrap_or(Type::Unit),
+            ExprKind::Uniform { declared, .. } => Type::from_expr(declared),
             ExprKind::Binary { op, left, right } => {
                 let left = self.annotate_expr(left, environment);
                 let right = self.annotate_expr(right, environment);
@@ -352,17 +353,40 @@ impl Analyzer {
             ExprKind::Vector { size, args } => {
                 if !(2..=4).contains(size) {
                     self.invalid_dimension_error("vector", *size, span);
-                } else if args.len() != usize::from(*size) {
-                    self.arity_error(&format!("vec{size}"), usize::from(*size), args.len(), span);
                 }
+                let mut components = 0_usize;
                 for argument in args {
                     let actual = self.annotate_expr(argument, environment);
-                    if let Err(error) = self
-                        .solver
-                        .assign(InferType::Float, InferType::from_type(&actual))
-                    {
-                        self.solve_error(error, argument.span, "E0303");
+                    match actual {
+                        Type::Vector(argument_size) => {
+                            components += usize::from(argument_size);
+                        }
+                        Type::Int | Type::Float => {
+                            components += 1;
+                            if let Err(error) = self
+                                .solver
+                                .assign(InferType::Float, InferType::from_type(&actual))
+                            {
+                                self.solve_error(error, argument.span, "E0303");
+                            }
+                        }
+                        _ => self.solve_error(
+                            crate::solver::SolveError::Mismatch {
+                                expected: InferType::Float,
+                                actual: InferType::from_type(&actual),
+                            },
+                            argument.span,
+                            "E0303",
+                        ),
                     }
+                }
+                if components != usize::from(*size) {
+                    self.arity_error(
+                        &format!("vec{size} components"),
+                        usize::from(*size),
+                        components,
+                        span,
+                    );
                 }
                 Type::Vector(*size)
             }
@@ -420,7 +444,25 @@ impl Analyzer {
             || (left == &Type::Str && right == &Type::Str)
             || (matches!(left, Type::Int | Type::Float)
                 && matches!(right, Type::Int | Type::Float));
-        if (exact_comparison && left != right) || !valid_add {
+        let valid_multiply = operator != BinOp::Mul
+            || matches!(
+                (left, right),
+                (Type::Int | Type::Float, Type::Int | Type::Float)
+            )
+            || matches!(
+                (left, right),
+                (Type::Matrix(left), Type::Matrix(right)) if left == right
+            )
+            || matches!(
+                (left, right),
+                (Type::Matrix(matrix), Type::Vector(vector)) if matrix == vector
+            )
+            || matches!(
+                (left, right),
+                (Type::Vector(_), Type::Int | Type::Float)
+                    | (Type::Int | Type::Float, Type::Vector(_))
+            );
+        if (exact_comparison && left != right) || !valid_add || !valid_multiply {
             self.solve_error(
                 crate::solver::SolveError::Mismatch {
                     expected: InferType::from_type(left),
@@ -558,9 +600,8 @@ fn annotated_binary(operator: &mut BinOp, left: &Type, right: &Type) -> Type {
             *operator = BinOp::StrConcat;
             Type::Str
         }
-        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::RemFloor | BinOp::RemTrunc => {
-            numeric_type(left, right)
-        }
+        BinOp::Mul => multiply_type(left, right),
+        BinOp::Add | BinOp::Sub | BinOp::RemFloor | BinOp::RemTrunc => numeric_type(left, right),
         BinOp::DivInt if *left == Type::Float || *right == Type::Float => {
             *operator = BinOp::DivFloat;
             Type::Float
@@ -584,6 +625,16 @@ fn numeric_type(left: &Type, right: &Type) -> Type {
         Type::Float
     } else {
         Type::Int
+    }
+}
+
+fn multiply_type(left: &Type, right: &Type) -> Type {
+    match (left, right) {
+        (Type::Matrix(left), Type::Matrix(right)) if left == right => Type::Matrix(*left),
+        (Type::Matrix(matrix), Type::Vector(vector)) if matrix == vector => Type::Vector(*vector),
+        (Type::Vector(size), Type::Int | Type::Float)
+        | (Type::Int | Type::Float, Type::Vector(size)) => Type::Vector(*size),
+        _ => numeric_type(left, right),
     }
 }
 
@@ -612,6 +663,6 @@ fn infer_to_type(ty: InferType) -> Type {
         InferType::Array(value) => Type::Array(Box::new(infer_to_type(*value))),
         InferType::Map(value) => Type::Map(Box::new(infer_to_type(*value))),
         InferType::Option(value) => Type::Option(Box::new(infer_to_type(*value))),
-        InferType::Var(_) | InferType::Error => Type::Unit,
+        InferType::Var(_) | InferType::ShaderValue | InferType::Error => Type::Unit,
     }
 }

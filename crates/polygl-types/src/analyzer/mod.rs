@@ -698,7 +698,12 @@ impl Analyzer {
                     self.validate_parameter_names(&function.params);
                 }
                 Item::Struct(definition) => {
-                    if BuiltinTable::find_struct(definition.name.as_str()).is_some() {
+                    if BuiltinTable::find_struct(definition.name.as_str()).is_some()
+                        || matches!(
+                            definition.name.as_str(),
+                            "Mesh" | "Node" | "Material" | "Texture"
+                        )
+                    {
                         self.reserved_type_error(definition.name.as_str(), definition.span);
                     }
                     if !structs.insert(definition.name.as_str()) {

@@ -45,6 +45,15 @@ pub enum BuiltinType {
     Float,
     Bool,
     Str,
+    IntArray,
+    FloatArray,
+    Vec2,
+    Vec3,
+    Vec4,
+    Mat2,
+    Mat3,
+    Mat4,
+    ShaderValue,
     Opaque(OpaqueType),
 }
 
@@ -57,6 +66,15 @@ impl BuiltinType {
             Self::Float => "float",
             Self::Bool => "bool",
             Self::Str => "str",
+            Self::IntArray => "int[]",
+            Self::FloatArray => "float[]",
+            Self::Vec2 => "vec2",
+            Self::Vec3 => "vec3",
+            Self::Vec4 => "vec4",
+            Self::Mat2 => "mat2",
+            Self::Mat3 => "mat3",
+            Self::Mat4 => "mat4",
+            Self::ShaderValue => "ShaderValue",
             Self::Opaque(OpaqueType::Mesh) => "Mesh",
             Self::Opaque(OpaqueType::Node) => "Node",
             Self::Opaque(OpaqueType::Material) => "Material",
@@ -106,6 +124,25 @@ impl Parameter {
             ty,
             default: Some(default),
         }
+    }
+}
+
+impl BuiltinType {
+    #[must_use]
+    pub const fn accepts_shader_value(self) -> bool {
+        matches!(
+            self,
+            Self::Int
+                | Self::Float
+                | Self::Bool
+                | Self::Vec2
+                | Self::Vec3
+                | Self::Vec4
+                | Self::Mat2
+                | Self::Mat3
+                | Self::Mat4
+                | Self::Opaque(OpaqueType::Texture)
+        )
     }
 }
 

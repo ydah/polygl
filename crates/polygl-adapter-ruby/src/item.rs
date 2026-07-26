@@ -26,7 +26,18 @@ impl Lowerer<'_, '_, '_> {
             .map(|parameter| parameter.name.as_str().to_owned())
             .collect();
         let span = self.span(definition.location());
+        let previous_shader_anchor = self.shader_annotation_anchor;
+        self.shader_annotation_anchor = kind
+            .as_ref()
+            .filter(|kind| {
+                matches!(
+                    kind,
+                    EntryPointKind::Vertex(_) | EntryPointKind::Fragment(_)
+                )
+            })
+            .map(|_| definition.location().start_offset());
         let mut body = self.lower_body(definition.body(), span);
+        self.shader_annotation_anchor = previous_shader_anchor;
         self.declared.clear();
 
         match kind {

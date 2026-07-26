@@ -465,6 +465,7 @@ impl<'source> Emitter<'source> {
             ExprKind::Literal(literal) => self.literal(literal),
             ExprKind::Variable(name) => self.write(&self.binding(name)),
             ExprKind::Constant(name) => self.write(&constant_identifier(name)),
+            ExprKind::Uniform(_) => unreachable!("Host programs cannot contain shader uniforms"),
             ExprKind::Binary { op, left, right } => {
                 self.binary(*op, left, right, &expression.ty, expression.span)?;
             }

@@ -18,6 +18,11 @@ pub enum EmitError {
     },
     InvalidAttribute(String),
     UnknownBinding(String),
+    ConflictingUniform {
+        name: String,
+        first: Type,
+        second: Type,
+    },
     UnsupportedRuntimeOp(String),
     UnsupportedExpression(&'static str),
     NonFiniteFloat(f64),
@@ -46,6 +51,14 @@ impl fmt::Display for EmitError {
                 write!(formatter, "`{name}` is not a standard vertex attribute")
             }
             Self::UnknownBinding(name) => write!(formatter, "unknown GPU binding `{name}`"),
+            Self::ConflictingUniform {
+                name,
+                first,
+                second,
+            } => write!(
+                formatter,
+                "uniform `{name}` has conflicting types `{first}` and `{second}`"
+            ),
             Self::UnsupportedRuntimeOp(name) => {
                 write!(formatter, "runtime operation `{name}` has no GLSL lowering")
             }
