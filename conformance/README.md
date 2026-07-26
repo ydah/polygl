@@ -9,9 +9,10 @@ PolyGL conformance is split into the three layers defined by the design:
 `polygl-conformance` implements capability-based case selection, renderer-keyed
 L1 frame comparison, language-specific L2 snapshot verification, normalized L3
 equality, and GPU split/backend checks. `cargo xtask conformance` compiles all
-committed Ruby and PHP render cases and checks five shared L1 baselines, ten L2
-snapshots, two cross-language neutral L3 comparisons and snapshots, one
-positive GLSL case, and two expected GPU diagnostics.
+committed Ruby and PHP render cases and checks six shared L1 baselines, ten L2
+snapshots, two cross-language neutral L3 comparisons and snapshots, one positive
+GLSL case, and two expected GPU diagnostics. The `lit-cubes` L1 case exercises
+the Tier 2 camera, light, retained mesh, node transform, and material path.
 
 `pnpm --dir conformance/browser test` rebuilds every L1 case in Ruby and PHP
 with the CLI and compares both real WebGL2 framebuffers against the same bytes

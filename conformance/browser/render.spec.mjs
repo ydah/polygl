@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 const RENDER_CASES = [
   "background",
   "circle",
+  "lit-cubes",
   "rectangle",
   "seeded-random",
   "triangle",

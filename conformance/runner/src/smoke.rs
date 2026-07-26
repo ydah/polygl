@@ -20,6 +20,7 @@ const M1_CASES: &[&str] = &[
     "seeded-random",
     "triangle",
 ];
+const M5_CASES: &[&str] = &["lit-cubes"];
 const NEUTRAL_CASES: &[&str] = &["rectangle", "triangle"];
 const GPU_CASES: &[(&str, Option<&str>)] = &[
     ("plasma", None),
@@ -64,12 +65,17 @@ pub fn verify_smoke(root: &Path) -> Result<ConformanceReport, ConformanceError> 
             l3.verify(case, &ruby)?;
         }
     }
+    for case in M5_CASES {
+        compile_ruby(root, case)?;
+        compile_php(root, case)?;
+        l1.load(case, BASELINE_RENDERER)?;
+    }
     for (case, expected_error) in GPU_CASES {
         verify_gpu_case(root, case, *expected_error)?;
     }
 
     Ok(ConformanceReport {
-        l1_cases: M1_CASES.len(),
+        l1_cases: M1_CASES.len() + M5_CASES.len(),
         l2_cases: M1_CASES.len() * 2,
         l3_cases: NEUTRAL_CASES.len(),
         gpu_cases: GPU_CASES.len(),
@@ -194,16 +200,17 @@ mod tests {
 
     use crate::{NeutralProgram, compare_neutral_hir};
 
-    use super::{GPU_CASES, M1_CASES, NEUTRAL_CASES, compile_php, compile_ruby};
+    use super::{GPU_CASES, M1_CASES, M5_CASES, NEUTRAL_CASES, compile_php, compile_ruby};
 
     #[test]
-    fn m1_case_inventory_has_five_render_and_two_neutral_cases() {
+    fn case_inventory_has_six_render_and_two_neutral_cases() {
         assert_eq!(M1_CASES.len(), 5);
+        assert_eq!(M5_CASES.len(), 1);
         assert_eq!(NEUTRAL_CASES.len(), 2);
         assert!(NEUTRAL_CASES.iter().all(|case| M1_CASES.contains(case)));
         assert_eq!(GPU_CASES.len(), 3);
         let root = conformance_root();
-        for case in M1_CASES {
+        for case in M1_CASES.iter().chain(M5_CASES.iter()) {
             assert!(root.join("cases").join(case).join("main.php").is_file());
         }
     }
