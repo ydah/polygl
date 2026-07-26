@@ -14,7 +14,7 @@ source rewrite changes.
 | E02xx | syntax outside Common Core |
 | E03xx | literals, names, types, and specialization |
 | E04xx | GPU subset and shader ABI |
-| E05xx | public API misuse (unassigned) |
+| E05xx | public API and asset misuse |
 | W03xx | numeric portability (unassigned) |
 | W04xx | GPU precision and performance |
 
@@ -66,6 +66,12 @@ mismatches; those are E0303.
 | E0406 | integer divisor in GPU code is not provably nonzero | required |
 | W0401 | shared float code may differ between Host f64 and GPU f32 | note |
 | W0402 | compiler-visible GPU loop exceeds 1024 iterations | note |
+
+## Public API diagnostics
+
+| Code | Meaning | Suggestion |
+|---|---|---|
+| E0501 | `texture_load` path is dynamic, non-relative, non-portable, or collides with a generated artifact | required |
 
 ## Suggestions
 

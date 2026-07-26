@@ -13,7 +13,7 @@ pub use lower::lower;
 pub use module::{
     Constant, Domain, EntryKind, EntryPoint, Field, Function, Module, Parameter, StructDef,
 };
-pub use split::{SplitProgram, split};
+pub use split::{AssetReference, SplitProgram, split};
 pub use stmt::{Block, Place, PlaceKind, Range, Statement, StatementKind};
 
 #[cfg(test)]

@@ -13,7 +13,14 @@ use crate::{
 pub struct SplitProgram {
     pub host: Module,
     pub gpu: Module,
+    pub assets: Vec<AssetReference>,
     pub warnings: Diagnostics,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssetReference {
+    pub path: String,
+    pub span: polygl_span::Span,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -28,6 +35,7 @@ pub fn split(module: &Module) -> Result<SplitProgram, Diagnostics> {
     let mut validator = Validator::new(module);
     validator.validate_shader_pairs();
     validator.validate_material_references();
+    validator.validate_asset_references();
     validator.validate_host_graph();
     validator.validate_gpu_graph();
     if validator.diagnostics.has_errors() {
@@ -44,6 +52,7 @@ pub fn split(module: &Module) -> Result<SplitProgram, Diagnostics> {
     Ok(SplitProgram {
         host,
         gpu,
+        assets: validator.assets,
         warnings: validator.diagnostics,
     })
 }
@@ -116,6 +125,7 @@ struct Validator<'module> {
     gpu_functions: HashSet<&'module str>,
     gpu_constants: HashSet<&'module str>,
     gpu_structs: HashSet<&'module str>,
+    assets: Vec<AssetReference>,
     validating_structs: HashSet<&'module str>,
     validated_structs: HashSet<&'module str>,
 }
@@ -138,6 +148,7 @@ impl<'module> Validator<'module> {
             gpu_functions: HashSet::new(),
             gpu_constants: HashSet::new(),
             gpu_structs: HashSet::new(),
+            assets: Vec::new(),
             validating_structs: HashSet::new(),
             validated_structs: HashSet::new(),
         }
@@ -348,13 +359,25 @@ impl<'module> Validator<'module> {
 
         let mut references = Vec::new();
         for entry in &self.module.entries {
-            collect_material_references_block(&entry.body, material_operation, &mut references);
+            collect_string_runtime_references_block(
+                &entry.body,
+                material_operation,
+                &mut references,
+            );
         }
         for function in &self.module.functions {
-            collect_material_references_block(&function.body, material_operation, &mut references);
+            collect_string_runtime_references_block(
+                &function.body,
+                material_operation,
+                &mut references,
+            );
         }
         for constant in &self.module.constants {
-            collect_material_references_expr(&constant.value, material_operation, &mut references);
+            collect_string_runtime_references_expr(
+                &constant.value,
+                material_operation,
+                &mut references,
+            );
         }
 
         for (name, span) in references {
@@ -382,6 +405,59 @@ impl<'module> Validator<'module> {
                     span,
                     suggestion,
                 );
+            }
+        }
+    }
+
+    fn validate_asset_references(&mut self) {
+        let texture_operation = BuiltinTable::find("texture_load")
+            .expect("texture_load is a canonical builtin")
+            .runtime_op;
+        let mut references = Vec::new();
+        for entry in &self.module.entries {
+            collect_string_runtime_references_block(
+                &entry.body,
+                texture_operation,
+                &mut references,
+            );
+        }
+        for function in &self.module.functions {
+            collect_string_runtime_references_block(
+                &function.body,
+                texture_operation,
+                &mut references,
+            );
+        }
+        for constant in &self.module.constants {
+            collect_string_runtime_references_expr(
+                &constant.value,
+                texture_operation,
+                &mut references,
+            );
+        }
+
+        let mut seen = HashSet::new();
+        for (path, span) in references {
+            let Some(path) = path else {
+                self.error(
+                    "E0501",
+                    "texture_load requires a string literal asset path",
+                    span,
+                    "pass a relative literal such as texture_load(\"assets/brick.png\")",
+                );
+                continue;
+            };
+            if let Some(reason) = invalid_asset_path_reason(&path) {
+                self.error(
+                    "E0501",
+                    format!("texture asset path `{path}` is not portable: {reason}"),
+                    span,
+                    "use a relative slash-separated path without . or .. components",
+                );
+                continue;
+            }
+            if seen.insert(path.clone()) {
+                self.assets.push(AssetReference { path, span });
             }
         }
     }
@@ -1287,7 +1363,7 @@ fn collect_expr_calls(expression: &Expr, calls: &mut Vec<String>) {
     }
 }
 
-fn collect_material_references_block(
+fn collect_string_runtime_references_block(
     block: &Block,
     operation: polygl_builtins::RuntimeOp,
     references: &mut Vec<(Option<String>, polygl_span::Span)>,
@@ -1295,35 +1371,35 @@ fn collect_material_references_block(
     for statement in &block.statements {
         match &statement.kind {
             StatementKind::Let { init, .. } | StatementKind::Expr(init) => {
-                collect_material_references_expr(init, operation, references);
+                collect_string_runtime_references_expr(init, operation, references);
             }
             StatementKind::Assign { target, value } => {
-                collect_material_references_place(target, operation, references);
-                collect_material_references_expr(value, operation, references);
+                collect_string_runtime_references_place(target, operation, references);
+                collect_string_runtime_references_expr(value, operation, references);
             }
             StatementKind::If {
                 condition,
                 then_block,
                 else_block,
             } => {
-                collect_material_references_expr(condition, operation, references);
-                collect_material_references_block(then_block, operation, references);
+                collect_string_runtime_references_expr(condition, operation, references);
+                collect_string_runtime_references_block(then_block, operation, references);
                 if let Some(else_block) = else_block {
-                    collect_material_references_block(else_block, operation, references);
+                    collect_string_runtime_references_block(else_block, operation, references);
                 }
             }
             StatementKind::While { condition, body } => {
-                collect_material_references_expr(condition, operation, references);
-                collect_material_references_block(body, operation, references);
+                collect_string_runtime_references_expr(condition, operation, references);
+                collect_string_runtime_references_block(body, operation, references);
             }
             StatementKind::For { range, body, .. } => {
-                collect_material_references_expr(&range.start, operation, references);
-                collect_material_references_expr(&range.end, operation, references);
-                collect_material_references_block(body, operation, references);
+                collect_string_runtime_references_expr(&range.start, operation, references);
+                collect_string_runtime_references_expr(&range.end, operation, references);
+                collect_string_runtime_references_block(body, operation, references);
             }
             StatementKind::Return(value) => {
                 if let Some(value) = value {
-                    collect_material_references_expr(value, operation, references);
+                    collect_string_runtime_references_expr(value, operation, references);
                 }
             }
             StatementKind::Break | StatementKind::Continue => {}
@@ -1331,7 +1407,7 @@ fn collect_material_references_block(
     }
 }
 
-fn collect_material_references_place(
+fn collect_string_runtime_references_place(
     place: &Place,
     operation: polygl_builtins::RuntimeOp,
     references: &mut Vec<(Option<String>, polygl_span::Span)>,
@@ -1339,16 +1415,16 @@ fn collect_material_references_place(
     match &place.kind {
         PlaceKind::Variable(_) => {}
         PlaceKind::Index { base, index } => {
-            collect_material_references_expr(base, operation, references);
-            collect_material_references_expr(index, operation, references);
+            collect_string_runtime_references_expr(base, operation, references);
+            collect_string_runtime_references_expr(index, operation, references);
         }
         PlaceKind::Field { base, .. } => {
-            collect_material_references_expr(base, operation, references);
+            collect_string_runtime_references_expr(base, operation, references);
         }
     }
 }
 
-fn collect_material_references_expr(
+fn collect_string_runtime_references_expr(
     expression: &Expr,
     operation: polygl_builtins::RuntimeOp,
     references: &mut Vec<(Option<String>, polygl_span::Span)>,
@@ -1369,7 +1445,7 @@ fn collect_material_references_expr(
                 ));
             }
             for argument in args {
-                collect_material_references_expr(argument, operation, references);
+                collect_string_runtime_references_expr(argument, operation, references);
             }
         }
         ExprKind::Binary { left, right, .. }
@@ -1377,30 +1453,30 @@ fn collect_material_references_expr(
             base: left,
             index: right,
         } => {
-            collect_material_references_expr(left, operation, references);
-            collect_material_references_expr(right, operation, references);
+            collect_string_runtime_references_expr(left, operation, references);
+            collect_string_runtime_references_expr(right, operation, references);
         }
         ExprKind::Unary { operand, .. }
         | ExprKind::Field { base: operand, .. }
         | ExprKind::ArrayLength(operand)
         | ExprKind::IsNil(operand)
         | ExprKind::IsFalsy(operand) => {
-            collect_material_references_expr(operand, operation, references);
+            collect_string_runtime_references_expr(operand, operation, references);
         }
         ExprKind::Array(items) | ExprKind::Vector { args: items, .. } => {
             for item in items {
-                collect_material_references_expr(item, operation, references);
+                collect_string_runtime_references_expr(item, operation, references);
             }
         }
         ExprKind::Map(entries) => {
             for entry in entries {
-                collect_material_references_expr(&entry.key, operation, references);
-                collect_material_references_expr(&entry.value, operation, references);
+                collect_string_runtime_references_expr(&entry.key, operation, references);
+                collect_string_runtime_references_expr(&entry.value, operation, references);
             }
         }
         ExprKind::Struct { fields, .. } => {
             for field in fields {
-                collect_material_references_expr(&field.value, operation, references);
+                collect_string_runtime_references_expr(&field.value, operation, references);
             }
         }
         ExprKind::Literal(_)
@@ -1408,6 +1484,38 @@ fn collect_material_references_expr(
         | ExprKind::Constant(_)
         | ExprKind::Uniform(_) => {}
     }
+}
+
+fn invalid_asset_path_reason(path: &str) -> Option<&'static str> {
+    const GENERATED_ARTIFACTS: [&str; 5] = [
+        "app.js",
+        "app.js.map",
+        "index.html",
+        "runtime.js",
+        "shaders.js",
+    ];
+    if path.is_empty() {
+        return Some("the path is empty");
+    }
+    if path.starts_with('/') {
+        return Some("absolute paths are not allowed");
+    }
+    if path.contains('\\') {
+        return Some("backslashes are not portable path separators");
+    }
+    if path.contains(':') {
+        return Some("URL schemes and drive prefixes are not allowed");
+    }
+    if path
+        .split('/')
+        .any(|component| component.is_empty() || component == "." || component == "..")
+    {
+        return Some("empty, . and .. path components are not allowed");
+    }
+    if GENERATED_ARTIFACTS.contains(&path) {
+        return Some("the path would overwrite a generated build artifact");
+    }
+    None
 }
 
 #[cfg(test)]
@@ -1655,6 +1763,76 @@ mod tests {
         )));
         let diagnostics = split(&dynamic).expect_err("dynamic shader names must fail");
         assert!(codes(&diagnostics).contains("E0405"));
+    }
+
+    #[test]
+    fn collects_only_portable_literal_texture_assets() {
+        let texture = BuiltinTable::find("texture_load").unwrap();
+        let setup_with = |arguments: Vec<Expr>| EntryPoint {
+            kind: EntryKind::Setup,
+            params: Vec::new(),
+            result: Type::Unit,
+            body: Block {
+                statements: arguments
+                    .into_iter()
+                    .map(|argument| {
+                        Statement::new(
+                            StatementKind::Expr(expression(
+                                ExprKind::Call {
+                                    target: CallTarget::Runtime(texture.runtime_op),
+                                    args: vec![argument],
+                                },
+                                Type::Opaque(OpaqueType::Texture),
+                            )),
+                            span(),
+                        )
+                    })
+                    .collect(),
+                span: span(),
+            },
+            domain: Domain::Host,
+            span: span(),
+        };
+        let string =
+            |value: &str| expression(ExprKind::Literal(Literal::Str(value.to_owned())), Type::Str);
+
+        let mut valid = valid_pair(vec![return_vector4()]);
+        valid.entries.push(setup_with(vec![
+            string("assets/brick.png"),
+            string("assets/brick.png"),
+            string("terrain/height map.png"),
+        ]));
+        let program = split(&valid).expect("portable literal assets should be collected");
+        assert_eq!(
+            program
+                .assets
+                .iter()
+                .map(|asset| asset.path.as_str())
+                .collect::<Vec<_>>(),
+            ["assets/brick.png", "terrain/height map.png"]
+        );
+
+        let mut dynamic = valid_pair(vec![return_vector4()]);
+        dynamic.entries.push(setup_with(vec![expression(
+            ExprKind::Variable("path".to_owned()),
+            Type::Str,
+        )]));
+        let diagnostics = split(&dynamic).expect_err("dynamic assets cannot be packaged");
+        assert!(codes(&diagnostics).contains("E0501"));
+
+        for unsafe_path in [
+            "",
+            "/absolute.png",
+            "../outside.png",
+            "assets\\windows.png",
+            "https://example.test/a.png",
+            "runtime.js",
+        ] {
+            let mut invalid = valid_pair(vec![return_vector4()]);
+            invalid.entries.push(setup_with(vec![string(unsafe_path)]));
+            let diagnostics = split(&invalid).expect_err("unsafe asset paths must be rejected");
+            assert!(codes(&diagnostics).contains("E0501"), "{unsafe_path}");
+        }
     }
 
     #[test]

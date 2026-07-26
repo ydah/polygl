@@ -14,7 +14,15 @@ polygl dump-hir <source.rb|source.php>
 - `index.html`, whose module bootstrap activates the runtime before dynamically
   importing the generated program;
 - `app.js` and `app.js.map`;
+- `shaders.js`, containing data-only GLSL and reflection metadata;
 - `runtime.js`, embedded in the CLI binary from the tested TypeScript runtime.
+
+Every `texture_load` argument must be a literal relative slash-separated path.
+`build` reads it relative to the source file and copies it to the same path
+under the output directory. Dynamic paths, absolute paths, `.` or `..`
+components, URL/drive prefixes, backslashes, and names that would overwrite a
+generated artifact produce E0501. A missing source asset fails the build before
+any browser artifact is written.
 
 Debug output includes source-located array, vector, matrix, and nil checks.
 Release output removes those checks but retains the source map. Build output

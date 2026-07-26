@@ -13,6 +13,7 @@ use polygl_adapter_ruby::RubyAdapter;
 use polygl_backend_glsl::{GlslArtifacts, GlslBackend, UniformSource};
 use polygl_backend_js::{BuildMode, JavaScriptBackend};
 use polygl_core::BuiltinTable;
+use polygl_lir::AssetReference;
 use polygl_span::{Diagnostics, SourceFile, SourceId};
 use polygl_types::TypedModule;
 
@@ -47,6 +48,11 @@ const INDEX_HTML: &str = r#"<!doctype html>
 </body>
 </html>
 "#;
+
+struct PreparedAsset {
+    relative_path: PathBuf,
+    contents: Vec<u8>,
+}
 
 #[derive(Debug)]
 pub struct CliError {
@@ -102,7 +108,7 @@ pub fn run(
         } => build(&source, &destination, mode, output),
         Command::Check { source } => {
             let (source, typed) = compile_frontend(&source)?;
-            let (_, _, warnings) = compile_backends(&source, &typed, BuildMode::Debug)?;
+            let (_, _, _, warnings) = compile_backends(&source, &typed, BuildMode::Debug)?;
             write_diagnostics(&warnings, &source, output)?;
             Ok(())
         }
@@ -242,7 +248,8 @@ fn build(
     messages: &mut dyn Write,
 ) -> Result<(), CliError> {
     let (source, typed) = compile_frontend(source_path)?;
-    let (javascript, shaders, warnings) = compile_backends(&source, &typed, mode)?;
+    let (javascript, shaders, assets, warnings) = compile_backends(&source, &typed, mode)?;
+    let assets = prepare_assets(source_path, &assets)?;
     write_diagnostics(&warnings, &source, messages)?;
 
     fs::create_dir_all(destination).map_err(|error| {
@@ -264,14 +271,23 @@ fn build(
         render_shader_module(&shaders, &source, mode)?.as_bytes(),
     )?;
     write_artifact(&destination.join("runtime.js"), RUNTIME_BUNDLE)?;
-    write_artifact(&destination.join("index.html"), INDEX_HTML.as_bytes())
+    write_artifact(&destination.join("index.html"), INDEX_HTML.as_bytes())?;
+    write_assets(destination, assets)
 }
 
 fn compile_backends(
     source: &SourceFile,
     typed: &TypedModule,
     mode: BuildMode,
-) -> Result<(polygl_backend_js::Artifacts, GlslArtifacts, Diagnostics), CliError> {
+) -> Result<
+    (
+        polygl_backend_js::Artifacts,
+        GlslArtifacts,
+        Vec<AssetReference>,
+        Diagnostics,
+    ),
+    CliError,
+> {
     let lir = polygl_lir::lower(typed);
     let split =
         polygl_lir::split(&lir).map_err(|diagnostics| diagnostic_error(&diagnostics, source))?;
@@ -281,7 +297,7 @@ fn compile_backends(
     let shaders = GlslBackend::new()
         .generate(&split.gpu)
         .map_err(|error| CliError::new(format!("GLSL generation failed: {error}")))?;
-    Ok((javascript, shaders, split.warnings))
+    Ok((javascript, shaders, split.assets, split.warnings))
 }
 
 fn render_shader_module(
@@ -449,6 +465,48 @@ fn write_artifact(path: &Path, contents: &[u8]) -> Result<(), CliError> {
             path.display()
         ))
     })
+}
+
+fn prepare_assets(
+    source_path: &Path,
+    references: &[AssetReference],
+) -> Result<Vec<PreparedAsset>, CliError> {
+    let source_directory = source_path.parent().unwrap_or_else(|| Path::new("."));
+    references
+        .iter()
+        .map(|reference| {
+            let relative_path = reference.path.split('/').collect::<PathBuf>();
+            let input_path = source_directory.join(&relative_path);
+            let contents = fs::read(&input_path).map_err(|error| {
+                CliError::new(format!(
+                    "failed to read texture asset {} referenced as `{}`: {error}",
+                    input_path.display(),
+                    reference.path,
+                ))
+            })?;
+            Ok(PreparedAsset {
+                relative_path,
+                contents,
+            })
+        })
+        .collect()
+}
+
+fn write_assets(destination: &Path, assets: Vec<PreparedAsset>) -> Result<(), CliError> {
+    for asset in assets {
+        let output_path = destination.join(&asset.relative_path);
+        let parent = output_path
+            .parent()
+            .expect("a validated relative asset path has a parent");
+        fs::create_dir_all(parent).map_err(|error| {
+            CliError::new(format!(
+                "failed to create asset directory {}: {error}",
+                parent.display(),
+            ))
+        })?;
+        write_artifact(&output_path, &asset.contents)?;
+    }
+    Ok(())
 }
 
 fn usage() -> String {
@@ -746,6 +804,87 @@ function setup() {
         assert!(javascript.contains("__pglRuntime.background"));
         assert!(javascript.contains("__pglRuntime.triangle"));
         assert!(output.join("index.html").is_file());
+        fs::remove_dir_all(temporary).unwrap();
+    }
+
+    #[test]
+    fn copies_literal_texture_assets_and_rejects_unpackageable_inputs() {
+        let temporary = temporary_directory();
+        let asset_directory = temporary.join("assets");
+        fs::create_dir(&asset_directory).unwrap();
+        let texture_bytes = [0_u8, 1, 2, 3, 0xff];
+        fs::write(asset_directory.join("checker.bin"), texture_bytes).unwrap();
+        let source = temporary.join("textured.rb");
+        fs::write(
+            &source,
+            "def setup\n  texture_load(\"assets/checker.bin\")\nend\n",
+        )
+        .unwrap();
+        let output = temporary.join("web");
+        run(
+            arguments([
+                "build",
+                source.to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+            ]),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(output.join("assets/checker.bin")).unwrap(),
+            texture_bytes
+        );
+
+        let missing = temporary.join("missing.rb");
+        fs::write(
+            &missing,
+            "def setup\n  texture_load(\"assets/missing.png\")\nend\n",
+        )
+        .unwrap();
+        let error = run(
+            arguments([
+                "build",
+                missing.to_str().unwrap(),
+                "-o",
+                temporary.join("missing-web").to_str().unwrap(),
+            ]),
+            &mut Vec::new(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("failed to read texture asset"));
+        assert!(error.contains("assets/missing.png"));
+
+        let dynamic = temporary.join("dynamic.rb");
+        fs::write(
+            &dynamic,
+            "def setup\n  path = \"assets/checker.bin\"\n  texture_load(path)\nend\n",
+        )
+        .unwrap();
+        let error = run(
+            arguments(["check", dynamic.to_str().unwrap()]),
+            &mut Vec::new(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("E0501"));
+        assert!(error.contains("string literal asset path"));
+
+        let unsafe_path = temporary.join("unsafe.rb");
+        fs::write(
+            &unsafe_path,
+            "def setup\n  texture_load(\"../secret.png\")\nend\n",
+        )
+        .unwrap();
+        let error = run(
+            arguments(["check", unsafe_path.to_str().unwrap()]),
+            &mut Vec::new(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("E0501"));
+        assert!(error.contains("not portable"));
         fs::remove_dir_all(temporary).unwrap();
     }
 
