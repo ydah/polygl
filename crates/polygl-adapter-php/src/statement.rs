@@ -429,6 +429,14 @@ fn stable_range_bound(expression: &Expression<'_>) -> bool {
     match expression {
         Expression::Literal(_) | Expression::ConstantAccess(_) => true,
         Expression::Parenthesized(parenthesized) => stable_range_bound(parenthesized.expression),
+        Expression::UnaryPrefix(unary)
+            if matches!(
+                unary.operator,
+                UnaryPrefixOperator::Negation(_) | UnaryPrefixOperator::Plus(_)
+            ) =>
+        {
+            matches!(unary.operand, Expression::Literal(_))
+        }
         _ => false,
     }
 }

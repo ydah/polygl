@@ -264,7 +264,7 @@ fn lowers_null_tests_empty_maps_void_returns_and_i32_min() {
         r#"<?php
 /** @pgl $value: Option<int> */
 function absent($value): bool {
-    return $value === null;
+    return ($value) === (null);
 }
 
 /** @pgl $value: Option<int> */
@@ -281,6 +281,7 @@ function setup(): void {
     /** @pgl $lookup: Map<str, int> */
     $lookup = [];
     $minimum = -2147483648;
+    for ($index = -2; $index < -1; $index++) {}
 }
 "#,
     )

@@ -1,4 +1,5 @@
-use polygl_hir::{OpaqueType, Symbol, TypeExpr, TypeKind};
+use polygl_adapter_api::{is_portable_identifier, parse_annotation_type};
+use polygl_hir::TypeExpr;
 use polygl_span::{Diagnostic, Diagnostics, Severity, SourceFile, Span, Suggestion};
 
 #[derive(Clone, Debug)]
@@ -128,7 +129,7 @@ pub(crate) fn parse_annotations(
         };
         let name = name.trim();
         let type_name = type_name.trim();
-        if !valid_name(name) {
+        if !is_portable_identifier(name) {
             invalid_annotation(
                 diagnostics,
                 span,
@@ -136,7 +137,7 @@ pub(crate) fn parse_annotations(
             );
             continue;
         }
-        let Some(kind) = parse_type(type_name, span) else {
+        let Some(ty) = parse_annotation_type(type_name, span) else {
             invalid_annotation(
                 diagnostics,
                 span,
@@ -146,7 +147,7 @@ pub(crate) fn parse_annotations(
         };
         result.entries.push(Annotation {
             name: name.to_owned(),
-            ty: TypeExpr::new(kind, span),
+            ty,
             span,
             offset: location.start_offset(),
             end_offset: location.end_offset(),
@@ -154,58 +155,6 @@ pub(crate) fn parse_annotations(
         });
     }
     result
-}
-
-fn parse_type(value: &str, span: Span) -> Option<TypeKind> {
-    if let Some(element) = value.strip_suffix("[]") {
-        return parse_type(element.trim(), span)
-            .map(|kind| TypeKind::Array(Box::new(TypeExpr::new(kind, span))));
-    }
-    if let Some(inner) = generic_argument(value, "Option") {
-        return parse_type(inner, span)
-            .map(|kind| TypeKind::Option(Box::new(TypeExpr::new(kind, span))));
-    }
-    if let Some(inner) = generic_argument(value, "Map") {
-        let value = inner.strip_prefix("str,")?.trim();
-        return parse_type(value, span)
-            .map(|kind| TypeKind::Map(Box::new(TypeExpr::new(kind, span))));
-    }
-    match value {
-        "int" => Some(TypeKind::Int),
-        "float" => Some(TypeKind::Float),
-        "bool" => Some(TypeKind::Bool),
-        "str" => Some(TypeKind::Str),
-        "vec2" => Some(TypeKind::Vector(2)),
-        "vec3" => Some(TypeKind::Vector(3)),
-        "vec4" => Some(TypeKind::Vector(4)),
-        "mat2" => Some(TypeKind::Matrix(2)),
-        "mat3" => Some(TypeKind::Matrix(3)),
-        "mat4" => Some(TypeKind::Matrix(4)),
-        "Mesh" => Some(TypeKind::Opaque(OpaqueType::Mesh)),
-        "Node" => Some(TypeKind::Opaque(OpaqueType::Node)),
-        "Material" => Some(TypeKind::Opaque(OpaqueType::Material)),
-        "Texture" => Some(TypeKind::Opaque(OpaqueType::Texture)),
-        name if name.chars().next().is_some_and(char::is_uppercase) && valid_name(name) => {
-            Some(TypeKind::Struct(Symbol::new(name)))
-        }
-        _ => None,
-    }
-}
-
-fn generic_argument<'a>(value: &'a str, outer: &str) -> Option<&'a str> {
-    value
-        .strip_prefix(outer)?
-        .strip_prefix('<')?
-        .strip_suffix('>')
-        .map(str::trim)
-}
-
-fn valid_name(value: &str) -> bool {
-    let mut chars = value.chars();
-    chars
-        .next()
-        .is_some_and(|first| first == '_' || first.is_alphabetic())
-        && chars.all(|character| character == '_' || character.is_alphanumeric())
 }
 
 fn invalid_annotation(diagnostics: &mut Diagnostics, span: Span, message: &str) {

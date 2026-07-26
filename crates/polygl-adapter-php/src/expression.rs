@@ -4,6 +4,7 @@ use mago_syntax::cst::{
     ClassLikeMemberSelector, Expression, Instantiation, Literal as PhpLiteral, UnaryPrefixOperator,
     Variable,
 };
+use polygl_adapter_api::{constructor_function_name, vector_constructor_size};
 use polygl_hir::{
     BinOp, Callee, Expr, ExprKind, Literal, MapEntry, Symbol, TypeExpr, TypeKind, UnOp,
 };
@@ -454,7 +455,7 @@ impl Lowerer<'_, '_, '_> {
                 span,
             ));
         }
-        if let Some(size) = vector_size(&name) {
+        if let Some(size) = vector_constructor_size(&name) {
             return Some(Expr::new(ExprKind::Vector { size, args }, span));
         }
         let callee = self
@@ -501,7 +502,7 @@ impl Lowerer<'_, '_, '_> {
             })?;
         Some(Expr::new(
             ExprKind::Call {
-                callee: Callee::User(Symbol::new(crate::class::constructor_name(&class_name))),
+                callee: Callee::User(Symbol::new(constructor_function_name(&class_name))),
                 args,
             },
             self.span(instantiation.span()),
@@ -533,25 +534,27 @@ impl Lowerer<'_, '_, '_> {
     }
 }
 
-fn vector_size(name: &str) -> Option<u8> {
-    match name {
-        "vec2" => Some(2),
-        "vec3" => Some(3),
-        "vec4" => Some(4),
-        _ => None,
-    }
-}
-
 fn is_builtin_event_field(name: &str) -> bool {
     matches!(name, "kind" | "x" | "y" | "key")
 }
 
 fn null_comparison_value<'arena>(binary: &Binary<'arena>) -> Option<&'arena Expression<'arena>> {
-    if matches!(binary.lhs, Expression::Literal(PhpLiteral::Null(_))) {
-        return Some(binary.rhs);
+    let lhs = without_parentheses(binary.lhs);
+    let rhs = without_parentheses(binary.rhs);
+    if matches!(lhs, Expression::Literal(PhpLiteral::Null(_))) {
+        return Some(rhs);
     }
-    if matches!(binary.rhs, Expression::Literal(PhpLiteral::Null(_))) {
-        return Some(binary.lhs);
+    if matches!(rhs, Expression::Literal(PhpLiteral::Null(_))) {
+        return Some(lhs);
     }
     None
+}
+
+fn without_parentheses<'arena>(
+    mut expression: &'arena Expression<'arena>,
+) -> &'arena Expression<'arena> {
+    while let Expression::Parenthesized(parenthesized) = expression {
+        expression = parenthesized.expression;
+    }
+    expression
 }

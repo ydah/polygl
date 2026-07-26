@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use polygl_adapter_api::constructor_function_name;
 use polygl_hir::{
     Block, DomainHint, Expr, ExprKind, FieldDef, FieldInit, Function, Item, Param, Stmt, StmtKind,
     StructDef, Symbol, TypeExpr, TypeKind,
@@ -125,7 +126,7 @@ impl Lowerer<'_, '_, '_> {
             return Some((
                 Vec::new(),
                 Function {
-                    name: Symbol::new(constructor_name(class_name)),
+                    name: Symbol::new(constructor_function_name(class_name)),
                     params: Vec::new(),
                     return_type: Some(TypeExpr::new(
                         TypeKind::Struct(Symbol::new(class_name)),
@@ -190,7 +191,7 @@ impl Lowerer<'_, '_, '_> {
         Some((
             fields,
             Function {
-                name: Symbol::new(constructor_name(class_name)),
+                name: Symbol::new(constructor_function_name(class_name)),
                 params,
                 return_type: Some(TypeExpr::new(
                     TypeKind::Struct(Symbol::new(class_name)),
@@ -242,10 +243,6 @@ impl Lowerer<'_, '_, '_> {
             domain: DomainHint::Auto,
         })
     }
-}
-
-pub(crate) fn constructor_name(class_name: &str) -> String {
-    format!("{class_name}::new")
 }
 
 fn class_body_nodes<'pr>(class: &ClassNode<'pr>) -> Vec<Node<'pr>> {

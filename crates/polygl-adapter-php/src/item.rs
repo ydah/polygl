@@ -3,9 +3,9 @@ use mago_syntax::cst::{
     Constant as PhpConstant, Function as PhpFunction, FunctionLikeParameterList,
     FunctionLikeReturnTypeHint,
 };
+use polygl_adapter_api::canonical_entry_kind;
 use polygl_hir::{
-    ConstDef, DomainHint, EntryPoint, EntryPointKind, Function, Item, Param, Symbol, TypeExpr,
-    TypeKind,
+    ConstDef, DomainHint, EntryPoint, Function, Item, Param, Symbol, TypeExpr, TypeKind,
 };
 use polygl_span::{Diagnostic, Severity, Suggestion};
 
@@ -56,7 +56,7 @@ impl Lowerer<'_, '_, '_> {
         let body = self.lower_block(&function.body);
         self.declared.clear();
         let span = self.span(function.span());
-        match entry_kind(&name) {
+        match canonical_entry_kind(&name) {
             Some(kind) => Some(Item::Entry(EntryPoint {
                 kind,
                 params,
@@ -175,30 +175,5 @@ impl Lowerer<'_, '_, '_> {
             }
             self.lower_native_hint(&hint.hint).map(Some)
         })
-    }
-}
-
-fn entry_kind(name: &str) -> Option<EntryPointKind> {
-    match name {
-        "setup" => Some(EntryPointKind::Setup),
-        "frame" => Some(EntryPointKind::Frame),
-        "on_event" => Some(EntryPointKind::OnEvent),
-        name if name
-            .strip_prefix("vertex_")
-            .is_some_and(|name| !name.is_empty()) =>
-        {
-            Some(EntryPointKind::Vertex(Symbol::new(
-                name.trim_start_matches("vertex_"),
-            )))
-        }
-        name if name
-            .strip_prefix("fragment_")
-            .is_some_and(|name| !name.is_empty()) =>
-        {
-            Some(EntryPointKind::Fragment(Symbol::new(
-                name.trim_start_matches("fragment_"),
-            )))
-        }
-        _ => None,
     }
 }

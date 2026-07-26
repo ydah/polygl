@@ -19,6 +19,20 @@ An adapter must resolve builtin names instead of constructing or persisting raw
 IDs. A missing canonical name is a compiler configuration error, not a
 source-language fallback.
 
+The API also owns the language-neutral adapter conventions:
+
+- `parse_annotation_type` and `is_portable_identifier` implement the portable
+  `@pgl` type grammar;
+- `canonical_entry_kind` recognizes `setup`, `frame`, `on_event`, and named
+  shader entries;
+- `constructor_function_name` names generated struct constructors; and
+- `vector_constructor_size` recognizes canonical vector construction.
+
+Source comment attachment, parser traversal, source-language aliases,
+temporary-name hygiene, and semantic expansion remain inside each adapter.
+See the [post-PHP boundary review](adapter-boundary-review.md) and
+[ADR 0026](decisions/0026-centralize-language-neutral-adapter-conventions.md).
+
 The trait is `Send + Sync` and has no generic methods, so
 `Box<dyn LanguageAdapter>` is supported by the static v1 registry and a future
 plugin boundary.

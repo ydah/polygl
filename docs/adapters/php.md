@@ -55,6 +55,10 @@ non-adjacent directives produce E0314. See
 - Positional PHP arrays become Common Core arrays. Arrays whose every element
   has an explicit key become maps; the type checker requires string keys.
   Mixed keyed and positional arrays are rejected.
+- Because PHP spells both empty arrays and empty maps as `[]`, an empty map
+  requires an annotated local or constructor field before it is returned or
+  otherwise used. A bare `[]`, including a constant value, defaults to an
+  array.
 - `count($array)` lowers to the shared array-length operation.
 
 The accepted `for` shape has exactly one initialization, condition, and

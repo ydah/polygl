@@ -1,3 +1,4 @@
+use polygl_adapter_api::canonical_entry_kind;
 use polygl_hir::{
     Block, DomainHint, EntryPoint, EntryPointKind, Expr, ExprKind, Function, Item, Literal, Param,
     PlaceKind, Stmt, StmtKind, Symbol,
@@ -166,18 +167,7 @@ fn nil_return(span: polygl_span::Span) -> Stmt {
 }
 
 fn entry_kind(name: &str) -> Option<EntryPointKind> {
-    match name {
-        "setup" => Some(EntryPointKind::Setup),
-        "frame" | "draw" => Some(EntryPointKind::Frame),
-        "on_event" => Some(EntryPointKind::OnEvent),
-        _ => name
-            .strip_prefix("vertex_")
-            .filter(|name| !name.is_empty())
-            .map(|name| EntryPointKind::Vertex(Symbol::new(name)))
-            .or_else(|| {
-                name.strip_prefix("fragment_")
-                    .filter(|name| !name.is_empty())
-                    .map(|name| EntryPointKind::Fragment(Symbol::new(name)))
-            }),
-    }
+    (name == "draw")
+        .then_some(EntryPointKind::Frame)
+        .or_else(|| canonical_entry_kind(name))
 }

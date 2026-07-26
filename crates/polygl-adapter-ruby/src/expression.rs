@@ -1,7 +1,7 @@
+use polygl_adapter_api::{constructor_function_name, vector_constructor_size};
 use polygl_hir::{BinOp, Callee, Expr, ExprKind, Literal, MapEntry, Symbol};
 use ruby_prism::{ArrayNode, CallNode, HashNode, Node};
 
-use crate::class::constructor_name;
 use crate::lowerer::Lowerer;
 use crate::operator::{binary_operator, unary_operator};
 
@@ -126,7 +126,9 @@ impl Lowerer<'_, '_, '_> {
                     let args = self.lower_arguments(call)?;
                     return Some(Expr::new(
                         ExprKind::Call {
-                            callee: Callee::User(Symbol::new(constructor_name(&class_name))),
+                            callee: Callee::User(Symbol::new(constructor_function_name(
+                                &class_name,
+                            ))),
                             args,
                         },
                         span,
@@ -254,7 +256,7 @@ impl Lowerer<'_, '_, '_> {
                 span,
             ));
         }
-        if let Some(size) = vector_size(&name) {
+        if let Some(size) = vector_constructor_size(&name) {
             return Some(Expr::new(ExprKind::Vector { size, args }, span));
         }
         let callee = self
@@ -373,15 +375,6 @@ fn call_has_parentheses(call: &CallNode<'_>) -> bool {
     call.opening_loc().is_some()
         || call.closing_loc().is_some()
         || call.location().as_slice().ends_with(b")")
-}
-
-fn vector_size(name: &str) -> Option<u8> {
-    match name {
-        "vec2" => Some(2),
-        "vec3" => Some(3),
-        "vec4" => Some(4),
-        _ => None,
-    }
 }
 
 fn is_builtin_event_field(name: &str) -> bool {
