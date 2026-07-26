@@ -32,8 +32,10 @@ Statements retain structured control flow: binding, assignment, expression,
 not contain closures.
 
 Expressions include typed literals, variables, binary/unary operations, user
-and builtin calls, index/field access, homogeneous arrays/maps, struct/vector
-construction, and `NilCheck`. `DivInt` and `DivFloat` are distinct operators;
+and builtin calls, receiver-typed method calls, index/field access, array
+length, homogeneous arrays/maps, struct/vector construction, and `NilCheck`.
+Method calls exist only at the untyped adapter boundary and become static user
+function calls during type analysis. `DivInt` and `DivFloat` are distinct operators;
 `RemFloor` and `RemTrunc` likewise preserve remainder direction. Adapters choose
 the semantic operation according to `docs/common-core.md`. String concatenation
 is also distinct from numeric addition. `FalsyCheck` has the fixed meaning “nil

@@ -1,6 +1,7 @@
 //! Ruby source to HIR adapter backed by Prism.
 
 mod annotation;
+mod class;
 mod expression;
 mod item;
 mod literal;
@@ -20,6 +21,7 @@ const CAPABILITIES: &[FeatureTag] = &[
     FeatureTag::Tier1,
     FeatureTag::Arrays,
     FeatureTag::Maps,
+    FeatureTag::Classes,
     FeatureTag::TimesBlockSugar,
     FeatureTag::EachBlockSugar,
     FeatureTag::TruthinessSugar,

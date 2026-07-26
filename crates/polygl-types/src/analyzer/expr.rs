@@ -1,11 +1,11 @@
 use std::collections::HashSet;
 
 use polygl_builtins::{BuiltinTable, BuiltinType, BuiltinValueType};
-use polygl_hir::{BinOp, Callee, Expr, ExprKind, Literal, UnOp};
+use polygl_hir::{BinOp, Callee, Expr, ExprKind, Literal, Symbol, UnOp};
 
 use crate::solver::{InferType, SolveError};
 
-use super::{Analyzer, BodyContext};
+use super::{Analyzer, BodyContext, method_template_name};
 
 impl Analyzer {
     pub(super) fn infer_expr(
@@ -320,6 +320,53 @@ impl Analyzer {
                 let source_name = name.clone();
                 self.infer_user_call(&source_name, arguments, span, expression_key)
             }
+            Callee::Method(method) => {
+                let method = method.clone();
+                let Some(receiver) = arguments.first() else {
+                    self.arity_error(method.as_str(), 1, 0, span);
+                    return InferType::Error;
+                };
+                match self.solver.resolve(receiver) {
+                    InferType::Struct(structure) => {
+                        let exists =
+                            self.structs
+                                .get(structure.as_str())
+                                .is_some_and(|definition| {
+                                    definition
+                                        .methods
+                                        .iter()
+                                        .any(|candidate| candidate.name == method)
+                                });
+                        if !exists {
+                            self.unknown_function_error(
+                                &format!("{structure}.{}", method.as_str()),
+                                span,
+                            );
+                            return InferType::Error;
+                        }
+                        let source_name =
+                            Symbol::new(method_template_name(structure.as_str(), method.as_str()));
+                        *callee = Callee::User(source_name.clone());
+                        self.infer_user_call(&source_name, arguments, span, expression_key)
+                    }
+                    InferType::Error => InferType::Error,
+                    unresolved @ InferType::Var(_) => {
+                        self.unresolved_error(&unresolved, span, Some("method receiver"));
+                        InferType::Error
+                    }
+                    actual => {
+                        self.solve_error(
+                            SolveError::Mismatch {
+                                expected: InferType::Struct(Symbol::new("Struct")),
+                                actual,
+                            },
+                            span,
+                            "E0303",
+                        );
+                        InferType::Error
+                    }
+                }
+            }
         }
     }
 
@@ -420,16 +467,9 @@ impl Analyzer {
             return InferType::Error;
         };
         let result = self
-            .structs
-            .get(name.as_str())
-            .and_then(|definition| {
-                definition
-                    .fields
-                    .iter()
-                    .find(|definition| definition.name.as_str() == field)
-            })
-            .and_then(|definition| definition.ty.as_ref())
-            .map(Self::annotated_type)
+            .struct_field_types
+            .get(&(name.as_str().to_owned(), field.to_owned()))
+            .cloned()
             .or_else(|| {
                 BuiltinTable::find_struct(name.as_str())
                     .and_then(|definition| {
@@ -472,11 +512,11 @@ impl Analyzer {
                 .fields
                 .iter()
                 .find(|definition| definition.name == field.name);
-            if let Some(expected) = declared
-                .and_then(|definition| definition.ty.as_ref())
-                .map(Self::annotated_type)
-            {
-                self.expect(expected, actual, field.span);
+            if declared.is_some() {
+                let key = (name.to_owned(), field.name.as_str().to_owned());
+                if let Some(expected) = self.struct_field_types.get(&key).cloned() {
+                    self.expect(expected, actual, field.span);
+                }
             } else {
                 self.unknown_struct_field_error(name, field.name.as_str(), field.span);
             }

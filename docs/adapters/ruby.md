@@ -21,6 +21,7 @@ execute Ruby code or load gems.
 | Loop control | `break` / `next` | `Break` / `Continue` |
 | Array | `[a, b]`, `values[index]` | homogeneous `Array`, `Index` |
 | String-keyed map | `{"key" => value}` or `{key: value}` | homogeneous `Map`, `Index` |
+| Struct-like class | `class`, `initialize`, `@field`, instance `def` | `StructDef` plus static self-first functions |
 | Function result | explicit `return` or final expression | `Return` in ordinary functions |
 | Call | `name(args)` | builtin ID when registered, otherwise user function |
 
@@ -54,14 +55,34 @@ or non-adjacent directives produce E0314.
 - `times` and `each` blocks are syntax only: they lower to structured loops and
   never become closure values. Array receivers are evaluated once before an
   index-ascending loop.
+- `Class.new(args)` calls a generated constructor that returns a struct value.
+  Constructor bodies establish fields with direct `@field = value`
+  assignments. Instance methods receive a typed `self` parameter and receiver
+  calls are resolved statically after receiver type inference.
+
+## Struct-like classes
+
+Classes may define one `initialize` method and ordinary instance methods.
+Fields are the instance variables established exactly once by the constructor;
+their types are inferred from constructor calls or taken from the matching
+field/parameter annotation. `@field` reads and writes are accepted in methods,
+while `instance.field` reads and writes use fixed HIR field access.
+When a field name is also used by a method, add call parentheses
+(`instance.name()`) to select the method explicitly.
+
+Inheritance, nested class paths, modules/mixins, visibility directives,
+singleton/static methods, dynamic method definition, and constructor side
+effects produce E0203 with a composition or top-level-function suggestion.
+Operator, index, and attribute-writer method definitions also produce E0203
+because those spellings are reserved for direct Common Core syntax lowering.
 
 ## Deliberately unsupported
 
-Top-level executable statements, optional/keyword/rest parameters, receiver
-method dispatch, dynamic method definition, post-test loops, multiple return
-values, interpolation, collection splats, and general blocks produce E02xx
-diagnostics with rewrite suggestions. Blocks other than direct `times` and
-`each` statements, including stored or returned blocks, produce E0202.
+Top-level executable statements, optional/keyword/rest parameters, dynamic
+method definition, post-test loops, multiple return values, interpolation,
+collection splats, and general blocks produce E02xx diagnostics with rewrite
+suggestions. Blocks other than direct `times` and `each` statements, including
+stored or returned blocks, produce E0202.
 
 Because HIR locals are lexical, a Ruby local first assigned inside a nested
 conditional or loop remains local to that HIR block. Initialize it in the

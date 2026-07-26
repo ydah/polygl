@@ -119,5 +119,6 @@ pub enum UnOp {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Callee {
     User(Symbol),
+    Method(Symbol),
     Builtin(BuiltinId),
 }

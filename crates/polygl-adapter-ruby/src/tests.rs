@@ -22,11 +22,93 @@ fn advertises_ruby_core_capabilities() {
             FeatureTag::Tier1,
             FeatureTag::Arrays,
             FeatureTag::Maps,
+            FeatureTag::Classes,
             FeatureTag::TimesBlockSugar,
             FeatureTag::EachBlockSugar,
             FeatureTag::TruthinessSugar
         ]
     );
+}
+
+#[test]
+fn lowers_struct_like_classes_constructors_fields_and_methods() {
+    let module = lower(
+        r#"
+class Dot
+  def initialize(x, y)
+    @x = x
+    @y = y
+  end
+
+  def move(dx)
+    @x = @x + dx
+    self
+  end
+
+  def paint
+    circle(@x, @y, 2)
+  end
+
+  def x
+    99
+  end
+end
+
+def setup
+  dot = Dot.new(10, 20)
+  dot.move(3)
+  dot.x = 15
+  circle(dot.x(), dot.y, 4)
+end
+"#,
+    )
+    .expect("the struct-like class subset should lower");
+    let text = dump(&module);
+    assert!(text.contains("struct Dot"));
+    assert!(text.contains("field x;"));
+    assert!(text.contains("field y;"));
+    assert!(text.contains("fn move(self: Dot, dx)"));
+    assert!(text.contains("self.x = (self.x + dx);"));
+    assert!(text.contains("fn Dot::new(x, y)"));
+    assert!(text.contains("return Dot { x: x, y: y };"));
+    assert!(text.contains("let dot = Dot::new(10, 20);"));
+    assert!(text.contains("dot.move(3);"));
+    assert!(text.contains("dot.x = 15;"));
+    assert!(text.contains("builtin#9(dot.x(), dot.y, 4);"), "{text}");
+}
+
+#[test]
+fn rejects_dynamic_class_features_with_e0203() {
+    for source in [
+        "class Child < Parent\nend\n",
+        "class Counter\n  def self.zero\n    0\n  end\nend\n",
+        "class Hidden\n  private\n  def value\n    1\n  end\nend\n",
+    ] {
+        let diagnostics = lower(source).expect_err("dynamic class features must be rejected");
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "E0203" && diagnostic.suggestion.is_some()
+            })
+        );
+    }
+}
+
+#[test]
+fn rejects_instance_methods_that_conflict_with_direct_syntax_lowering() {
+    for method in [
+        "def ==(other)\n    false\n  end",
+        "def [](index)\n    index\n  end",
+        "def value=(value)\n    @value = value\n  end",
+    ] {
+        let source = format!("class Conflicting\n  {method}\nend\n");
+        let diagnostics = lower(&source).expect_err("syntax-overloading methods must be rejected");
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.code == "E0203" && diagnostic.suggestion.is_some()
+            }),
+            "{diagnostics:?}"
+        );
+    }
 }
 
 #[test]
@@ -187,11 +269,11 @@ end
     assert!(text.contains("builtin#10(event.x, event.y"));
 
     let diagnostics = lower("def inspect(value)\n  value.length\nend\n")
-        .expect_err("method dispatch is rejected");
+        .expect_err("undeclared receiver methods are rejected");
     assert!(
         diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.message.contains("method dispatch"))
+            .any(|diagnostic| diagnostic.message.contains("not declared"))
     );
 }
 

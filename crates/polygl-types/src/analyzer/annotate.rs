@@ -240,6 +240,9 @@ impl Analyzer {
                                 .unwrap_or(Type::Unit)
                         }
                     }
+                    Callee::Method(_) => {
+                        unreachable!("inference resolves method calls before annotation")
+                    }
                 }
             }
             ExprKind::Index { base, index } => {
@@ -518,6 +521,7 @@ impl Analyzer {
                 .find(|builtin| builtin.id == *id)
                 .map(|builtin| infer_to_type(builtin_type(builtin.signature.result))),
             Callee::User(name) => self.instance_returns.get(name.as_str()).cloned(),
+            Callee::Method(_) => None,
         }
     }
 

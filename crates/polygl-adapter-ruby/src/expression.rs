@@ -1,6 +1,7 @@
 use polygl_hir::{BinOp, Callee, Expr, ExprKind, Literal, MapEntry, Symbol};
 use ruby_prism::{ArrayNode, CallNode, HashNode, Node};
 
+use crate::class::constructor_name;
 use crate::lowerer::Lowerer;
 use crate::operator::{binary_operator, unary_operator};
 
@@ -41,6 +42,30 @@ impl Lowerer<'_, '_, '_> {
             ExprKind::Literal(Literal::Bool(false))
         } else if node.as_nil_node().is_some() {
             ExprKind::Literal(Literal::None)
+        } else if node.as_self_node().is_some() {
+            if self.current_class.is_none() {
+                self.unsupported(
+                    node,
+                    "`self` values are only available inside Common Core class methods",
+                    "use an explicit function parameter",
+                );
+                return None;
+            }
+            ExprKind::Var(Symbol::new("self"))
+        } else if let Some(variable) = node.as_instance_variable_read_node() {
+            if self.current_class.is_none() {
+                self.unsupported_with_code(
+                    node,
+                    "E0203",
+                    "instance fields are only available inside a Common Core class",
+                    "move this state into a struct-like class or a local variable",
+                );
+                return None;
+            }
+            ExprKind::Field {
+                base: Box::new(Expr::new(ExprKind::Var(Symbol::new("self")), span)),
+                field: Symbol::new(instance_field_name(self, variable.name().as_slice())),
+            }
         } else if let Some(variable) = node.as_local_variable_read_node() {
             let name = self.name(variable.name().as_slice());
             if !self.declared.contains(&name) {
@@ -93,6 +118,28 @@ impl Lowerer<'_, '_, '_> {
             let arguments = call
                 .arguments()
                 .map_or_else(Vec::new, |arguments| arguments.arguments().iter().collect());
+            if name == "new"
+                && let Some(class) = receiver.as_constant_read_node()
+            {
+                let class_name = self.name(class.name().as_slice());
+                if self.class_names.contains(&class_name) {
+                    let args = self.lower_arguments(call)?;
+                    return Some(Expr::new(
+                        ExprKind::Call {
+                            callee: Callee::User(Symbol::new(constructor_name(&class_name))),
+                            args,
+                        },
+                        span,
+                    ));
+                }
+                self.unsupported_with_code(
+                    &node,
+                    "E0203",
+                    "construction is limited to classes declared in this source file",
+                    "declare a struct-like class before calling `.new`",
+                );
+                return None;
+            }
             if name == "[]" && arguments.len() == 1 {
                 let base = self.lower_expression(&receiver)?;
                 let index = self.lower_expression(&arguments[0])?;
@@ -125,7 +172,10 @@ impl Lowerer<'_, '_, '_> {
                 let operand = self.lower_expression(&receiver)?;
                 return Some(Expr::new(ExprKind::FalsyCheck(Box::new(operand)), span));
             }
-            if arguments.is_empty() && is_builtin_event_field(&name) {
+            if arguments.is_empty()
+                && !call_has_parentheses(call)
+                && (is_builtin_event_field(&name) || self.field_names.contains(&name))
+            {
                 let base = self.lower_expression(&receiver)?;
                 return Some(Expr::new(
                     ExprKind::Field {
@@ -135,12 +185,48 @@ impl Lowerer<'_, '_, '_> {
                     span,
                 ));
             }
-            self.unsupported(
-                &node,
-                "Ruby method dispatch is outside Common Core",
-                "use an operator or a plain function call without a receiver",
-            );
-            return None;
+            if call.is_safe_navigation() {
+                self.unsupported_with_code(
+                    &node,
+                    "E0203",
+                    "safe-navigation dispatch is outside the static class subset",
+                    "test for `nil` explicitly before calling the method",
+                );
+                return None;
+            }
+            if receiver.as_constant_read_node().is_some() {
+                self.unsupported_with_code(
+                    &node,
+                    "E0203",
+                    "static class members are outside Common Core",
+                    "replace the static member with a top-level function",
+                );
+                return None;
+            }
+            if !self
+                .class_methods
+                .values()
+                .any(|methods| methods.contains(&name))
+            {
+                self.unsupported(
+                    &node,
+                    "this receiver method is not declared by a Common Core class",
+                    "declare an instance method or use a plain function call",
+                );
+                return None;
+            }
+            let mut args = Vec::with_capacity(arguments.len() + 1);
+            args.push(self.lower_expression(&receiver)?);
+            for argument in arguments {
+                args.push(self.lower_expression(&argument)?);
+            }
+            return Some(Expr::new(
+                ExprKind::Call {
+                    callee: Callee::Method(Symbol::new(name)),
+                    args,
+                },
+                span,
+            ));
         }
 
         if name == "define_method" {
@@ -152,7 +238,22 @@ impl Lowerer<'_, '_, '_> {
             return None;
         }
 
-        let args = self.lower_arguments(call)?;
+        let mut args = self.lower_arguments(call)?;
+        if let Some(class_name) = &self.current_class
+            && self
+                .class_methods
+                .get(class_name)
+                .is_some_and(|methods| methods.contains(&name))
+        {
+            args.insert(0, Expr::new(ExprKind::Var(Symbol::new("self")), span));
+            return Some(Expr::new(
+                ExprKind::Call {
+                    callee: Callee::Method(Symbol::new(name)),
+                    args,
+                },
+                span,
+            ));
+        }
         if let Some(size) = vector_size(&name) {
             return Some(Expr::new(ExprKind::Vector { size, args }, span));
         }
@@ -258,6 +359,20 @@ impl Lowerer<'_, '_, '_> {
         );
         None
     }
+}
+
+fn instance_field_name(lowerer: &Lowerer<'_, '_, '_>, name: &[u8]) -> String {
+    lowerer
+        .name(name)
+        .strip_prefix('@')
+        .unwrap_or_default()
+        .to_owned()
+}
+
+fn call_has_parentheses(call: &CallNode<'_>) -> bool {
+    call.opening_loc().is_some()
+        || call.closing_loc().is_some()
+        || call.location().as_slice().ends_with(b")")
 }
 
 fn vector_size(name: &str) -> Option<u8> {

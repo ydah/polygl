@@ -58,7 +58,7 @@ impl Lowerer<'_, '_, '_> {
         }
     }
 
-    fn lower_params(&mut self, definition: &DefNode<'_>) -> Option<Vec<Param>> {
+    pub(crate) fn lower_params(&mut self, definition: &DefNode<'_>) -> Option<Vec<Param>> {
         let Some(parameters) = definition.parameters() else {
             return Some(Vec::new());
         };
@@ -107,7 +107,7 @@ impl Lowerer<'_, '_, '_> {
     }
 }
 
-fn ensure_implicit_return(body: &mut Block) {
+pub(crate) fn ensure_implicit_return(body: &mut Block) {
     if body.statements.is_empty() {
         body.statements.push(unit_return(body.span));
         return;

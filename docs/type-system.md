@@ -51,6 +51,14 @@ Inference is local and bidirectional:
   immutable, while a same-named local may shadow a constant;
 - conditions must be `bool` after language-specific adapter expansion.
 
+Struct fields without source annotations share inference variables across
+constructor expressions, field reads, and field writes. Before typed HIR is
+returned, every field must resolve to one concrete value type. Instance-method
+calls use the receiver's resolved struct type to select a class-qualified
+template, insert the receiver as the first `self` argument, and then use the
+same call-site specialization path as ordinary functions. Typed HIR contains
+only the resulting static function calls and field-complete structs.
+
 Typed rewriting resolves source-independent operations. `Add` with string
 operands becomes `StrConcat`, and `DivInt` becomes `DivFloat` when its inferred
 operands require floating-point division.

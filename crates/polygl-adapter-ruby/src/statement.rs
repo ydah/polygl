@@ -27,10 +27,35 @@ impl Lowerer<'_, '_, '_> {
                     value,
                 }
             }
+        } else if let Some(write) = node.as_instance_variable_write_node() {
+            if self.current_class.is_none() {
+                self.unsupported_with_code(
+                    node,
+                    "E0203",
+                    "instance fields are only writable inside a Common Core class",
+                    "move this state into a struct-like class or a local variable",
+                );
+                return None;
+            }
+            StmtKind::Assign {
+                target: Place {
+                    kind: PlaceKind::Field {
+                        base: Expr::new(ExprKind::Var(Symbol::new("self")), span),
+                        field: Symbol::new(instance_field_name(self, write.name().as_slice())),
+                    },
+                    span: self.span(write.name_loc()),
+                },
+                value: self.lower_expression(&write.value())?,
+            }
         } else if let Some(call) = node.as_call_node()
             && call.block().is_some()
         {
             return self.lower_block_call(&call);
+        } else if let Some(call) = node.as_call_node()
+            && call.is_attribute_write()
+            && self.name(call.name().as_slice()) != "[]="
+        {
+            return self.lower_field_write(&call);
         } else if let Some(call) = node.as_call_node()
             && call.is_attribute_write()
             && self.name(call.name().as_slice()) == "[]="
@@ -94,6 +119,64 @@ impl Lowerer<'_, '_, '_> {
             StmtKind::Expr(self.lower_expression(node)?)
         };
         Some(vec![Stmt::new(kind, span)])
+    }
+
+    fn lower_field_write(&mut self, call: &CallNode<'_>) -> Option<Vec<Stmt>> {
+        let node = call.as_node();
+        let name = self.name(call.name().as_slice());
+        let Some(field) = name.strip_suffix('=') else {
+            self.unsupported_with_code(
+                &node,
+                "E0203",
+                "attribute writers must target a declared Common Core field",
+                "assign a plain field or call an instance method",
+            );
+            return None;
+        };
+        if !self.field_names.contains(field) {
+            self.unsupported_with_code(
+                &node,
+                "E0203",
+                "attribute writers must target a field established by a constructor",
+                "establish the field in `initialize` before assigning it",
+            );
+            return None;
+        }
+        let Some(receiver) = call.receiver() else {
+            self.unsupported_with_code(
+                &node,
+                "E0203",
+                "field assignment requires an instance receiver",
+                "write `instance.field = value`",
+            );
+            return None;
+        };
+        let arguments = call
+            .arguments()
+            .map_or_else(Vec::new, |arguments| arguments.arguments().iter().collect());
+        if arguments.len() != 1 {
+            self.unsupported_with_code(
+                &node,
+                "E0203",
+                "field assignment requires exactly one value",
+                "write `instance.field = value`",
+            );
+            return None;
+        }
+        let span = self.span(call.location());
+        Some(vec![Stmt::new(
+            StmtKind::Assign {
+                target: Place {
+                    kind: PlaceKind::Field {
+                        base: self.lower_expression(&receiver)?,
+                        field: Symbol::new(field),
+                    },
+                    span,
+                },
+                value: self.lower_expression(&arguments[0])?,
+            },
+            span,
+        )])
     }
 
     fn lower_index_write(&mut self, call: &CallNode<'_>) -> Option<Vec<Stmt>> {
@@ -461,4 +544,12 @@ fn range_receiver<'pr>(node: &Node<'pr>) -> Option<RangeNode<'pr>> {
         return None;
     }
     statements.body().first()?.as_range_node()
+}
+
+fn instance_field_name(lowerer: &Lowerer<'_, '_, '_>, name: &[u8]) -> String {
+    lowerer
+        .name(name)
+        .strip_prefix('@')
+        .unwrap_or_default()
+        .to_owned()
 }

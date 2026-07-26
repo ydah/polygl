@@ -132,6 +132,7 @@ pub(super) struct Analyzer {
     diagnostics: Diagnostics,
     templates: HashMap<String, Function>,
     structs: HashMap<String, StructDef>,
+    struct_field_types: HashMap<(String, String), InferType>,
     constant_annotations: HashMap<String, Type>,
     constant_types: HashMap<String, InferType>,
     instances: HashMap<InstanceKey, InstanceInfo>,
@@ -150,16 +151,24 @@ pub(super) struct Analyzer {
 
 impl Analyzer {
     fn new(module: &Module, options: AnalyzeOptions) -> Self {
-        let templates = module
-            .items
-            .iter()
-            .filter_map(|item| match item {
+        let mut templates = HashMap::new();
+        for item in &module.items {
+            match item {
                 Item::Function(function) => {
-                    Some((function.name.as_str().to_owned(), function.clone()))
+                    templates.insert(function.name.as_str().to_owned(), function.clone());
                 }
-                _ => None,
-            })
-            .collect();
+                Item::Struct(definition) => {
+                    for method in &definition.methods {
+                        let name =
+                            method_template_name(definition.name.as_str(), method.name.as_str());
+                        let mut method = method.clone();
+                        method.name = Symbol::new(name.clone());
+                        templates.insert(name, method);
+                    }
+                }
+                Item::Const(_) | Item::Entry(_) => {}
+            }
+        }
         let structs = module
             .items
             .iter()
@@ -171,6 +180,25 @@ impl Analyzer {
             })
             .collect();
         let mut solver = Solver::default();
+        let mut struct_field_types = HashMap::new();
+        for item in &module.items {
+            if let Item::Struct(definition) = item {
+                for field in &definition.fields {
+                    let ty = field
+                        .ty
+                        .as_ref()
+                        .map(Self::annotated_type)
+                        .unwrap_or_else(|| solver.fresh());
+                    struct_field_types.insert(
+                        (
+                            definition.name.as_str().to_owned(),
+                            field.name.as_str().to_owned(),
+                        ),
+                        ty,
+                    );
+                }
+            }
+        }
         let constant_annotations = module
             .items
             .iter()
@@ -204,6 +232,7 @@ impl Analyzer {
             diagnostics: Diagnostics::new(),
             templates,
             structs,
+            struct_field_types,
             constant_annotations,
             constant_types,
             instances: HashMap::new(),
@@ -251,6 +280,7 @@ impl Analyzer {
             .map(|entry| self.infer_entry(entry))
             .collect::<Vec<_>>();
         self.stabilize_pending_constraints();
+        self.finalize_structs(&mut retained);
         if self.diagnostics.has_errors() {
             return Err(self.diagnostics);
         }
@@ -261,6 +291,7 @@ impl Analyzer {
         for (entry, context) in entries.iter_mut().zip(&entry_contexts) {
             self.annotate_entry(entry, context);
         }
+        self.remove_struct_methods(&mut retained);
         let entries = entries.into_iter().map(Item::Entry).collect::<Vec<_>>();
         if self.diagnostics.has_errors() {
             return Err(self.diagnostics);
@@ -552,31 +583,48 @@ impl Analyzer {
 
     fn validate_struct(&mut self, definition: &StructDef) {
         for field in &definition.fields {
-            if let Some(annotation) = &field.ty {
-                if !Type::from_expr(annotation).is_value_type() {
-                    self.unit_value_error(field.span);
-                }
-            } else {
-                self.unresolved_error(
-                    &InferType::Var(u32::MAX),
-                    field.span,
-                    Some(field.name.as_str()),
-                );
+            if let Some(annotation) = &field.ty
+                && !Type::from_expr(annotation).is_value_type()
+            {
+                self.unit_value_error(field.span);
             }
         }
-        for method in &definition.methods {
-            self.diagnostics.push(
-                polygl_span::Diagnostic::new(
-                    polygl_span::Severity::Error,
-                    "E0312",
-                    "struct methods require M3 type lowering",
-                    method.span,
-                )
-                .with_suggestion(polygl_span::Suggestion::rewrite(
-                    method.span,
-                    "move the method to a typed free function until M3",
-                )),
-            );
+    }
+
+    fn finalize_structs(&mut self, retained: &mut [Item]) {
+        for item in retained {
+            let Item::Struct(definition) = item else {
+                continue;
+            };
+            for field in &mut definition.fields {
+                let key = (
+                    definition.name.as_str().to_owned(),
+                    field.name.as_str().to_owned(),
+                );
+                let Some(inferred) = self.struct_field_types.get(&key).cloned() else {
+                    continue;
+                };
+                if let Some(ty) = self.resolve_expression_type(
+                    &inferred,
+                    field.span,
+                    Some(&format!("{}.{}", definition.name, field.name)),
+                ) {
+                    field.ty = Some(ty.to_expr(field.span));
+                }
+            }
+            self.structs
+                .insert(definition.name.as_str().to_owned(), definition.clone());
+        }
+    }
+
+    fn remove_struct_methods(&mut self, retained: &mut [Item]) {
+        for item in retained {
+            let Item::Struct(definition) = item else {
+                continue;
+            };
+            definition.methods.clear();
+            self.structs
+                .insert(definition.name.as_str().to_owned(), definition.clone());
         }
     }
 
@@ -902,7 +950,7 @@ impl Analyzer {
             };
         }
         let call_result = self.solver.fresh();
-        if function.return_type.is_some()
+        if (function.return_type.is_some() || !record_instance)
             && let Err(error) = self.solver.join(call_result.clone(), result.clone())
         {
             self.solve_error(error, function.span, "E0303");
@@ -1227,4 +1275,8 @@ fn instance_name(source_name: &str, arguments: &[Type]) -> String {
         }
     };
     format!("__pgl_{}_{source_name}__{suffix}", source_name.len())
+}
+
+fn method_template_name(structure: &str, method: &str) -> String {
+    format!("{structure}#{method}")
 }

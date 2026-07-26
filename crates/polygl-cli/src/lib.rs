@@ -633,6 +633,83 @@ end
     }
 
     #[test]
+    fn builds_ruby_struct_like_classes() {
+        let temporary = temporary_directory();
+        let source = temporary.join("classes.rb");
+        fs::write(
+            &source,
+            r#"def seed
+  20
+end
+
+class Dot
+  def initialize(x, y)
+    @x = x
+    @y = seed()
+  end
+
+  def move(dx)
+    @x = @x + dx
+  end
+
+  def paint
+    circle(@x, @y, 2)
+  end
+
+  def coordinate
+    @x
+  end
+
+  def outer
+    coordinate
+  end
+
+  def x
+    99
+  end
+end
+
+class FloatDot
+  def initialize(x)
+    @x = x
+  end
+
+  def coordinate
+    @x
+  end
+end
+
+def setup
+  dot = Dot.new(10, 20)
+  floating = FloatDot.new(1.5)
+  dot.move(3)
+  dot.x = 15
+  dot.paint
+  line(dot.outer, floating.coordinate, dot.x(), dot.x)
+end
+"#,
+        )
+        .unwrap();
+        let output = temporary.join("web");
+        run(
+            arguments([
+                "build",
+                source.to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+            ]),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let javascript = fs::read_to_string(output.join("app.js")).unwrap();
+        assert!(javascript.contains(r#"{"x": x, "y": __pglFunction_"#));
+        assert!(javascript.contains("[\"x\"] ="));
+        assert!(javascript.contains("__pglRuntime.circle"));
+        assert!(javascript.contains("return 99;"));
+        fs::remove_dir_all(temporary).unwrap();
+    }
+
+    #[test]
     fn check_renders_source_diagnostics_and_dump_hir_is_typed() {
         let temporary = temporary_directory();
         let invalid = temporary.join("invalid.rb");

@@ -17,16 +17,29 @@ impl Dumper {
                 format!("({}{})", unary_name(*op), self.expression(operand))
             }
             ExprKind::Call { callee, args } => {
-                let callee = match callee {
-                    Callee::User(name) => name.to_string(),
-                    Callee::Builtin(id) => format!("builtin#{}", id.raw()),
-                };
-                let args = args
-                    .iter()
-                    .map(|arg| self.expression(arg))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{callee}({args})")
+                if let Callee::Method(name) = callee {
+                    let Some((receiver, args)) = args.split_first() else {
+                        return format!("<missing receiver>.{name}()");
+                    };
+                    let args = args
+                        .iter()
+                        .map(|arg| self.expression(arg))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{}.{name}({args})", self.expression(receiver))
+                } else {
+                    let callee = match callee {
+                        Callee::User(name) => name.to_string(),
+                        Callee::Builtin(id) => format!("builtin#{}", id.raw()),
+                        Callee::Method(_) => unreachable!("handled above"),
+                    };
+                    let args = args
+                        .iter()
+                        .map(|arg| self.expression(arg))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{callee}({args})")
+                }
             }
             ExprKind::Index { base, index } => {
                 format!("{}[{}]", self.expression(base), self.expression(index))

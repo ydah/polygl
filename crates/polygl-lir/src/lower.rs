@@ -305,6 +305,9 @@ impl Lowerer {
                     .collect::<Vec<_>>();
                 let target = match callee {
                     hir::Callee::User(name) => CallTarget::Function(name.as_str().to_owned()),
+                    hir::Callee::Method(_) => {
+                        unreachable!("typed HIR resolves methods to static functions")
+                    }
                     hir::Callee::Builtin(id) => {
                         let builtin = BuiltinTable::all()
                             .iter()

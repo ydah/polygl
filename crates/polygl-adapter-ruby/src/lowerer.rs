@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use polygl_adapter_api::LowerCtx;
 use polygl_hir::{Block, Module};
@@ -15,6 +15,10 @@ pub(crate) struct Lowerer<'source, 'context, 'resolver> {
     pub(crate) annotations: Annotations,
     pub(crate) loop_depth: usize,
     pub(crate) temporary_index: usize,
+    pub(crate) class_names: HashSet<String>,
+    pub(crate) field_names: HashSet<String>,
+    pub(crate) class_methods: HashMap<String, HashSet<String>>,
+    pub(crate) current_class: Option<String>,
 }
 
 impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
@@ -31,6 +35,10 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
             annotations,
             loop_depth: 0,
             temporary_index: 0,
+            class_names: HashSet::new(),
+            field_names: HashSet::new(),
+            class_methods: HashMap::new(),
+            current_class: None,
         }
     }
 
@@ -39,6 +47,18 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
         program: &ProgramNode<'_>,
     ) -> Result<Module, Diagnostics> {
         let mut items = Vec::new();
+        for node in program.statements().body().iter() {
+            if let Some(class) = node.as_class_node() {
+                self.register_class_shape(&class);
+            }
+        }
+        for node in program.statements().body().iter() {
+            if let Some(class) = node.as_class_node()
+                && let Some(class_items) = self.lower_class(&class)
+            {
+                items.extend(class_items);
+            }
+        }
         for node in program.statements().body().iter() {
             if let Some(definition) = node.as_def_node() {
                 if let Some(item) = self.lower_def(&definition) {
@@ -53,11 +73,13 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
                     "`define_method` is outside Common Core",
                     "use a regular `def name` declaration",
                 );
-            } else if node.as_class_node().is_some() || node.as_module_node().is_some() {
+            } else if node.as_class_node().is_some() {
+                continue;
+            } else if node.as_module_node().is_some() {
                 self.unsupported(
                     &node,
-                    "Ruby classes and modules are not available in the M1 Common Core subset",
-                    "rewrite state as function parameters and return values until the M3 class subset is enabled",
+                    "Ruby modules are outside Common Core",
+                    "replace the module with a plain function or a struct-like class",
                 );
             } else if node.as_call_node().is_some_and(|call| {
                 matches!(
