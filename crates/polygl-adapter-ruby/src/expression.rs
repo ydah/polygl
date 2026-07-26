@@ -98,6 +98,16 @@ impl Lowerer<'_, '_, '_> {
                 let operand = self.lower_expression(&receiver)?;
                 return Some(Expr::new(ExprKind::FalsyCheck(Box::new(operand)), span));
             }
+            if arguments.is_empty() {
+                let base = self.lower_expression(&receiver)?;
+                return Some(Expr::new(
+                    ExprKind::Field {
+                        base: Box::new(base),
+                        field: Symbol::new(name),
+                    },
+                    span,
+                ));
+            }
             self.unsupported(
                 &node,
                 "Ruby method dispatch is outside Common Core",

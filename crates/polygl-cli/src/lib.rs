@@ -444,7 +444,32 @@ mod tests {
         let source = temporary.join("triangle.rb");
         fs::write(
             &source,
-            "def setup\n  size(320, 180)\n  material_shader(\"plasma\")\n  fill(1.0, 0.0, 0.0)\n  triangle(10.0, 10.0, 50.0, 10.0, 30.0, 40.0)\nend\n\ndef vertex_plasma\n  vec4(0.0, 0.0, 0.0, 1.0)\nend\n\ndef fragment_plasma\n  vec4(time(), 0.0, 0.0, 1.0)\nend\n",
+            r#"def setup
+  size(320, 180)
+  material_shader("plasma")
+  fill(1.0, 0.0, 0.0)
+  stroke(1.0, 1.0, 1.0)
+  push_matrix()
+  translate(4.0, 8.0)
+  triangle(10.0, 10.0, 50.0, 10.0, 30.0, 40.0)
+  text("ready", 4.0, 12.0)
+  pop_matrix()
+end
+
+def on_event(event)
+  if event.kind == "pointerdown"
+    line(event.x, event.y, mouse_x(), mouse_y())
+  end
+end
+
+def vertex_plasma
+  vec4(0.0, 0.0, 0.0, 1.0)
+end
+
+def fragment_plasma
+  vec4(time(), 0.0, 0.0, 1.0)
+end
+"#,
         )
         .unwrap();
 
@@ -462,6 +487,9 @@ mod tests {
         let debug_javascript = fs::read_to_string(debug.join("app.js")).unwrap();
         assert!(debug_javascript.contains("const __pglSpans"));
         assert!(debug_javascript.contains("__pglRuntime.triangle"));
+        assert!(debug_javascript.contains("__pglRuntime.pushMatrix"));
+        assert!(debug_javascript.contains("__pglRuntime.text(\"ready\""));
+        assert!(debug_javascript.contains("[\"kind\"]"));
         assert!(debug_javascript.contains("__pglRuntime.materialShader(\"plasma\")"));
         assert!(debug.join("app.js.map").is_file());
         assert!(debug.join("runtime.js").is_file());

@@ -147,11 +147,15 @@ function normalizeSeed(seed) {
 }
 const FLOATS_PER_VERTEX = 6;
 const CIRCLE_SEGMENTS = 32;
+const IDENTITY_TRANSFORM = [1, 0, 0, 1, 0, 0];
+const STROKE_WIDTH = 1;
 export class WebGL2BatchRenderer {
-    constructor(canvas, context) {
+    constructor(canvas, context, documentObject) {
         this.canvas = canvas;
         this.vertices = [];
         this.fillColor = [1, 1, 1, 1];
+        this.transform = IDENTITY_TRANSFORM;
+        this.transformStack = [];
         const gl = context ??
             canvas.getContext("webgl2", {
                 alpha: true,
@@ -185,6 +189,7 @@ export class WebGL2BatchRenderer {
         gl.vertexAttribPointer(position, 2, gl.FLOAT, false, FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT, 0);
         gl.enableVertexAttribArray(color);
         gl.vertexAttribPointer(color, 4, gl.FLOAT, false, FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT, 2 * Float32Array.BYTES_PER_ELEMENT);
+        this.textOverlay = Canvas2DTextOverlay.attach(canvas, documentObject);
         this.resize(canvas.width, canvas.height);
     }
     get context() {
@@ -197,20 +202,34 @@ export class WebGL2BatchRenderer {
         this.canvas.width = safeWidth;
         this.canvas.height = safeHeight;
         this.gl.viewport(0, 0, safeWidth, safeHeight);
+        this.textOverlay?.resize(safeWidth, safeHeight);
     }
     background(r, g, b) {
         this.flush();
         this.gl.clearColor(channel(r), channel(g), channel(b), 1);
         this.gl.clear(this.gl.COLOR_BUFFER_BIT);
+        this.textOverlay?.clear();
     }
     fill(r, g, b, a = 1) {
         this.fillColor = [channel(r), channel(g), channel(b), channel(a)];
     }
+    stroke(r, g, b, a = 1) {
+        this.strokeColor = [channel(r), channel(g), channel(b), channel(a)];
+    }
+    noStroke() {
+        this.strokeColor = undefined;
+    }
     rect(x, y, width, height) {
         const right = x + width;
         const bottom = y + height;
-        this.triangle(x, y, right, y, right, bottom);
-        this.triangle(x, y, right, bottom, x, bottom);
+        this.fillTriangle(x, y, right, y, right, bottom);
+        this.fillTriangle(x, y, right, bottom, x, bottom);
+        if (this.strokeColor !== undefined) {
+            this.strokeLine(x, y, right, y, this.strokeColor);
+            this.strokeLine(right, y, right, bottom, this.strokeColor);
+            this.strokeLine(right, bottom, x, bottom, this.strokeColor);
+            this.strokeLine(x, bottom, x, y, this.strokeColor);
+        }
     }
     circle(x, y, radius) {
         if (!Number.isFinite(radius) || radius < 0) {
@@ -219,13 +238,56 @@ export class WebGL2BatchRenderer {
         for (let segment = 0; segment < CIRCLE_SEGMENTS; segment += 1) {
             const start = (segment / CIRCLE_SEGMENTS) * Math.PI * 2;
             const end = ((segment + 1) / CIRCLE_SEGMENTS) * Math.PI * 2;
-            this.triangle(x, y, x + Math.cos(start) * radius, y + Math.sin(start) * radius, x + Math.cos(end) * radius, y + Math.sin(end) * radius);
+            const startX = x + Math.cos(start) * radius;
+            const startY = y + Math.sin(start) * radius;
+            const endX = x + Math.cos(end) * radius;
+            const endY = y + Math.sin(end) * radius;
+            this.fillTriangle(x, y, startX, startY, endX, endY);
+            if (this.strokeColor !== undefined) {
+                this.strokeLine(startX, startY, endX, endY, this.strokeColor);
+            }
         }
     }
+    line(x1, y1, x2, y2) {
+        this.strokeLine(x1, y1, x2, y2, this.strokeColor ?? this.fillColor);
+    }
     triangle(x1, y1, x2, y2, x3, y3) {
-        this.vertex(x1, y1);
-        this.vertex(x2, y2);
-        this.vertex(x3, y3);
+        this.fillTriangle(x1, y1, x2, y2, x3, y3);
+        if (this.strokeColor !== undefined) {
+            this.strokeLine(x1, y1, x2, y2, this.strokeColor);
+            this.strokeLine(x2, y2, x3, y3, this.strokeColor);
+            this.strokeLine(x3, y3, x1, y1, this.strokeColor);
+        }
+    }
+    text(value, x, y) {
+        this.flush();
+        const overlay = this.textOverlay;
+        if (overlay === undefined) {
+            throw new Error("text requires an attached browser canvas with Canvas2D support");
+        }
+        overlay.draw(value, x, y, this.fillColor, this.transform);
+    }
+    pushMatrix() {
+        this.transformStack.push(this.transform);
+    }
+    popMatrix() {
+        const transform = this.transformStack.pop();
+        if (transform === undefined) {
+            throw new Error("pop_matrix called without a matching push_matrix");
+        }
+        this.transform = transform;
+    }
+    translate(x, y) {
+        this.transform = multiply(this.transform, [1, 0, 0, 1, coordinate(x), coordinate(y)]);
+    }
+    rotate(radians) {
+        const angle = coordinate(radians);
+        const cosine = Math.cos(angle);
+        const sine = Math.sin(angle);
+        this.transform = multiply(this.transform, [cosine, sine, -sine, cosine, 0, 0]);
+    }
+    scale(x, y) {
+        this.transform = multiply(this.transform, [coordinate(x), 0, 0, coordinate(y), 0, 0]);
     }
     flush() {
         if (this.vertices.length === 0) {
@@ -243,13 +305,104 @@ export class WebGL2BatchRenderer {
         this.vertices.length = 0;
         this.gl.deleteBuffer(this.buffer);
         this.gl.deleteProgram(this.program);
+        this.textOverlay?.dispose();
     }
-    vertex(x, y) {
-        if (!Number.isFinite(x) || !Number.isFinite(y)) {
-            throw new RangeError("shape coordinates must be finite numbers");
+    fillTriangle(x1, y1, x2, y2, x3, y3) {
+        this.vertex(x1, y1, this.fillColor);
+        this.vertex(x2, y2, this.fillColor);
+        this.vertex(x3, y3, this.fillColor);
+    }
+    strokeLine(x1, y1, x2, y2, color) {
+        const startX = coordinate(x1);
+        const startY = coordinate(y1);
+        const endX = coordinate(x2);
+        const endY = coordinate(y2);
+        const dx = endX - startX;
+        const dy = endY - startY;
+        const length = Math.hypot(dx, dy);
+        if (length === 0) {
+            return;
         }
-        this.vertices.push(x, y, ...this.fillColor);
+        const offsetX = (-dy / length) * (STROKE_WIDTH / 2);
+        const offsetY = (dx / length) * (STROKE_WIDTH / 2);
+        this.vertex(startX + offsetX, startY + offsetY, color);
+        this.vertex(endX + offsetX, endY + offsetY, color);
+        this.vertex(endX - offsetX, endY - offsetY, color);
+        this.vertex(startX + offsetX, startY + offsetY, color);
+        this.vertex(endX - offsetX, endY - offsetY, color);
+        this.vertex(startX - offsetX, startY - offsetY, color);
     }
+    vertex(x, y, color) {
+        const safeX = coordinate(x);
+        const safeY = coordinate(y);
+        const [a, b, c, d, e, f] = this.transform;
+        this.vertices.push(a * safeX + c * safeY + e, b * safeX + d * safeY + f, ...color);
+    }
+}
+class Canvas2DTextOverlay {
+    constructor(canvas, context) {
+        this.canvas = canvas;
+        this.context = context;
+    }
+    static attach(target, documentObject) {
+        const parent = target.parentElement;
+        if (documentObject === undefined ||
+            parent === null ||
+            parent === undefined) {
+            return undefined;
+        }
+        const canvas = documentObject.createElement("canvas");
+        const context = canvas.getContext("2d");
+        if (context === null) {
+            return undefined;
+        }
+        canvas.id = target.id === "" ? "polygl-text-overlay" : `${target.id}-text`;
+        canvas.setAttribute("aria-hidden", "true");
+        Object.assign(target.style, { gridArea: "1 / 1" });
+        Object.assign(canvas.style, {
+            gridArea: "1 / 1",
+            pointerEvents: "none",
+        });
+        parent.append(canvas);
+        return new Canvas2DTextOverlay(canvas, context);
+    }
+    resize(width, height) {
+        this.canvas.width = width;
+        this.canvas.height = height;
+    }
+    clear() {
+        this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    }
+    draw(value, x, y, color, transform) {
+        const [a, b, c, d, e, f] = transform;
+        this.context.save();
+        this.context.setTransform(a, b, c, d, e, f);
+        this.context.fillStyle = `rgba(${color[0] * 255}, ${color[1] * 255}, ${color[2] * 255}, ${color[3]})`;
+        this.context.textBaseline = "alphabetic";
+        this.context.fillText(value, coordinate(x), coordinate(y));
+        this.context.restore();
+    }
+    dispose() {
+        this.canvas.remove();
+    }
+}
+function multiply(left, right) {
+    const [a, b, c, d, e, f] = left;
+    const [g, h, i, j, k, l] = right;
+    return [
+        a * g + c * h,
+        b * g + d * h,
+        a * i + c * j,
+        b * i + d * j,
+        a * k + c * l + e,
+        b * k + d * l + f,
+    ];
+}
+function coordinate(value) {
+    if (!Number.isFinite(value)) {
+        throw new RangeError("shape coordinates must be finite numbers");
+    }
+    return value;
 }
 function createProgram(gl) {
     const vertex = compileShader(gl, gl.VERTEX_SHADER, `#version 300 es
@@ -615,17 +768,16 @@ export class RuntimeSession {
             }
         };
         this.handlePointerMove = (event) => {
-            const bounds = this.canvas.getBoundingClientRect();
-            this.mouseX =
-                ((event.clientX - bounds.left) / bounds.width) * this.canvas.width;
-            this.mouseY =
-                ((event.clientY - bounds.top) / bounds.height) * this.canvas.height;
-            this.dispatchEvent({
-                kind: "pointermove",
-                x: this.mouseX,
-                y: this.mouseY,
-                key: null,
-            });
+            this.updatePointerPosition(event);
+            this.dispatchPointerEvent("pointermove");
+        };
+        this.handlePointerDown = (event) => {
+            this.updatePointerPosition(event);
+            this.dispatchPointerEvent("pointerdown");
+        };
+        this.handlePointerUp = (event) => {
+            this.updatePointerPosition(event);
+            this.dispatchPointerEvent("pointerup");
         };
         this.handleKeyDown = (event) => {
             this.pressedKeys.add(event.key);
@@ -645,11 +797,11 @@ export class RuntimeSession {
                 key: event.key,
             });
         };
-        this.renderer = new WebGL2BatchRenderer(canvas, options.context);
+        this.documentObject = options.document ?? globalThis.document;
+        this.renderer = new WebGL2BatchRenderer(canvas, options.context, this.documentObject);
         this.shaderRegistry = WebGL2ShaderRegistry.fromBundle(this.renderer.context);
         this.initialShaderBundle = options.shaderBundle;
         this.randomSource = new SeededRandom(options.seed);
-        this.documentObject = options.document ?? globalThis.document;
         this.requestFrame =
             options.requestAnimationFrame ??
                 ((callback) => globalThis.requestAnimationFrame(callback));
@@ -697,6 +849,8 @@ export class RuntimeSession {
             this.animationHandle = undefined;
         }
         this.canvas.removeEventListener("pointermove", this.handlePointerMove);
+        this.canvas.removeEventListener("pointerdown", this.handlePointerDown);
+        this.canvas.removeEventListener("pointerup", this.handlePointerUp);
         this.documentObject?.removeEventListener("keydown", this.handleKeyDown);
         this.documentObject?.removeEventListener("keyup", this.handleKeyUp);
         this.renderer.dispose();
@@ -717,8 +871,26 @@ export class RuntimeSession {
     }
     installInputListeners() {
         this.canvas.addEventListener("pointermove", this.handlePointerMove);
+        this.canvas.addEventListener("pointerdown", this.handlePointerDown);
+        this.canvas.addEventListener("pointerup", this.handlePointerUp);
         this.documentObject?.addEventListener("keydown", this.handleKeyDown);
         this.documentObject?.addEventListener("keyup", this.handleKeyUp);
+    }
+    updatePointerPosition(event) {
+        const bounds = this.canvas.getBoundingClientRect();
+        if (bounds.width <= 0 || bounds.height <= 0) {
+            return;
+        }
+        this.mouseX = ((event.clientX - bounds.left) / bounds.width) * this.canvas.width;
+        this.mouseY = ((event.clientY - bounds.top) / bounds.height) * this.canvas.height;
+    }
+    dispatchPointerEvent(kind) {
+        this.dispatchEvent({
+            kind,
+            x: this.mouseX,
+            y: this.mouseY,
+            key: null,
+        });
     }
     dispatchEvent(event) {
         try {
@@ -778,14 +950,41 @@ export function background(r, g, b) {
 export function fill(r, g, b, a = 1) {
     session().renderer.fill(r, g, b, a);
 }
+export function stroke(r, g, b, a = 1) {
+    session().renderer.stroke(r, g, b, a);
+}
+export function noStroke() {
+    session().renderer.noStroke();
+}
 export function rect(x, y, width, height) {
     session().renderer.rect(x, y, width, height);
 }
 export function circle(x, y, radius) {
     session().renderer.circle(x, y, radius);
 }
+export function line(x1, y1, x2, y2) {
+    session().renderer.line(x1, y1, x2, y2);
+}
 export function triangle(x1, y1, x2, y2, x3, y3) {
     session().renderer.triangle(x1, y1, x2, y2, x3, y3);
+}
+export function text(value, x, y) {
+    session().renderer.text(value, x, y);
+}
+export function pushMatrix() {
+    session().renderer.pushMatrix();
+}
+export function popMatrix() {
+    session().renderer.popMatrix();
+}
+export function translate(x, y) {
+    session().renderer.translate(x, y);
+}
+export function rotate(radians) {
+    session().renderer.rotate(radians);
+}
+export function scale(x, y) {
+    session().renderer.scale(x, y);
 }
 export function width() {
     return session().canvas.width | 0;

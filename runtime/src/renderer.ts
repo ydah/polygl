@@ -1,7 +1,17 @@
 type Color = readonly [number, number, number, number];
+type Matrix2D = readonly [
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+];
 
 const FLOATS_PER_VERTEX = 6;
 const CIRCLE_SEGMENTS = 32;
+const IDENTITY_TRANSFORM: Matrix2D = [1, 0, 0, 1, 0, 0];
+const STROKE_WIDTH = 1;
 
 export class WebGL2BatchRenderer {
   private readonly gl: WebGL2RenderingContext;
@@ -9,11 +19,16 @@ export class WebGL2BatchRenderer {
   private readonly buffer: WebGLBuffer;
   private readonly resolution: WebGLUniformLocation;
   private readonly vertices: number[] = [];
+  private readonly textOverlay: Canvas2DTextOverlay | undefined;
   private fillColor: Color = [1, 1, 1, 1];
+  private strokeColor: Color | undefined;
+  private transform: Matrix2D = IDENTITY_TRANSFORM;
+  private readonly transformStack: Matrix2D[] = [];
 
   public constructor(
     private readonly canvas: HTMLCanvasElement,
     context?: WebGL2RenderingContext,
+    documentObject?: Document,
   ) {
     const gl =
       context ??
@@ -65,6 +80,7 @@ export class WebGL2BatchRenderer {
       FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT,
       2 * Float32Array.BYTES_PER_ELEMENT,
     );
+    this.textOverlay = Canvas2DTextOverlay.attach(canvas, documentObject);
     this.resize(canvas.width, canvas.height);
   }
 
@@ -79,23 +95,39 @@ export class WebGL2BatchRenderer {
     this.canvas.width = safeWidth;
     this.canvas.height = safeHeight;
     this.gl.viewport(0, 0, safeWidth, safeHeight);
+    this.textOverlay?.resize(safeWidth, safeHeight);
   }
 
   public background(r: number, g: number, b: number): void {
     this.flush();
     this.gl.clearColor(channel(r), channel(g), channel(b), 1);
     this.gl.clear(this.gl.COLOR_BUFFER_BIT);
+    this.textOverlay?.clear();
   }
 
   public fill(r: number, g: number, b: number, a = 1): void {
     this.fillColor = [channel(r), channel(g), channel(b), channel(a)];
   }
 
+  public stroke(r: number, g: number, b: number, a = 1): void {
+    this.strokeColor = [channel(r), channel(g), channel(b), channel(a)];
+  }
+
+  public noStroke(): void {
+    this.strokeColor = undefined;
+  }
+
   public rect(x: number, y: number, width: number, height: number): void {
     const right = x + width;
     const bottom = y + height;
-    this.triangle(x, y, right, y, right, bottom);
-    this.triangle(x, y, right, bottom, x, bottom);
+    this.fillTriangle(x, y, right, y, right, bottom);
+    this.fillTriangle(x, y, right, bottom, x, bottom);
+    if (this.strokeColor !== undefined) {
+      this.strokeLine(x, y, right, y, this.strokeColor);
+      this.strokeLine(right, y, right, bottom, this.strokeColor);
+      this.strokeLine(right, bottom, x, bottom, this.strokeColor);
+      this.strokeLine(x, bottom, x, y, this.strokeColor);
+    }
   }
 
   public circle(x: number, y: number, radius: number): void {
@@ -105,15 +137,32 @@ export class WebGL2BatchRenderer {
     for (let segment = 0; segment < CIRCLE_SEGMENTS; segment += 1) {
       const start = (segment / CIRCLE_SEGMENTS) * Math.PI * 2;
       const end = ((segment + 1) / CIRCLE_SEGMENTS) * Math.PI * 2;
-      this.triangle(
+      const startX = x + Math.cos(start) * radius;
+      const startY = y + Math.sin(start) * radius;
+      const endX = x + Math.cos(end) * radius;
+      const endY = y + Math.sin(end) * radius;
+      this.fillTriangle(
         x,
         y,
-        x + Math.cos(start) * radius,
-        y + Math.sin(start) * radius,
-        x + Math.cos(end) * radius,
-        y + Math.sin(end) * radius,
+        startX,
+        startY,
+        endX,
+        endY,
       );
+      if (this.strokeColor !== undefined) {
+        this.strokeLine(startX, startY, endX, endY, this.strokeColor);
+      }
     }
+  }
+
+  public line(x1: number, y1: number, x2: number, y2: number): void {
+    this.strokeLine(
+      x1,
+      y1,
+      x2,
+      y2,
+      this.strokeColor ?? this.fillColor,
+    );
   }
 
   public triangle(
@@ -124,9 +173,59 @@ export class WebGL2BatchRenderer {
     x3: number,
     y3: number,
   ): void {
-    this.vertex(x1, y1);
-    this.vertex(x2, y2);
-    this.vertex(x3, y3);
+    this.fillTriangle(x1, y1, x2, y2, x3, y3);
+    if (this.strokeColor !== undefined) {
+      this.strokeLine(x1, y1, x2, y2, this.strokeColor);
+      this.strokeLine(x2, y2, x3, y3, this.strokeColor);
+      this.strokeLine(x3, y3, x1, y1, this.strokeColor);
+    }
+  }
+
+  public text(value: string, x: number, y: number): void {
+    this.flush();
+    const overlay = this.textOverlay;
+    if (overlay === undefined) {
+      throw new Error(
+        "text requires an attached browser canvas with Canvas2D support",
+      );
+    }
+    overlay.draw(value, x, y, this.fillColor, this.transform);
+  }
+
+  public pushMatrix(): void {
+    this.transformStack.push(this.transform);
+  }
+
+  public popMatrix(): void {
+    const transform = this.transformStack.pop();
+    if (transform === undefined) {
+      throw new Error("pop_matrix called without a matching push_matrix");
+    }
+    this.transform = transform;
+  }
+
+  public translate(x: number, y: number): void {
+    this.transform = multiply(
+      this.transform,
+      [1, 0, 0, 1, coordinate(x), coordinate(y)],
+    );
+  }
+
+  public rotate(radians: number): void {
+    const angle = coordinate(radians);
+    const cosine = Math.cos(angle);
+    const sine = Math.sin(angle);
+    this.transform = multiply(
+      this.transform,
+      [cosine, sine, -sine, cosine, 0, 0],
+    );
+  }
+
+  public scale(x: number, y: number): void {
+    this.transform = multiply(
+      this.transform,
+      [coordinate(x), 0, 0, coordinate(y), 0, 0],
+    );
   }
 
   public flush(): void {
@@ -154,14 +253,143 @@ export class WebGL2BatchRenderer {
     this.vertices.length = 0;
     this.gl.deleteBuffer(this.buffer);
     this.gl.deleteProgram(this.program);
+    this.textOverlay?.dispose();
   }
 
-  private vertex(x: number, y: number): void {
-    if (!Number.isFinite(x) || !Number.isFinite(y)) {
-      throw new RangeError("shape coordinates must be finite numbers");
-    }
-    this.vertices.push(x, y, ...this.fillColor);
+  private fillTriangle(
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    x3: number,
+    y3: number,
+  ): void {
+    this.vertex(x1, y1, this.fillColor);
+    this.vertex(x2, y2, this.fillColor);
+    this.vertex(x3, y3, this.fillColor);
   }
+
+  private strokeLine(
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    color: Color,
+  ): void {
+    const startX = coordinate(x1);
+    const startY = coordinate(y1);
+    const endX = coordinate(x2);
+    const endY = coordinate(y2);
+    const dx = endX - startX;
+    const dy = endY - startY;
+    const length = Math.hypot(dx, dy);
+    if (length === 0) {
+      return;
+    }
+    const offsetX = (-dy / length) * (STROKE_WIDTH / 2);
+    const offsetY = (dx / length) * (STROKE_WIDTH / 2);
+    this.vertex(startX + offsetX, startY + offsetY, color);
+    this.vertex(endX + offsetX, endY + offsetY, color);
+    this.vertex(endX - offsetX, endY - offsetY, color);
+    this.vertex(startX + offsetX, startY + offsetY, color);
+    this.vertex(endX - offsetX, endY - offsetY, color);
+    this.vertex(startX - offsetX, startY - offsetY, color);
+  }
+
+  private vertex(x: number, y: number, color: Color): void {
+    const safeX = coordinate(x);
+    const safeY = coordinate(y);
+    const [a, b, c, d, e, f] = this.transform;
+    this.vertices.push(
+      a * safeX + c * safeY + e,
+      b * safeX + d * safeY + f,
+      ...color,
+    );
+  }
+}
+
+class Canvas2DTextOverlay {
+  private constructor(
+    private readonly canvas: HTMLCanvasElement,
+    private readonly context: CanvasRenderingContext2D,
+  ) {}
+
+  public static attach(
+    target: HTMLCanvasElement,
+    documentObject: Document | undefined,
+  ): Canvas2DTextOverlay | undefined {
+    const parent = target.parentElement;
+    if (
+      documentObject === undefined ||
+      parent === null ||
+      parent === undefined
+    ) {
+      return undefined;
+    }
+    const canvas = documentObject.createElement("canvas");
+    const context = canvas.getContext("2d");
+    if (context === null) {
+      return undefined;
+    }
+    canvas.id = target.id === "" ? "polygl-text-overlay" : `${target.id}-text`;
+    canvas.setAttribute("aria-hidden", "true");
+    Object.assign(target.style, { gridArea: "1 / 1" });
+    Object.assign(canvas.style, {
+      gridArea: "1 / 1",
+      pointerEvents: "none",
+    });
+    parent.append(canvas);
+    return new Canvas2DTextOverlay(canvas, context);
+  }
+
+  public resize(width: number, height: number): void {
+    this.canvas.width = width;
+    this.canvas.height = height;
+  }
+
+  public clear(): void {
+    this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
+  }
+
+  public draw(
+    value: string,
+    x: number,
+    y: number,
+    color: Color,
+    transform: Matrix2D,
+  ): void {
+    const [a, b, c, d, e, f] = transform;
+    this.context.save();
+    this.context.setTransform(a, b, c, d, e, f);
+    this.context.fillStyle = `rgba(${color[0] * 255}, ${color[1] * 255}, ${color[2] * 255}, ${color[3]})`;
+    this.context.textBaseline = "alphabetic";
+    this.context.fillText(value, coordinate(x), coordinate(y));
+    this.context.restore();
+  }
+
+  public dispose(): void {
+    this.canvas.remove();
+  }
+}
+
+function multiply(left: Matrix2D, right: Matrix2D): Matrix2D {
+  const [a, b, c, d, e, f] = left;
+  const [g, h, i, j, k, l] = right;
+  return [
+    a * g + c * h,
+    b * g + d * h,
+    a * i + c * j,
+    b * i + d * j,
+    a * k + c * l + e,
+    b * k + d * l + f,
+  ];
+}
+
+function coordinate(value: number): number {
+  if (!Number.isFinite(value)) {
+    throw new RangeError("shape coordinates must be finite numbers");
+  }
+  return value;
 }
 
 function createProgram(gl: WebGL2RenderingContext): WebGLProgram {

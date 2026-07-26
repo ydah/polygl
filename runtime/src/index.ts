@@ -88,6 +88,14 @@ export function fill(r: number, g: number, b: number, a = 1): void {
   session().renderer.fill(r, g, b, a);
 }
 
+export function stroke(r: number, g: number, b: number, a = 1): void {
+  session().renderer.stroke(r, g, b, a);
+}
+
+export function noStroke(): void {
+  session().renderer.noStroke();
+}
+
 export function rect(
   x: number,
   y: number,
@@ -101,6 +109,15 @@ export function circle(x: number, y: number, radius: number): void {
   session().renderer.circle(x, y, radius);
 }
 
+export function line(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+): void {
+  session().renderer.line(x1, y1, x2, y2);
+}
+
 export function triangle(
   x1: number,
   y1: number,
@@ -110,6 +127,30 @@ export function triangle(
   y3: number,
 ): void {
   session().renderer.triangle(x1, y1, x2, y2, x3, y3);
+}
+
+export function text(value: string, x: number, y: number): void {
+  session().renderer.text(value, x, y);
+}
+
+export function pushMatrix(): void {
+  session().renderer.pushMatrix();
+}
+
+export function popMatrix(): void {
+  session().renderer.popMatrix();
+}
+
+export function translate(x: number, y: number): void {
+  session().renderer.translate(x, y);
+}
+
+export function rotate(radians: number): void {
+  session().renderer.rotate(radians);
+}
+
+export function scale(x: number, y: number): void {
+  session().renderer.scale(x, y);
 }
 
 export function width(): number {

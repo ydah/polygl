@@ -7,20 +7,33 @@ const runtimeBundle = await readFile(
 );
 const {
   SeededRandom,
+  background,
   checkedIndex,
   circle,
   fill,
   formatRuntimeError,
+  keyDown,
+  line,
   materialShader,
+  mouseX,
+  mouseY,
+  noStroke,
+  popMatrix,
+  pushMatrix,
   random,
   rect,
+  rotate,
   roundToInt,
   runtimeOps,
   runtimeVersion,
+  scale,
   setShaderUniform,
   size,
   start,
+  stroke,
+  text,
   time,
+  translate,
   triangle,
   width,
 } = await import(`data:text/javascript;base64,${runtimeBundle.toString("base64")}`);
@@ -132,6 +145,105 @@ test("runs setup and frames while batching shape vertices", async () => {
   assert.deepEqual(cancelled, [3]);
   assert.equal(canvas.listeners.size, 0);
   assert.throws(() => fill(1, 1, 1), /has not been started/);
+});
+
+test("applies strokes and transforms while dispatching input events", async () => {
+  const { context, uploads } = fakeWebGl2();
+  const canvas = fakeCanvas();
+  const documentObject = fakeDocument();
+  const events = [];
+
+  const handle = await start(
+    {
+      setup() {
+        stroke(1, 0, 0);
+        line(0, 0, 2, 0);
+        noStroke();
+        pushMatrix();
+        translate(10, 20);
+        rotate(0);
+        scale(2, 3);
+        triangle(0, 0, 1, 0, 0, 1);
+        popMatrix();
+      },
+      on_event(event) {
+        events.push({ ...event });
+      },
+    },
+    {
+      canvas,
+      context,
+      document: documentObject,
+      onError() {},
+    },
+  );
+
+  assert.equal(uploads.length, 1);
+  const positions = [];
+  for (let index = 0; index < uploads[0].length; index += 6) {
+    positions.push(uploads[0].slice(index, index + 2));
+  }
+  assert.deepEqual(positions.slice(-3), [[10, 20], [12, 20], [10, 23]]);
+  assert.throws(
+    () => popMatrix(),
+    /pop_matrix called without a matching push_matrix/,
+  );
+  assert.throws(
+    () => text("unavailable", 0, 0),
+    /attached browser canvas with Canvas2D support/,
+  );
+
+  canvas.listeners.get("pointerdown")({ clientX: 32, clientY: 16 });
+  assert.equal(mouseX(), 32);
+  assert.equal(mouseY(), 16);
+  documentObject.listeners.get("keydown")({ key: "ArrowLeft" });
+  assert.equal(keyDown("ArrowLeft"), true);
+  documentObject.listeners.get("keyup")({ key: "ArrowLeft" });
+  assert.equal(keyDown("ArrowLeft"), false);
+  assert.deepEqual(
+    events.map((event) => event.kind),
+    ["pointerdown", "keydown", "keyup"],
+  );
+  assert.deepEqual(events[0], {
+    kind: "pointerdown",
+    x: 32,
+    y: 16,
+    key: null,
+  });
+  handle.stop();
+  assert.equal(canvas.listeners.size, 0);
+  assert.equal(documentObject.listeners.size, 0);
+});
+
+test("draws text on a transformed Canvas2D overlay", async () => {
+  const { context } = fakeWebGl2();
+  const canvas = fakeCanvas();
+  const overlay = fakeTextOverlay(canvas);
+  const handle = await start(
+    {
+      setup() {
+        fill(0.25, 0.5, 0.75, 0.8);
+        pushMatrix();
+        translate(3, 4);
+        text("hello", 5, 6);
+        popMatrix();
+        background(0, 0, 0);
+      },
+    },
+    {
+      canvas,
+      context,
+      document: overlay.document,
+      onError() {},
+    },
+  );
+
+  assert.deepEqual(overlay.transforms, [[1, 0, 0, 1, 3, 4]]);
+  assert.deepEqual(overlay.texts, [["hello", 5, 6]]);
+  assert.equal(overlay.fillStyles[0], "rgba(63.75, 127.5, 191.25, 0.8)");
+  assert.deepEqual(overlay.clears, [[0, 0, 64, 64]]);
+  handle.stop();
+  assert.equal(overlay.removed, true);
 });
 
 test("rejects overlapping asynchronous starts", async () => {
@@ -435,9 +547,83 @@ function fakeCanvas() {
   };
 }
 
+function fakeDocument() {
+  const listeners = new Map();
+  return {
+    listeners,
+    addEventListener(name, listener) {
+      listeners.set(name, listener);
+    },
+    removeEventListener(name, listener) {
+      if (listeners.get(name) === listener) {
+        listeners.delete(name);
+      }
+    },
+  };
+}
+
+function fakeTextOverlay(canvas) {
+  const transforms = [];
+  const texts = [];
+  const fillStyles = [];
+  const clears = [];
+  const documentObject = fakeDocument();
+  let removed = false;
+  const context = {
+    clearRect(...args) {
+      clears.push(args);
+    },
+    fillText(...args) {
+      texts.push(args);
+    },
+    restore() {},
+    save() {},
+    set fillStyle(value) {
+      fillStyles.push(value);
+    },
+    set textBaseline(_value) {},
+    setTransform(...args) {
+      transforms.push(args);
+    },
+  };
+  const overlayCanvas = {
+    width: 0,
+    height: 0,
+    id: "",
+    style: {},
+    getContext(name) {
+      return name === "2d" ? context : null;
+    },
+    remove() {
+      removed = true;
+    },
+    setAttribute() {},
+  };
+  canvas.id = "test-canvas";
+  canvas.style = {};
+  canvas.parentElement = {
+    append() {},
+  };
+  documentObject.createElement = (name) => {
+    assert.equal(name, "canvas");
+    return overlayCanvas;
+  };
+  return {
+    clears,
+    document: documentObject,
+    fillStyles,
+    get removed() {
+      return removed;
+    },
+    texts,
+    transforms,
+  };
+}
+
 function fakeWebGl2(options = {}) {
   const draws = [];
   const clears = [];
+  const uploads = [];
   const uniform1fValues = [];
   const uniform3fvValues = [];
   const deletedShaders = [];
@@ -463,7 +649,9 @@ function fakeWebGl2(options = {}) {
     bindBuffer() {},
     bindTexture() {},
     blendFunc() {},
-    bufferData() {},
+    bufferData(_target, data) {
+      uploads.push([...data]);
+    },
     clear(mask) {
       clears.push(mask);
     },
@@ -536,6 +724,7 @@ function fakeWebGl2(options = {}) {
     context,
     draws,
     clears,
+    uploads,
     uniform1fValues,
     uniform3fvValues,
     deletedShaders,

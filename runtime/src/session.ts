@@ -63,13 +63,17 @@ export class RuntimeSession implements RuntimeHandle {
     public readonly canvas: HTMLCanvasElement,
     options: RuntimeOptions,
   ) {
-    this.renderer = new WebGL2BatchRenderer(canvas, options.context);
+    this.documentObject = options.document ?? globalThis.document;
+    this.renderer = new WebGL2BatchRenderer(
+      canvas,
+      options.context,
+      this.documentObject,
+    );
     this.shaderRegistry = WebGL2ShaderRegistry.fromBundle(
       this.renderer.context,
     );
     this.initialShaderBundle = options.shaderBundle;
     this.randomSource = new SeededRandom(options.seed);
-    this.documentObject = options.document ?? globalThis.document;
     this.requestFrame =
       options.requestAnimationFrame ??
       ((callback) => globalThis.requestAnimationFrame(callback));
@@ -118,6 +122,8 @@ export class RuntimeSession implements RuntimeHandle {
       this.animationHandle = undefined;
     }
     this.canvas.removeEventListener("pointermove", this.handlePointerMove);
+    this.canvas.removeEventListener("pointerdown", this.handlePointerDown);
+    this.canvas.removeEventListener("pointerup", this.handlePointerUp);
     this.documentObject?.removeEventListener("keydown", this.handleKeyDown);
     this.documentObject?.removeEventListener("keyup", this.handleKeyUp);
     this.renderer.dispose();
@@ -171,23 +177,44 @@ export class RuntimeSession implements RuntimeHandle {
 
   private installInputListeners(): void {
     this.canvas.addEventListener("pointermove", this.handlePointerMove);
+    this.canvas.addEventListener("pointerdown", this.handlePointerDown);
+    this.canvas.addEventListener("pointerup", this.handlePointerUp);
     this.documentObject?.addEventListener("keydown", this.handleKeyDown);
     this.documentObject?.addEventListener("keyup", this.handleKeyUp);
   }
 
   private readonly handlePointerMove = (event: PointerEvent): void => {
+    this.updatePointerPosition(event);
+    this.dispatchPointerEvent("pointermove");
+  };
+
+  private readonly handlePointerDown = (event: PointerEvent): void => {
+    this.updatePointerPosition(event);
+    this.dispatchPointerEvent("pointerdown");
+  };
+
+  private readonly handlePointerUp = (event: PointerEvent): void => {
+    this.updatePointerPosition(event);
+    this.dispatchPointerEvent("pointerup");
+  };
+
+  private updatePointerPosition(event: PointerEvent): void {
     const bounds = this.canvas.getBoundingClientRect();
-    this.mouseX =
-      ((event.clientX - bounds.left) / bounds.width) * this.canvas.width;
-    this.mouseY =
-      ((event.clientY - bounds.top) / bounds.height) * this.canvas.height;
+    if (bounds.width <= 0 || bounds.height <= 0) {
+      return;
+    }
+    this.mouseX = ((event.clientX - bounds.left) / bounds.width) * this.canvas.width;
+    this.mouseY = ((event.clientY - bounds.top) / bounds.height) * this.canvas.height;
+  }
+
+  private dispatchPointerEvent(kind: string): void {
     this.dispatchEvent({
-      kind: "pointermove",
+      kind,
       x: this.mouseX,
       y: this.mouseY,
       key: null,
     });
-  };
+  }
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
     this.pressedKeys.add(event.key);

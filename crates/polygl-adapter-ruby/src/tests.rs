@@ -101,6 +101,24 @@ end
 }
 
 #[test]
+fn lowers_builtin_event_field_reads() {
+    let module = lower(
+        r#"
+def on_event(event)
+  if event.kind == "pointerdown"
+    line(event.x, event.y, mouse_x(), mouse_y())
+  end
+end
+"#,
+    )
+    .expect("event fields should lower");
+    let text = dump(&module);
+    assert!(text.contains("entry on_event(event) [host]"));
+    assert!(text.contains("event.kind"));
+    assert!(text.contains("builtin#10(event.x, event.y"));
+}
+
+#[test]
 fn preserves_implicit_returns_for_assignments_and_conditionals() {
     let module = lower(
         r#"
