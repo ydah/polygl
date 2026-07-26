@@ -1,0 +1,18 @@
+[package]
+name = "polygl-adapter-treesitter-util"
+description = "Shared Tree-sitter utilities for PolyGL language adapters"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+polygl-span = { path = "../polygl-span" }
+tree-sitter = "=0.26.11"
+
+[dev-dependencies]
+ts-parser-perl = "=1.2.1"
+
+[lints]
+workspace = true
