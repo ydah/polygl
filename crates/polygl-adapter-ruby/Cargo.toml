@@ -8,13 +8,13 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-polygl-adapter-api = { path = "../polygl-adapter-api" }
-polygl-hir = { path = "../polygl-hir" }
-polygl-span = { path = "../polygl-span" }
+polygl-adapter-api = { path = "../polygl-adapter-api", version = "=0.1.0" }
+polygl-hir = { path = "../polygl-hir", version = "=0.1.0" }
+polygl-span = { path = "../polygl-span", version = "=0.1.0" }
 ruby-prism = "=1.9.0"
 
 [dev-dependencies]
-polygl-core = { path = "../polygl-core" }
+polygl-core = { path = "../polygl-core", version = "=0.1.0" }
 
 [lints]
 workspace = true

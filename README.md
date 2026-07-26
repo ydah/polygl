@@ -69,6 +69,7 @@ polygl check <source.rb|source.php|source.pl>
 polygl dump-hir <source.rb|source.php|source.pl>
 polygl languages
 polygl new-adapter <language> [-o <directory>]
+polygl --version
 ```
 
 `build` writes a self-contained browser application with `index.html`,

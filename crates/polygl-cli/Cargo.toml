@@ -8,17 +8,17 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-polygl-adapter-api = { path = "../polygl-adapter-api" }
-polygl-adapter-perl = { path = "../polygl-adapter-perl" }
-polygl-adapter-php = { path = "../polygl-adapter-php" }
-polygl-adapter-ruby = { path = "../polygl-adapter-ruby" }
-polygl-backend-glsl = { path = "../polygl-backend-glsl" }
-polygl-backend-js = { path = "../polygl-backend-js" }
-polygl-core = { path = "../polygl-core" }
-polygl-hir = { path = "../polygl-hir" }
-polygl-lir = { path = "../polygl-lir" }
-polygl-span = { path = "../polygl-span" }
-polygl-types = { path = "../polygl-types" }
+polygl-adapter-api = { path = "../polygl-adapter-api", version = "=0.1.0" }
+polygl-adapter-perl = { path = "../polygl-adapter-perl", version = "=0.1.0" }
+polygl-adapter-php = { path = "../polygl-adapter-php", version = "=0.1.0" }
+polygl-adapter-ruby = { path = "../polygl-adapter-ruby", version = "=0.1.0" }
+polygl-backend-glsl = { path = "../polygl-backend-glsl", version = "=0.1.0" }
+polygl-backend-js = { path = "../polygl-backend-js", version = "=0.1.0" }
+polygl-core = { path = "../polygl-core", version = "=0.1.0" }
+polygl-hir = { path = "../polygl-hir", version = "=0.1.0" }
+polygl-lir = { path = "../polygl-lir", version = "=0.1.0" }
+polygl-span = { path = "../polygl-span", version = "=0.1.0" }
+polygl-types = { path = "../polygl-types", version = "=0.1.0" }
 serde_json = "1.0.149"
 
 [[bin]]

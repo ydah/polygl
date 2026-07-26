@@ -8,13 +8,13 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-polygl-lir = { path = "../polygl-lir" }
-polygl-span = { path = "../polygl-span" }
-polygl-types = { path = "../polygl-types" }
+polygl-lir = { path = "../polygl-lir", version = "=0.1.0" }
+polygl-span = { path = "../polygl-span", version = "=0.1.0" }
+polygl-types = { path = "../polygl-types", version = "=0.1.0" }
 serde_json = "=1.0.151"
 
 [dev-dependencies]
-polygl-builtins = { path = "../polygl-builtins" }
+polygl-builtins = { path = "../polygl-builtins", version = "=0.1.0" }
 
 [lints]
 workspace = true

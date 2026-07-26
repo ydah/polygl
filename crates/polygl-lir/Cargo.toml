@@ -8,10 +8,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-polygl-builtins = { path = "../polygl-builtins" }
-polygl-hir = { path = "../polygl-hir" }
-polygl-span = { path = "../polygl-span" }
-polygl-types = { path = "../polygl-types" }
+polygl-builtins = { path = "../polygl-builtins", version = "=0.1.0" }
+polygl-hir = { path = "../polygl-hir", version = "=0.1.0" }
+polygl-span = { path = "../polygl-span", version = "=0.1.0" }
+polygl-types = { path = "../polygl-types", version = "=0.1.0" }
 
 [lints]
 workspace = true

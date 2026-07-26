@@ -12,6 +12,7 @@ polygl check <source.rb|source.php|source.pl>
 polygl dump-hir <source.rb|source.php|source.pl>
 polygl languages
 polygl new-adapter <language> [-o <directory>]
+polygl --version
 ```
 
 `build` defaults to `dist` and debug mode. It writes:
@@ -61,6 +62,9 @@ dependencies. The language identifier must start with a lowercase ASCII letter
 and contain only lowercase letters or digits. The default destination is
 `polygl-adapter-<language>`; `-o` selects another directory. Existing
 destinations are never overwritten.
+
+`--version` (or `-V`) prints the executable's Cargo package version. Release
+tags and npm packages use this same version.
 
 ## Installation
 

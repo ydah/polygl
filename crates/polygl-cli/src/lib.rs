@@ -21,6 +21,7 @@ use polygl_types::TypedModule;
 mod serve;
 
 const RUNTIME_BUNDLE: &[u8] = include_bytes!("../assets/runtime.js");
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 const INDEX_HTML: &str = r#"<!doctype html>
 <html lang="en">
 <head>
@@ -99,6 +100,7 @@ enum Command {
         language: String,
         output: PathBuf,
     },
+    Version,
     Help,
 }
 
@@ -134,6 +136,8 @@ pub fn run(
             language,
             output: destination,
         } => new_adapter(&language, &destination, output),
+        Command::Version => writeln!(output, "polygl {VERSION}")
+            .map_err(|error| CliError::new(format!("failed to write version: {error}"))),
         Command::Help => output
             .write_all(usage().as_bytes())
             .map_err(|error| CliError::new(format!("failed to write help: {error}"))),
@@ -155,6 +159,10 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Command, CliEr
             Ok(Command::Languages)
         }
         Some("new-adapter") => parse_new_adapter(args),
+        Some("--version" | "-V") => {
+            ensure_empty(args)?;
+            Ok(Command::Version)
+        }
         Some("help" | "--help" | "-h") => {
             ensure_empty(args)?;
             Ok(Command::Help)
@@ -590,10 +598,9 @@ fn new_adapter(language: &str, destination: &Path, output: &mut dyn Write) -> Re
             destination.display()
         ))
     })?;
-    let version = env!("CARGO_PKG_VERSION");
     let crate_name = format!("polygl-adapter-{language}");
     let manifest = format!(
-        "[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"MIT OR Apache-2.0\"\n\n[dependencies]\npolygl-adapter-api = \"={version}\"\npolygl-hir = \"={version}\"\npolygl-span = \"={version}\"\n\n[lints.rust]\nunsafe_code = \"forbid\"\n"
+        "[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"MIT OR Apache-2.0\"\n\n[dependencies]\npolygl-adapter-api = \"={VERSION}\"\npolygl-hir = \"={VERSION}\"\npolygl-span = \"={VERSION}\"\n\n[lints.rust]\nunsafe_code = \"forbid\"\n"
     );
     let adapter_name = format!("{}Adapter", pascal_case(language));
     let implementation = format!(
@@ -634,6 +641,7 @@ usage:
   polygl dump-hir <source.rb|source.php|source.pl>
   polygl languages
   polygl new-adapter <language> [-o <directory>]
+  polygl --version
 "
     .to_owned()
 }
@@ -644,9 +652,25 @@ mod tests {
     use std::fs;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{BuildMode, Command, parse_args, run};
+    use super::{BuildMode, Command, VERSION, parse_args, run};
 
     static NEXT_TEMPORARY: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn prints_the_workspace_package_version() {
+        assert_eq!(
+            parse_args(arguments(["--version"])).unwrap(),
+            Command::Version
+        );
+        assert_eq!(parse_args(arguments(["-V"])).unwrap(), Command::Version);
+
+        let mut output = Vec::new();
+        run(arguments(["--version"]), &mut output).unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            format!("polygl {VERSION}\n")
+        );
+    }
 
     #[test]
     fn parses_build_modes_and_rejects_conflicts() {
@@ -696,11 +720,11 @@ mod tests {
             &mut output,
         )
         .unwrap();
-        assert!(
-            fs::read_to_string(adapter.join("Cargo.toml"))
-                .unwrap()
-                .contains("name = \"polygl-adapter-toy\"")
-        );
+        let manifest = fs::read_to_string(adapter.join("Cargo.toml")).unwrap();
+        assert!(manifest.contains("name = \"polygl-adapter-toy\""));
+        assert!(manifest.contains("polygl-adapter-api = \"=0.1.0\""));
+        assert!(manifest.contains("polygl-hir = \"=0.1.0\""));
+        assert!(manifest.contains("polygl-span = \"=0.1.0\""));
         let implementation = fs::read_to_string(adapter.join("src/lib.rs")).unwrap();
         assert!(implementation.contains("pub struct ToyAdapter;"));
         assert!(implementation.contains("impl LanguageAdapter for ToyAdapter"));

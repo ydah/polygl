@@ -631,7 +631,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "polygl-adapter-api"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "polygl-hir",
  "polygl-span",
@@ -639,7 +639,7 @@ dependencies = [
 
 [[package]]
 name = "polygl-adapter-perl"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "polygl-adapter-api",
  "polygl-adapter-treesitter-util",
@@ -653,7 +653,7 @@ dependencies = [
 
 [[package]]
 name = "polygl-adapter-php"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "mago-allocator",
  "mago-database",
@@ -672,7 +672,7 @@ dependencies = [
 
 [[package]]
 name = "polygl-adapter-ruby"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "polygl-adapter-api",
  "polygl-core",
@@ -683,7 +683,7 @@ dependencies = [
 
 [[package]]
 name = "polygl-adapter-treesitter-util"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "polygl-span",
  "tree-sitter",
@@ -692,7 +692,7 @@ dependencies = [
 
 [[package]]
 name = "polygl-backend-glsl"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "polygl-adapter-api",
  "polygl-adapter-ruby",
@@ -706,7 +706,7 @@ dependencies = [
 
 [[package]]
 name = "polygl-backend-js"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "polygl-builtins",
  "polygl-lir",
@@ -717,7 +717,7 @@ dependencies = [
 
 [[package]]
 name = "polygl-builtins"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "polygl-adapter-api",
  "polygl-hir",
@@ -725,7 +725,7 @@ dependencies = [
 
 [[package]]
 name = "polygl-cli"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "polygl-adapter-api",
  "polygl-adapter-perl",
@@ -743,7 +743,7 @@ dependencies = [
 
 [[package]]
 name = "polygl-conformance"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "insta",
  "polygl-adapter-api",
@@ -760,21 +760,21 @@ dependencies = [
 
 [[package]]
 name = "polygl-core"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "polygl-builtins",
 ]
 
 [[package]]
 name = "polygl-hir"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "polygl-span",
 ]
 
 [[package]]
 name = "polygl-lir"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "polygl-builtins",
  "polygl-hir",
@@ -784,14 +784,14 @@ dependencies = [
 
 [[package]]
 name = "polygl-span"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "ariadne",
 ]
 
 [[package]]
 name = "polygl-types"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "polygl-builtins",
  "polygl-hir",
@@ -1344,7 +1344,7 @@ checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 
 [[package]]
 name = "xtask"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "polygl-conformance",
  "polygl-core",
