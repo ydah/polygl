@@ -640,6 +640,16 @@ dependencies = [
 [[package]]
 name = "polygl-adapter-perl"
 version = "0.0.0"
+dependencies = [
+ "polygl-adapter-api",
+ "polygl-adapter-treesitter-util",
+ "polygl-core",
+ "polygl-hir",
+ "polygl-span",
+ "polygl-types",
+ "tree-sitter",
+ "ts-parser-perl",
+]
 
 [[package]]
 name = "polygl-adapter-php"
@@ -718,6 +728,7 @@ name = "polygl-cli"
 version = "0.0.0"
 dependencies = [
  "polygl-adapter-api",
+ "polygl-adapter-perl",
  "polygl-adapter-php",
  "polygl-adapter-ruby",
  "polygl-backend-glsl",

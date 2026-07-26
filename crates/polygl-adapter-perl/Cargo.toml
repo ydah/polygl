@@ -7,5 +7,17 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[dependencies]
+polygl-adapter-api = { path = "../polygl-adapter-api" }
+polygl-adapter-treesitter-util = { path = "../polygl-adapter-treesitter-util" }
+polygl-hir = { path = "../polygl-hir" }
+polygl-span = { path = "../polygl-span" }
+tree-sitter = "=0.26.11"
+ts-parser-perl = "=1.2.1"
+
+[dev-dependencies]
+polygl-core = { path = "../polygl-core" }
+polygl-types = { path = "../polygl-types" }
+
 [lints]
 workspace = true

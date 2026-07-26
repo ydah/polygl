@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 polygl-adapter-api = { path = "../polygl-adapter-api" }
+polygl-adapter-perl = { path = "../polygl-adapter-perl" }
 polygl-adapter-php = { path = "../polygl-adapter-php" }
 polygl-adapter-ruby = { path = "../polygl-adapter-ruby" }
 polygl-backend-glsl = { path = "../polygl-backend-glsl" }

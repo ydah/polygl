@@ -8,6 +8,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use polygl_adapter_api::{LanguageAdapter, LowerCtx};
+use polygl_adapter_perl::PerlAdapter;
 use polygl_adapter_php::PhpAdapter;
 use polygl_adapter_ruby::RubyAdapter;
 use polygl_backend_glsl::{GlslArtifacts, GlslBackend, UniformSource};
@@ -401,14 +402,15 @@ fn compile_frontend(source_path: &Path) -> Result<(SourceFile, TypedModule), Cli
     {
         Some("rb") => &RubyAdapter,
         Some("php") => &PhpAdapter,
+        Some("pl") => &PerlAdapter,
         Some(extension) => {
             return Err(CliError::new(format!(
-                "unsupported source extension `.{extension}`; supported extensions are `.rb` and `.php`"
+                "unsupported source extension `.{extension}`; supported extensions are `.rb`, `.php`, and `.pl`"
             )));
         }
         None => {
             return Err(CliError::new(
-                "source file must have a `.rb` or `.php` extension",
+                "source file must have a `.rb`, `.php`, or `.pl` extension",
             ));
         }
     };
@@ -512,10 +514,10 @@ fn write_assets(destination: &Path, assets: Vec<PreparedAsset>) -> Result<(), Cl
 fn usage() -> String {
     "\
 usage:
-  polygl build <source.rb|source.php> [-o <directory>] [--debug | --release]
-  polygl serve <source.rb|source.php> [--port <port>] [--watch]
-  polygl check <source.rb|source.php>
-  polygl dump-hir <source.rb|source.php>
+  polygl build <source.rb|source.php|source.pl> [-o <directory>] [--debug | --release]
+  polygl serve <source.rb|source.php|source.pl> [--port <port>] [--watch]
+  polygl check <source.rb|source.php|source.pl>
+  polygl dump-hir <source.rb|source.php|source.pl>
 "
     .to_owned()
 }
@@ -781,6 +783,42 @@ end
             &source,
             r#"<?php
 function setup() {
+    size(320, 180);
+    background(0.1, 0.2, 0.3);
+    fill(1.0, 0.0, 0.0);
+    triangle(10.0, 10.0, 50.0, 10.0, 30.0, 40.0);
+}
+"#,
+        )
+        .unwrap();
+        let output = temporary.join("web");
+        run(
+            arguments([
+                "build",
+                source.to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+            ]),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let javascript = fs::read_to_string(output.join("app.js")).unwrap();
+        assert!(javascript.contains("__pglRuntime.background"));
+        assert!(javascript.contains("__pglRuntime.triangle"));
+        assert!(output.join("index.html").is_file());
+        fs::remove_dir_all(temporary).unwrap();
+    }
+
+    #[test]
+    fn builds_perl_browser_artifacts() {
+        let temporary = temporary_directory();
+        let source = temporary.join("triangle.pl");
+        fs::write(
+            &source,
+            r#"use strict;
+use warnings;
+
+sub setup {
     size(320, 180);
     background(0.1, 0.2, 0.3);
     fill(1.0, 0.0, 0.0);
