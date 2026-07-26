@@ -22,6 +22,9 @@ source -> language adapter -> HIR -> analysis -> LIR -> JS / GLSL -> WebGL 2
 - `xtask/`: repository generation and validation commands.
 - `docs/`: spike reports and architectural decisions.
 
+See the [adapter authoring guide](docs/adapter-guide.md) for the tested process
+for adding another source language.
+
 Rust improves compilation speed. Runtime performance is determined by the
 generated JavaScript and the runtime's rendering batches.
 
