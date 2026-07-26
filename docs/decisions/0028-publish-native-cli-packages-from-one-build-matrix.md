@@ -59,7 +59,9 @@ Adding a platform requires coordinated changes to the build matrix, staging
 table, launcher table, optional dependencies, and tests; an alignment test
 fails when those lists diverge.
 
-The release requires npm credentials and five runner architectures. Publication
-can partially complete if npm fails after some platform packages are accepted,
-so releases must never reuse a version. Platforms outside the explicit matrix
-must build from source until a tested native runner and package are added.
+The release requires npm Trusted Publisher configuration and five runner
+architectures. Publication can partially complete if npm fails after some
+platform packages are accepted, so releases must never reuse a version.
+ADR 0031 adds a publish-free preflight, protected publication jobs, and
+idempotent recovery. Platforms outside the explicit matrix must build from
+source until a tested native runner and package are added.

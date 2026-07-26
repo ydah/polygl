@@ -3,17 +3,73 @@ name: Release
 on:
   push:
     tags:
-      - "v*.*.*"
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: SemVer to validate and package without publishing
+        required: true
+        type: string
 
 permissions:
   contents: read
+
+concurrency:
+  group: release-${{ github.event_name }}-${{ github.ref }}-${{ inputs.version || github.ref_name }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  validate:
+    name: Validate release
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+      dist_tag: ${{ steps.release.outputs.dist-tag }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Derive and validate release version
+        id: release
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            version="$INPUT_VERSION"
+          else
+            if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+              echo "release publication requires a v-prefixed tag" >&2
+              exit 1
+            fi
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          node npm/scripts/validate-release.mjs "$version" .
+
+      - name: Require a release tag from main
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main; then
+            echo "release tag must point to a commit reachable from origin/main" >&2
+            exit 1
+          fi
+
   build:
     name: Build / ${{ matrix.target }}
+    needs: validate
     strategy:
       fail-fast: false
       matrix:
@@ -39,17 +95,10 @@ jobs:
             package: win32-x64
             binary: polygl.exe
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
-
-      - name: Validate release tag
-        shell: bash
-        run: |
-          if [[ ! "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "release tag must be v followed by a SemVer value" >&2
-            exit 1
-          fi
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Select pinned Rust toolchain
         run: rustup show active-toolchain
@@ -60,14 +109,20 @@ jobs:
       - name: Build native executable
         run: cargo build --locked --release --target ${{ matrix.target }} -p polygl-cli
 
-      - name: Verify native executable
+      - name: Verify native executable version
         shell: bash
-        run: target/${{ matrix.target }}/release/${{ matrix.binary }} --help
+        run: |
+          binary="target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          actual="$("$binary" --version)"
+          expected="polygl ${{ needs.validate.outputs.version }}"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "native version mismatch: expected '$expected', got '$actual'" >&2
+            exit 1
+          fi
 
       - name: Stage npm and release artifacts
         shell: bash
         run: |
-          version="${GITHUB_REF_NAME#v}"
           mkdir -p "bundle/${{ matrix.package }}" release/stage
           cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" \
             "bundle/${{ matrix.package }}/${{ matrix.binary }}"
@@ -75,90 +130,229 @@ jobs:
             "release/stage/${{ matrix.binary }}"
           cp LICENSE-MIT LICENSE-APACHE THIRD_PARTY_LICENSES.txt release/stage/
           tar -C release/stage -czf \
-            "release/polygl-${version}-${{ matrix.target }}.tar.gz" \
+            "release/polygl-${{ needs.validate.outputs.version }}-${{ matrix.target }}.tar.gz" \
             "${{ matrix.binary }}" \
             LICENSE-MIT \
             LICENSE-APACHE \
             THIRD_PARTY_LICENSES.txt
 
       - name: Upload native artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: native-${{ matrix.target }}
           path: |
             bundle
             release/*.tar.gz
           if-no-files-found: error
+          retention-days: 14
 
-  github-release:
-    name: Publish GitHub Release
-    needs: build
+  preflight:
+    name: Verify release payloads
+    needs: [validate, build]
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
+    timeout-minutes: 30
     steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Pin npm
+        run: npm install --global --ignore-scripts npm@11.18.0
+
       - name: Download native artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: native-*
           path: artifacts
           merge-multiple: true
 
-      - name: Generate checksums
+      - name: Verify native bundles and legal-complete archives
+        run: >-
+          node npm/scripts/verify-release-artifacts.mjs
+          "${{ needs.validate.outputs.version }}"
+          artifacts
+          .
+
+      - name: Generate archive checksums
+        shell: bash
         run: |
           cd artifacts/release
           sha256sum ./*.tar.gz > SHA256SUMS
+          sha256sum --check SHA256SUMS
 
-      - name: Create release
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Build the complete Cargo workspace
+        run: cargo build --locked --workspace
+
+      - name: Test the complete Cargo workspace
+        run: cargo test --locked --workspace
+
+      - name: Assemble and inspect Cargo packages
         run: >-
-          gh release create "$GITHUB_REF_NAME"
-          artifacts/release/*.tar.gz
-          artifacts/release/SHA256SUMS
-          --repo "$GITHUB_REPOSITORY"
-          --verify-tag
-          --title "$GITHUB_REF_NAME"
-          --generate-notes
+          bash scripts/release-crates.sh package
+          preflight/cargo-packages
+          "${{ needs.validate.outputs.version }}"
+
+      - name: Prepare npm packages
+        run: >-
+          node npm/scripts/prepare-release.mjs
+          "${{ needs.validate.outputs.version }}"
+          artifacts
+
+      - name: Test prepared npm packages
+        run: npm test --prefix npm/cli
+
+      - name: Inspect and pack npm payloads
+        shell: bash
+        run: |
+          mkdir -p preflight/npm-dry-run preflight/npm-packages
+          packages=(
+            npm/platforms/darwin-arm64:polygl-cli-darwin-arm64
+            npm/platforms/darwin-x64:polygl-cli-darwin-x64
+            npm/platforms/linux-arm64:polygl-cli-linux-arm64
+            npm/platforms/linux-x64:polygl-cli-linux-x64
+            npm/platforms/win32-x64:polygl-cli-win32-x64
+            npm/cli:polygl-cli
+          )
+          for entry in "${packages[@]}"; do
+            package="${entry%%:*}"
+            archive="${entry#*:}"
+            npm pack "$package" --ignore-scripts --dry-run --json \
+              > "preflight/npm-dry-run/${archive}.json"
+            packed="$(npm pack "$package" --ignore-scripts \
+              --pack-destination preflight/npm-packages
+            )"
+            mv "preflight/npm-packages/$packed" \
+              "preflight/npm-packages/${archive}.tgz"
+          done
+
+      - name: Verify packed npm payloads
+        run: >-
+          node npm/scripts/verify-packed-release.mjs
+          "${{ needs.validate.outputs.version }}"
+          npm
+          preflight/npm-packages
+
+      - name: Retain verified release payloads
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-preflight
+          path: |
+            .node-version
+            artifacts/release
+            preflight
+            scripts/release-npm.sh
+          if-no-files-found: error
+          retention-days: 14
+
+  crates-publish:
+    name: Publish crates.io packages
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [validate, preflight]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    environment: release
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Publish dependency stages
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: >-
+          bash scripts/release-crates.sh publish
+          "${{ needs.validate.outputs.version }}"
 
   npm-publish:
     name: Publish npm packages
-    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [validate, preflight]
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: release
     permissions:
       contents: read
       id-token: write
     steps:
-      - name: Check out source
-        uses: actions/checkout@v4
+      - name: Download verified packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-preflight
+          path: release-preflight
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version-file: .node-version
+          node-version-file: release-preflight/.node-version
           registry-url: https://registry.npmjs.org
 
-      - name: Download native artifacts
-        uses: actions/download-artifact@v4
+      - name: Pin npm
+        run: npm install --global --ignore-scripts npm@11.18.0
+
+      - name: Publish native packages before launcher
+        run: >-
+          bash release-preflight/scripts/release-npm.sh
+          "${{ needs.validate.outputs.version }}"
+          "${{ needs.validate.outputs.dist_tag }}"
+          release-preflight/preflight/npm-packages
+
+  github-release:
+    name: Publish GitHub Release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [validate, crates-publish, npm-publish]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified release archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: native-*
-          path: artifacts
-          merge-multiple: true
+          name: release-preflight
+          path: release-preflight
 
-      - name: Prepare packages from the same native artifacts
-        run: node npm/scripts/prepare-release.mjs "${GITHUB_REF_NAME#v}" artifacts
+      - name: Verify archive checksums
+        working-directory: release-preflight/artifacts/release
+        run: sha256sum --check SHA256SUMS
 
-      - name: Publish platform packages
+      - name: Create or recover GitHub Release
+        shell: bash
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
         run: |
-          npm publish npm/platforms/darwin-arm64 --access public --provenance
-          npm publish npm/platforms/darwin-x64 --access public --provenance
-          npm publish npm/platforms/linux-arm64 --access public --provenance
-          npm publish npm/platforms/linux-x64 --access public --provenance
-          npm publish npm/platforms/win32-x64 --access public --provenance
-
-      - name: Publish launcher
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish npm/cli --access public --provenance
+          archives=(release-preflight/artifacts/release/*.tar.gz)
+          checksums=release-preflight/artifacts/release/SHA256SUMS
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" \
+              "${archives[@]}" "$checksums" \
+              --clobber \
+              --repo "$GITHUB_REPOSITORY"
+            if [[ "$PRERELEASE" == "true" ]]; then
+              gh release edit "$GITHUB_REF_NAME" \
+                --prerelease \
+                --title "$GITHUB_REF_NAME" \
+                --repo "$GITHUB_REPOSITORY"
+            else
+              gh release edit "$GITHUB_REF_NAME" \
+                --prerelease=false \
+                --latest \
+                --title "$GITHUB_REF_NAME" \
+                --repo "$GITHUB_REPOSITORY"
+            fi
+            exit 0
+          fi
+          prerelease=()
+          if [[ "$PRERELEASE" == "true" ]]; then
+            prerelease+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            "${archives[@]}" "$checksums" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            "${prerelease[@]}"

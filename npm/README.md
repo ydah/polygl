@@ -9,6 +9,10 @@ the platform packages, synchronizes every package version, and copies
 `LICENSE-MIT`, `LICENSE-APACHE`, and `THIRD_PARTY_LICENSES.txt` into all six
 packages. Every package manifest explicitly includes those legal files.
 Publish the platform packages before publishing `@polygl/cli`.
+The release workflow uses npm OIDC Trusted Publishing and publishes only after
+the five-target preflight succeeds. See the
+[release guide](../docs/releasing.md) for first-package bootstrap, trusted
+publisher configuration, and partial-release recovery.
 
 The committed `bin/.gitkeep` files only preserve empty staging directories.
 They are removed from release packages when `scripts/prepare-release.mjs`

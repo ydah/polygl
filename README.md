@@ -127,6 +127,8 @@ The main directories are:
 
 Start with the [architecture contracts](docs/common-core.md) or the
 [adapter authoring guide](docs/adapter-guide.md) when contributing a language.
+Maintainers should follow the [release guide](docs/releasing.md) for the
+publish-free cross-platform preflight and coordinated registry publication.
 
 ## License
 

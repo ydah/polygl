@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import {
   cp,
   mkdir,
   mkdtemp,
   readFile,
+  rename,
   rm,
   stat,
   writeFile,
@@ -11,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 
 import { PLATFORM_PACKAGES } from "../lib/platform.mjs";
 import {
@@ -18,6 +21,13 @@ import {
   NATIVE_PACKAGES,
   prepareRelease,
 } from "../../scripts/prepare-release.mjs";
+import {
+  PACKED_PACKAGES,
+  validateInstallabilityMetadata,
+  verifyPackedRelease,
+} from "../../scripts/verify-packed-release.mjs";
+
+const execFileAsync = promisify(execFile);
 
 test("launcher, release staging, and native package manifests stay aligned", async () => {
   const launcher = JSON.parse(
@@ -43,11 +53,35 @@ test("launcher, release staging, and native package manifests stay aligned", asy
   }
 });
 
+test("packed package metadata remains installable", () => {
+  const native = PACKED_PACKAGES.find(
+    ({ name }) => name === "@polygl/cli-linux-x64",
+  );
+  assert.throws(
+    () => validateInstallabilityMetadata(
+      { os: ["darwin"], cpu: ["x64"] },
+      native,
+    ),
+    /must target only linux/,
+  );
+  const launcher = PACKED_PACKAGES.find(
+    ({ name }) => name === "@polygl/cli",
+  );
+  assert.throws(
+    () => validateInstallabilityMetadata(
+      { bin: { polygl: "bin/not-polygl.js" } },
+      launcher,
+    ),
+    /bin\.polygl/,
+  );
+});
+
 test("release preparation stages binaries and synchronizes versions", async () => {
   const temporary = await mkdtemp(join(tmpdir(), "polygl-npm-release-"));
   const packagesRoot = join(temporary, "npm");
   const artifactsRoot = join(temporary, "artifacts");
   const legalRoot = join(temporary, "legal");
+  const packedRoot = join(temporary, "packed");
   try {
     await cp(new URL("../..", import.meta.url), packagesRoot, {
       recursive: true,
@@ -102,6 +136,55 @@ test("release preparation stages binaries and synchronizes versions", async () =
       }
       await assert.rejects(stat(join(packageRoot, "bin", ".gitkeep")));
     }
+
+    await mkdir(packedRoot);
+    for (const { directory } of NATIVE_PACKAGES) {
+      const { stdout } = await execFileAsync(
+        "npm",
+        [
+          "pack",
+          join(packagesRoot, "platforms", directory),
+          "--ignore-scripts",
+          "--pack-destination",
+          packedRoot,
+        ],
+        {
+          env: {
+            ...process.env,
+            npm_config_cache: join(temporary, "npm-cache"),
+          },
+        },
+      );
+      await rename(
+        join(packedRoot, stdout.trim().split("\n").at(-1)),
+        join(packedRoot, `polygl-cli-${directory}.tgz`),
+      );
+    }
+    const { stdout } = await execFileAsync(
+      "npm",
+      [
+        "pack",
+        join(packagesRoot, "cli"),
+        "--ignore-scripts",
+        "--pack-destination",
+        packedRoot,
+      ],
+      {
+        env: {
+          ...process.env,
+          npm_config_cache: join(temporary, "npm-cache"),
+        },
+      },
+    );
+    await rename(
+      join(packedRoot, stdout.trim().split("\n").at(-1)),
+      join(packedRoot, "polygl-cli.tgz"),
+    );
+    await verifyPackedRelease(
+      "1.2.3-beta.1",
+      packagesRoot,
+      packedRoot,
+    );
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }

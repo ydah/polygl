@@ -16,31 +16,49 @@ export const NATIVE_PACKAGES = Object.freeze([
     directory: "darwin-arm64",
     name: "@polygl/cli-darwin-arm64",
     binary: "polygl",
+    os: "darwin",
+    cpu: "arm64",
+    target: "aarch64-apple-darwin",
   },
   {
     directory: "darwin-x64",
     name: "@polygl/cli-darwin-x64",
     binary: "polygl",
+    os: "darwin",
+    cpu: "x64",
+    target: "x86_64-apple-darwin",
   },
   {
     directory: "linux-arm64",
     name: "@polygl/cli-linux-arm64",
     binary: "polygl",
+    os: "linux",
+    cpu: "arm64",
+    target: "aarch64-unknown-linux-gnu",
   },
   {
     directory: "linux-x64",
     name: "@polygl/cli-linux-x64",
     binary: "polygl",
+    os: "linux",
+    cpu: "x64",
+    target: "x86_64-unknown-linux-gnu",
   },
   {
     directory: "win32-x64",
     name: "@polygl/cli-win32-x64",
     binary: "polygl.exe",
+    os: "win32",
+    cpu: "x64",
+    target: "x86_64-pc-windows-msvc",
   },
 ]);
 
-function validateVersion(version) {
-  if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
+const SEMVER_PATTERN =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+
+export function validateVersion(version) {
+  if (!SEMVER_PATTERN.test(version)) {
     throw new Error(`release version must be a SemVer value without a v prefix: ${version}`);
   }
 }
