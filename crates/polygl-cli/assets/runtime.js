@@ -326,6 +326,7 @@ function positiveInteger(value, label) {
     }
     return value;
 }
+const shaderMaterialBrand = Symbol("ShaderMaterial");
 const IDENTITY_MATRIX = new Float32Array([
     1, 0, 0, 0,
     0, 1, 0, 0,
@@ -370,10 +371,7 @@ export class WebGL2ShaderRegistry {
         if (shader === undefined) {
             throw new Error(`unknown shader pair \`${shaderName}\``);
         }
-        return Object.freeze({
-            kind: "shader",
-            shaderName: shader.artifact.name,
-        });
+        return shader.material;
     }
     updateAutomaticUniforms(elapsedSeconds, width, height) {
         for (const shader of this.shaders.values()) {
@@ -433,6 +431,7 @@ export class WebGL2ShaderRegistry {
             }
             return {
                 artifact,
+                material: createShaderMaterial(artifact.name),
                 program,
                 uniforms,
                 userValues: new Map(),
@@ -510,6 +509,16 @@ export class WebGL2ShaderRegistry {
             throw runtimeError(`WebGL rejected uniform \`${binding.name}\` for shader \`${shader.artifact.name}\` (error 0x${error.toString(16)})`, shader.artifact.fragmentLocation);
         }
     }
+}
+function createShaderMaterial(shaderName) {
+    const material = {
+        kind: "shader",
+        shaderName,
+    };
+    Object.defineProperty(material, shaderMaterialBrand, {
+        value: true,
+    });
+    return Object.freeze(material);
 }
 function compileArtifactShader(gl, kind, source, name, stage, location) {
     const shader = gl.createShader(kind);

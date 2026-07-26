@@ -48,13 +48,17 @@ export type ShaderUniformValue =
   | readonly number[]
   | WebGLTexture;
 
+const shaderMaterialBrand: unique symbol = Symbol("ShaderMaterial");
+
 export interface ShaderMaterial {
   readonly kind: "shader";
   readonly shaderName: string;
+  readonly [shaderMaterialBrand]: true;
 }
 
 interface LinkedShader {
   readonly artifact: ShaderArtifact;
+  readonly material: ShaderMaterial;
   readonly program: WebGLProgram;
   readonly uniforms: ReadonlyMap<string, WebGLUniformLocation>;
   readonly userValues: Map<string, ShaderUniformValue>;
@@ -137,10 +141,7 @@ export class WebGL2ShaderRegistry {
     if (shader === undefined) {
       throw new Error(`unknown shader pair \`${shaderName}\``);
     }
-    return Object.freeze({
-      kind: "shader",
-      shaderName: shader.artifact.name,
-    });
+    return shader.material;
   }
 
   public updateAutomaticUniforms(
@@ -231,6 +232,7 @@ export class WebGL2ShaderRegistry {
       }
       return {
         artifact,
+        material: createShaderMaterial(artifact.name),
         program,
         uniforms,
         userValues: new Map(),
@@ -326,6 +328,17 @@ export class WebGL2ShaderRegistry {
       );
     }
   }
+}
+
+function createShaderMaterial(shaderName: string): ShaderMaterial {
+  const material = {
+    kind: "shader" as const,
+    shaderName,
+  };
+  Object.defineProperty(material, shaderMaterialBrand, {
+    value: true,
+  });
+  return Object.freeze(material) as ShaderMaterial;
 }
 
 function compileArtifactShader(

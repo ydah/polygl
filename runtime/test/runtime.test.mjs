@@ -250,6 +250,9 @@ test("compiles reflected shaders and uploads automatic and user uniforms", async
   assert.deepEqual(uniform1fValues, [0]);
   assert.deepEqual(uniform3fvValues, [[0.2, 0.4, 0.6]]);
   assert.deepEqual(material, { kind: "shader", shaderName: "plasma" });
+  assert.equal(Object.isFrozen(material), true);
+  assert.strictEqual(materialShader("plasma"), material);
+  assert.throws(() => materialShader("missing"), /unknown shader pair `missing`/);
   frames[0](1_000);
   frames[1](1_016);
   assert.deepEqual(uniform1fValues, [0, 0, 0.016]);
