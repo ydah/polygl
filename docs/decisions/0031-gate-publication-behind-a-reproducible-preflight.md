@@ -39,6 +39,8 @@ its identity, version, exact file set, native executable, legal files, native
 `os`/`cpu` constraints, and launcher `bin.polygl` mapping. It also builds and
 tests the complete Cargo workspace and asks Cargo to assemble all fourteen
 publishable `.crate` files with matching file-list reports.
+Every npm pack command uses an explicit `./npm/...` local path so npm cannot
+interpret a package directory as a GitHub shorthand package specification.
 The verified payloads are retained as one inspectable artifact. A manual
 `workflow_dispatch` ends successfully here and has no path to a publishing
 job.

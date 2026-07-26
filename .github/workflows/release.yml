@@ -210,12 +210,12 @@ jobs:
         run: |
           mkdir -p preflight/npm-dry-run preflight/npm-packages
           packages=(
-            npm/platforms/darwin-arm64:polygl-cli-darwin-arm64
-            npm/platforms/darwin-x64:polygl-cli-darwin-x64
-            npm/platforms/linux-arm64:polygl-cli-linux-arm64
-            npm/platforms/linux-x64:polygl-cli-linux-x64
-            npm/platforms/win32-x64:polygl-cli-win32-x64
-            npm/cli:polygl-cli
+            ./npm/platforms/darwin-arm64:polygl-cli-darwin-arm64
+            ./npm/platforms/darwin-x64:polygl-cli-darwin-x64
+            ./npm/platforms/linux-arm64:polygl-cli-linux-arm64
+            ./npm/platforms/linux-x64:polygl-cli-linux-x64
+            ./npm/platforms/win32-x64:polygl-cli-win32-x64
+            ./npm/cli:polygl-cli
           )
           for entry in "${packages[@]}"; do
             package="${entry%%:*}"

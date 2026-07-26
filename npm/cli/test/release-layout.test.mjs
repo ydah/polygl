@@ -29,6 +29,37 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+async function npmPack(arguments_, options) {
+  const version = process.env.POLYGL_TEST_NPM_VERSION;
+  if (version) {
+    return execFileAsync(
+      "npx",
+      ["--yes", `npm@${version}`, "pack", ...arguments_],
+      options,
+    );
+  }
+  return execFileAsync("npm", ["pack", ...arguments_], options);
+}
+
+test("release workflow packs only explicit local package paths", async () => {
+  const workflow = await readFile(
+    new URL("../../../.github/workflows/release.yml", import.meta.url),
+    "utf8",
+  );
+  const block = workflow.match(/packages=\(\n([\s\S]*?)\n\s+\)/)?.[1];
+  assert.ok(block);
+  const specs = block.trim().split("\n").map((line) => line.trim());
+  assert.deepEqual(specs, [
+    "./npm/platforms/darwin-arm64:polygl-cli-darwin-arm64",
+    "./npm/platforms/darwin-x64:polygl-cli-darwin-x64",
+    "./npm/platforms/linux-arm64:polygl-cli-linux-arm64",
+    "./npm/platforms/linux-x64:polygl-cli-linux-x64",
+    "./npm/platforms/win32-x64:polygl-cli-win32-x64",
+    "./npm/cli:polygl-cli",
+  ]);
+  assert.ok(specs.every((spec) => spec.startsWith("./npm/")));
+});
+
 test("launcher, release staging, and native package manifests stay aligned", async () => {
   const launcher = JSON.parse(
     await readFile(new URL("../package.json", import.meta.url), "utf8"),
@@ -139,10 +170,8 @@ test("release preparation stages binaries and synchronizes versions", async () =
 
     await mkdir(packedRoot);
     for (const { directory } of NATIVE_PACKAGES) {
-      const { stdout } = await execFileAsync(
-        "npm",
+      const { stdout } = await npmPack(
         [
-          "pack",
           join(packagesRoot, "platforms", directory),
           "--ignore-scripts",
           "--pack-destination",
@@ -160,10 +189,8 @@ test("release preparation stages binaries and synchronizes versions", async () =
         join(packedRoot, `polygl-cli-${directory}.tgz`),
       );
     }
-    const { stdout } = await execFileAsync(
-      "npm",
+    const { stdout } = await npmPack(
       [
-        "pack",
         join(packagesRoot, "cli"),
         "--ignore-scripts",
         "--pack-destination",
