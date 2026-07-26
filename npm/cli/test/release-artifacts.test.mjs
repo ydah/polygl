@@ -88,3 +88,28 @@ test("rejects an archive without all legal files", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("rejects a Windows archive with CRLF-converted legal text", async () => {
+  const { root, artifacts, archives } = await fixture();
+  try {
+    const firstArchive = archives.values().next().value;
+    firstArchive.set(LEGAL_FILES[0], Buffer.from(`${LEGAL_FILES[0]}\r\n`));
+    await assert.rejects(
+      verifyReleaseArtifacts(
+        "1.2.3",
+        artifacts,
+        root,
+        async (archive) => {
+          const contents = archives.get(basename(archive));
+          return {
+            entries: [...contents.keys()],
+            read: async (entry) => contents.get(entry),
+          };
+        },
+      ),
+      /outdated LICENSE-MIT/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

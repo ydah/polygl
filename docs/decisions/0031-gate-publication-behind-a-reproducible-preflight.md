@@ -31,7 +31,8 @@ tag to all later jobs.
 
 Both manual and tag events build the five native targets. Each runner executes
 `polygl --version` and stages one binary into both the npm bundle and a
-legal-complete archive. Preflight consumes the full matrix once, validates
+legal-complete archive. Git attributes fix the copied legal files to LF across
+all runner operating systems. Preflight consumes the full matrix once, validates
 archive names and contents, generates checksums, prepares and tests all npm
 packages, records npm pack inspections, and then opens every tarball to verify
 its identity, version, exact file set, native executable, legal files, native

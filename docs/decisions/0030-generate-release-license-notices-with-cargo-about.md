@@ -56,7 +56,8 @@ fails if the committed notice differs from cargo-about's output.
 
 Release preparation copies `LICENSE-MIT`, `LICENSE-APACHE`, and
 `THIRD_PARTY_LICENSES.txt` into the npm launcher, every native npm package, and
-every GitHub Release archive.
+every GitHub Release archive. `.gitattributes` fixes all three files to LF so
+archives built on Windows and Unix contain byte-identical legal texts.
 
 ## Consequences
 
