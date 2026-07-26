@@ -18,6 +18,8 @@ export class WebGL2BatchRenderer {
   private readonly gl: WebGL2RenderingContext;
   private readonly program: WebGLProgram;
   private readonly buffer: WebGLBuffer;
+  private readonly positionAttribute: number;
+  private readonly colorAttribute: number;
   private readonly resolution: WebGLUniformLocation;
   private readonly vertices: number[] = [];
   private readonly textOverlay: Canvas2DTextOverlay | undefined;
@@ -59,24 +61,26 @@ export class WebGL2BatchRenderer {
       gl.deleteProgram(this.program);
       throw new Error("the built-in WebGL2 shader interface is incomplete");
     }
+    this.positionAttribute = position;
+    this.colorAttribute = color;
     this.resolution = resolution;
 
     gl.useProgram(this.program);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
-    gl.enableVertexAttribArray(position);
+    gl.enableVertexAttribArray(this.positionAttribute);
     gl.vertexAttribPointer(
-      position,
+      this.positionAttribute,
       2,
       gl.FLOAT,
       false,
       FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT,
       0,
     );
-    gl.enableVertexAttribArray(color);
+    gl.enableVertexAttribArray(this.colorAttribute);
     gl.vertexAttribPointer(
-      color,
+      this.colorAttribute,
       4,
       gl.FLOAT,
       false,
@@ -113,7 +117,7 @@ export class WebGL2BatchRenderer {
   public background(r: number, g: number, b: number): void {
     this.flush();
     this.gl.clearColor(channel(r), channel(g), channel(b), 1);
-    this.gl.clear(this.gl.COLOR_BUFFER_BIT);
+    this.gl.clear(this.gl.COLOR_BUFFER_BIT | this.gl.DEPTH_BUFFER_BIT);
     this.textOverlay?.clear();
   }
 
@@ -251,8 +255,27 @@ export class WebGL2BatchRenderer {
       return;
     }
     const gl = this.gl;
+    gl.disable(gl.DEPTH_TEST);
     gl.useProgram(this.program);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+    gl.enableVertexAttribArray(this.positionAttribute);
+    gl.vertexAttribPointer(
+      this.positionAttribute,
+      2,
+      gl.FLOAT,
+      false,
+      FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT,
+      0,
+    );
+    gl.enableVertexAttribArray(this.colorAttribute);
+    gl.vertexAttribPointer(
+      this.colorAttribute,
+      4,
+      gl.FLOAT,
+      false,
+      FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT,
+      2 * Float32Array.BYTES_PER_ELEMENT,
+    );
     gl.bufferData(
       gl.ARRAY_BUFFER,
       new Float32Array(this.vertices),

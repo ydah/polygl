@@ -11,8 +11,11 @@ const inputs = [
   "dist/generated/ops.js",
   "dist/errors.js",
   "dist/random.js",
+  "dist/math3d.js",
+  "dist/mesh.js",
   "dist/renderer.js",
   "dist/shader.js",
+  "dist/scene.js",
   "dist/session.js",
   "dist/index.js",
 ];

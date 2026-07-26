@@ -14,6 +14,16 @@ export {
 export type { LocatedError, SourceLocation } from "./errors.js";
 export { SeededRandom } from "./random.js";
 export { WebGL2BatchRenderer } from "./renderer.js";
+export { WebGL2SceneRenderer } from "./scene.js";
+export type {
+  BasicMaterial,
+  MaterialHandle,
+  MeshHandle,
+  NodeHandle,
+  RuntimeImageLoader,
+  SceneShaderValue,
+  TextureHandle,
+} from "./scene.js";
 export { WebGL2ShaderRegistry } from "./shader.js";
 export type {
   ShaderArtifact,
@@ -44,6 +54,14 @@ import type {
 } from "./session.js";
 import type { ShaderUniformValue } from "./shader.js";
 import type { ShaderMaterial } from "./shader.js";
+import type {
+  BasicMaterial,
+  MaterialHandle,
+  MeshHandle,
+  NodeHandle,
+  SceneShaderValue,
+  TextureHandle,
+} from "./scene.js";
 
 export const runtimeVersion = "0.0.0" as const;
 
@@ -191,6 +209,107 @@ export function setShaderUniform(
 
 export function materialShader(shaderName: string): ShaderMaterial {
   return session().materialShader(shaderName);
+}
+
+export function meshBox(
+  width: number,
+  height: number,
+  depth: number,
+): MeshHandle {
+  return session().meshBox(width, height, depth);
+}
+
+export function meshSphere(radius: number, segments: number): MeshHandle {
+  return session().meshSphere(radius, segments);
+}
+
+export function meshPlane(
+  width: number,
+  depth: number,
+  columns = 1,
+  rows = 1,
+): MeshHandle {
+  return session().meshPlane(width, depth, columns, rows);
+}
+
+export function meshFrom(
+  vertices: readonly number[],
+  indices: readonly number[],
+): MeshHandle {
+  return session().meshFrom(vertices, indices);
+}
+
+export function materialBasic(color: readonly number[]): BasicMaterial {
+  return session().materialBasic(color);
+}
+
+export function nodeAdd(
+  mesh: MeshHandle,
+  material: MaterialHandle,
+): NodeHandle {
+  return session().nodeAdd(mesh, material);
+}
+
+export function nodeSetPos(
+  node: NodeHandle,
+  x: number,
+  y: number,
+  z: number,
+): void {
+  session().nodeSetPosition(node, x, y, z);
+}
+
+export function nodeSetRot(
+  node: NodeHandle,
+  x: number,
+  y: number,
+  z: number,
+): void {
+  session().nodeSetRotation(node, x, y, z);
+}
+
+export function nodeSetScale(
+  node: NodeHandle,
+  x: number,
+  y: number,
+  z: number,
+): void {
+  session().nodeSetScale(node, x, y, z);
+}
+
+export function cameraPerspective(
+  verticalFov: number,
+  near: number,
+  far: number,
+): void {
+  session().cameraPerspective(verticalFov, near, far);
+}
+
+export function cameraLookAt(
+  eye: readonly number[],
+  target: readonly number[],
+  up: readonly number[],
+): void {
+  session().cameraLookAt(eye, target, up);
+}
+
+export function lightDirectional(
+  direction: readonly number[],
+  color: readonly number[],
+): void {
+  session().lightDirectional(direction, color);
+}
+
+export function textureLoad(path: string): TextureHandle {
+  return session().textureLoad(path);
+}
+
+export function shaderSet(
+  node: NodeHandle,
+  name: string,
+  value: SceneShaderValue,
+): void {
+  session().shaderSet(node, name, value);
 }
 
 export function floorToInt(value: number): number {

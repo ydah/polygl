@@ -1,6 +1,16 @@
 import { showRuntimeError } from "./errors.js";
 import { SeededRandom } from "./random.js";
 import { WebGL2BatchRenderer } from "./renderer.js";
+import { WebGL2SceneRenderer } from "./scene.js";
+import type {
+  BasicMaterial,
+  MaterialHandle,
+  MeshHandle,
+  NodeHandle,
+  RuntimeImageLoader,
+  SceneShaderValue,
+  TextureHandle,
+} from "./scene.js";
 import { WebGL2ShaderRegistry } from "./shader.js";
 import type {
   ShaderBundle,
@@ -33,6 +43,7 @@ export interface RuntimeOptions {
   readonly cancelAnimationFrame?: (handle: number) => void;
   readonly seed?: number;
   readonly shaderBundle?: ShaderBundle;
+  readonly imageLoader?: RuntimeImageLoader;
   readonly onError?: (reason: unknown) => void;
 }
 
@@ -43,6 +54,7 @@ export interface RuntimeHandle {
 
 export class RuntimeSession implements RuntimeHandle {
   public readonly renderer: WebGL2BatchRenderer;
+  public readonly scene: WebGL2SceneRenderer;
   public readonly randomSource: SeededRandom;
   public mouseX = 0;
   public mouseY = 0;
@@ -74,6 +86,13 @@ export class RuntimeSession implements RuntimeHandle {
     this.shaderRegistry = WebGL2ShaderRegistry.fromBundle(
       this.renderer.context,
     );
+    this.scene = new WebGL2SceneRenderer(
+      this.renderer.context,
+      this.shaderRegistry,
+      this.documentObject,
+      options.imageLoader,
+      (reason) => this.fail(reason),
+    );
     this.initialShaderBundle = options.shaderBundle;
     this.randomSource = new SeededRandom(options.seed);
     this.requestFrame =
@@ -100,11 +119,11 @@ export class RuntimeSession implements RuntimeHandle {
         this.replaceShaderBundle(program.__polyglShaderBundle);
       }
       await program.setup?.();
+      await this.scene.awaitSetupAssets();
       if (this.stopped) {
         return;
       }
-      this.updateShaderUniforms();
-      this.renderer.flush();
+      this.render();
       if (program.frame !== undefined) {
         this.animationHandle = this.requestFrame(this.tick);
       }
@@ -131,6 +150,7 @@ export class RuntimeSession implements RuntimeHandle {
     this.documentObject?.removeEventListener("keyup", this.handleKeyUp);
     this.windowObject?.removeEventListener("blur", this.handleBlur);
     this.renderer.dispose();
+    this.scene.dispose();
     this.shaderRegistry.dispose();
     this.onStop();
   }
@@ -155,6 +175,100 @@ export class RuntimeSession implements RuntimeHandle {
     return this.shaderRegistry.material(shaderName);
   }
 
+  public meshBox(width: number, height: number, depth: number): MeshHandle {
+    return this.scene.meshBox(width, height, depth);
+  }
+
+  public meshSphere(radius: number, segments: number): MeshHandle {
+    return this.scene.meshSphere(radius, segments);
+  }
+
+  public meshPlane(
+    width: number,
+    depth: number,
+    columns = 1,
+    rows = 1,
+  ): MeshHandle {
+    return this.scene.meshPlane(width, depth, columns, rows);
+  }
+
+  public meshFrom(
+    vertices: readonly number[],
+    indices: readonly number[],
+  ): MeshHandle {
+    return this.scene.meshFrom(vertices, indices);
+  }
+
+  public materialBasic(color: readonly number[]): BasicMaterial {
+    return this.scene.materialBasic(color);
+  }
+
+  public nodeAdd(mesh: MeshHandle, material: MaterialHandle): NodeHandle {
+    return this.scene.nodeAdd(mesh, material);
+  }
+
+  public nodeSetPosition(
+    node: NodeHandle,
+    x: number,
+    y: number,
+    z: number,
+  ): void {
+    this.scene.nodeSetPosition(node, x, y, z);
+  }
+
+  public nodeSetRotation(
+    node: NodeHandle,
+    x: number,
+    y: number,
+    z: number,
+  ): void {
+    this.scene.nodeSetRotation(node, x, y, z);
+  }
+
+  public nodeSetScale(
+    node: NodeHandle,
+    x: number,
+    y: number,
+    z: number,
+  ): void {
+    this.scene.nodeSetScale(node, x, y, z);
+  }
+
+  public cameraPerspective(
+    verticalFov: number,
+    near: number,
+    far: number,
+  ): void {
+    this.scene.cameraPerspective(verticalFov, near, far);
+  }
+
+  public cameraLookAt(
+    eye: readonly number[],
+    target: readonly number[],
+    up: readonly number[],
+  ): void {
+    this.scene.cameraLookAt(eye, target, up);
+  }
+
+  public lightDirectional(
+    direction: readonly number[],
+    color: readonly number[],
+  ): void {
+    this.scene.lightDirectional(direction, color);
+  }
+
+  public textureLoad(path: string): TextureHandle {
+    return this.scene.textureLoad(path);
+  }
+
+  public shaderSet(
+    node: NodeHandle,
+    name: string,
+    value: SceneShaderValue,
+  ): void {
+    this.scene.shaderSet(node, name, value);
+  }
+
   private program: PolyglProgram | undefined;
 
   private readonly tick = (timestamp: number): void => {
@@ -167,12 +281,11 @@ export class RuntimeSession implements RuntimeHandle {
       previous === undefined ? 0 : Math.max(0, (timestamp - previous) / 1000);
     this.elapsedSeconds += dt;
     try {
-      this.updateShaderUniforms();
       this.program?.frame?.(dt);
       if (this.stopped) {
         return;
       }
-      this.renderer.flush();
+      this.render();
       this.animationHandle = this.requestFrame(this.tick);
     } catch (error) {
       this.fail(error);
@@ -271,7 +384,7 @@ export class RuntimeSession implements RuntimeHandle {
       if (this.stopped) {
         return;
       }
-      this.renderer.flush();
+      this.render();
     } catch (error) {
       this.fail(error);
     }
@@ -285,12 +398,23 @@ export class RuntimeSession implements RuntimeHandle {
     );
   }
 
+  private render(): void {
+    this.updateShaderUniforms();
+    this.scene.render(
+      this.elapsedSeconds,
+      this.canvas.width,
+      this.canvas.height,
+    );
+    this.renderer.flush();
+  }
+
   private replaceShaderBundle(bundle: ShaderBundle | undefined): void {
     this.shaderRegistry.dispose();
     this.shaderRegistry = WebGL2ShaderRegistry.fromBundle(
       this.renderer.context,
       bundle,
     );
+    this.scene.replaceShaderRegistry(this.shaderRegistry);
   }
 
   private fail(reason: unknown): void {

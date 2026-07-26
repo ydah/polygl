@@ -48,6 +48,15 @@ export type ShaderUniformValue =
   | readonly number[]
   | WebGLTexture;
 
+export interface ShaderAutomaticUniforms {
+  readonly elapsedSeconds: number;
+  readonly width: number;
+  readonly height: number;
+  readonly model: Float32Array;
+  readonly view: Float32Array;
+  readonly projection: Float32Array;
+}
+
 const shaderMaterialBrand: unique symbol = Symbol("ShaderMaterial");
 
 export interface ShaderMaterial {
@@ -62,6 +71,7 @@ interface LinkedShader {
   readonly program: WebGLProgram;
   readonly uniforms: ReadonlyMap<string, WebGLUniformLocation>;
   readonly userValues: Map<string, ShaderUniformValue>;
+  globalUniformsSet: boolean;
 }
 
 const IDENTITY_MATRIX = new Float32Array([
@@ -134,6 +144,7 @@ export class WebGL2ShaderRegistry {
       uniformName,
       Array.isArray(value) ? Object.freeze([...value]) : value,
     );
+    shader.globalUniformsSet = true;
   }
 
   public material(shaderName: string): ShaderMaterial {
@@ -142,6 +153,68 @@ export class WebGL2ShaderRegistry {
       throw new Error(`unknown shader pair \`${shaderName}\``);
     }
     return shader.material;
+  }
+
+  public owns(material: ShaderMaterial): boolean {
+    return this.shaders.get(material.shaderName)?.material === material;
+  }
+
+  public nodeUniform(
+    material: ShaderMaterial,
+    uniformName: string,
+    value: ShaderUniformValue,
+  ): ShaderUniformValue {
+    const shader = this.requireMaterial(material);
+    const binding = shader.artifact.uniforms.find(
+      (uniform) => uniform.name === uniformName,
+    );
+    if (binding === undefined || binding.source !== "user") {
+      throw runtimeError(
+        `shader \`${shader.artifact.name}\` has no user uniform \`${uniformName}\``,
+        shader.artifact.fragmentLocation,
+      );
+    }
+    validateUniformValue(
+      this.gl,
+      binding,
+      value,
+      shader.artifact.fragmentLocation,
+    );
+    return Array.isArray(value) ? Object.freeze([...value]) : value;
+  }
+
+  public bindForDraw(
+    material: ShaderMaterial,
+    userValues: ReadonlyMap<string, ShaderUniformValue>,
+    automatic: ShaderAutomaticUniforms,
+  ): readonly ShaderAttribute[] {
+    const shader = this.requireMaterial(material);
+    this.gl.useProgram(shader.program);
+    let textureUnit = 0;
+    for (const binding of shader.artifact.uniforms) {
+      const location = shader.uniforms.get(binding.name);
+      if (location === undefined) {
+        continue;
+      }
+      if (binding.source === "automatic") {
+        this.uploadAutomaticForDraw(binding, location, automatic);
+        this.assertUploadSucceeded(shader, binding);
+        continue;
+      }
+      const value = userValues.get(binding.name);
+      if (value === undefined) {
+        if (this.debug) {
+          throw runtimeError(
+            `user uniform \`${binding.name}\` is unset for shader \`${shader.artifact.name}\``,
+            shader.artifact.fragmentLocation,
+          );
+        }
+        continue;
+      }
+      textureUnit = this.uploadUser(binding, location, value, textureUnit);
+      this.assertUploadSucceeded(shader, binding);
+    }
+    return shader.artifact.attributes;
   }
 
   public updateAutomaticUniforms(
@@ -164,7 +237,7 @@ export class WebGL2ShaderRegistry {
         }
         const value = shader.userValues.get(binding.name);
         if (value === undefined) {
-          if (this.debug) {
+          if (this.debug && shader.globalUniformsSet) {
             throw runtimeError(
               `user uniform \`${binding.name}\` is unset for shader \`${shader.artifact.name}\``,
               shader.artifact.fragmentLocation,
@@ -236,6 +309,7 @@ export class WebGL2ShaderRegistry {
         program,
         uniforms,
         userValues: new Map(),
+        globalUniformsSet: false,
       };
     } catch (error) {
       if (program !== undefined) {
@@ -268,6 +342,32 @@ export class WebGL2ShaderRegistry {
       case "u_view":
       case "u_proj":
         this.gl.uniformMatrix4fv(location, false, IDENTITY_MATRIX);
+        return;
+      default:
+        throw new Error(`unknown automatic uniform \`${binding.name}\``);
+    }
+  }
+
+  private uploadAutomaticForDraw(
+    binding: ShaderUniform,
+    location: WebGLUniformLocation,
+    automatic: ShaderAutomaticUniforms,
+  ): void {
+    switch (binding.name) {
+      case "u_time":
+        this.gl.uniform1f(location, automatic.elapsedSeconds);
+        return;
+      case "u_resolution":
+        this.gl.uniform2f(location, automatic.width, automatic.height);
+        return;
+      case "u_model":
+        this.gl.uniformMatrix4fv(location, false, automatic.model);
+        return;
+      case "u_view":
+        this.gl.uniformMatrix4fv(location, false, automatic.view);
+        return;
+      case "u_proj":
+        this.gl.uniformMatrix4fv(location, false, automatic.projection);
         return;
       default:
         throw new Error(`unknown automatic uniform \`${binding.name}\``);
@@ -327,6 +427,14 @@ export class WebGL2ShaderRegistry {
         shader.artifact.fragmentLocation,
       );
     }
+  }
+
+  private requireMaterial(material: ShaderMaterial): LinkedShader {
+    const shader = this.shaders.get(material.shaderName);
+    if (shader === undefined || shader.material !== material) {
+      throw new Error("shader material belongs to another runtime session");
+    }
+    return shader;
   }
 }
 

@@ -14,10 +14,22 @@ const {
   formatRuntimeError,
   keyDown,
   line,
+  cameraLookAt,
+  cameraPerspective,
+  lightDirectional,
+  materialBasic,
   materialShader,
+  meshBox,
+  meshFrom,
+  meshPlane,
+  meshSphere,
   mouseX,
   mouseY,
   noStroke,
+  nodeAdd,
+  nodeSetPos,
+  nodeSetRot,
+  nodeSetScale,
   popMatrix,
   pushMatrix,
   random,
@@ -28,10 +40,12 @@ const {
   runtimeVersion,
   scale,
   setShaderUniform,
+  shaderSet,
   size,
   start,
   stroke,
   text,
+  textureLoad,
   time,
   translate,
   triangle,
@@ -448,6 +462,249 @@ test("allows optimized-out uniforms and rejects invalid uploads", async () => {
   );
 });
 
+test("renders retained 3D primitives and rejects handles from old sessions", async () => {
+  const {
+    context,
+    elementDraws,
+    uniformMatrix4Values,
+    uploads,
+  } = fakeWebGl2();
+  let oldNode;
+  const handle = await start(
+    {
+      setup() {
+        size(400, 240);
+        cameraPerspective(Math.PI / 3, 0.1, 50);
+        cameraLookAt([4, 3, 6], [0, 0, 0], [0, 1, 0]);
+        lightDirectional([-1, -2, -1], [1, 0.9, 0.8]);
+        const material = materialBasic([0.2, 0.6, 0.9, 1]);
+        oldNode = nodeAdd(meshBox(1, 2, 3), material);
+        nodeSetPos(oldNode, -2, 0, 0);
+        nodeSetRot(oldNode, 0.1, 0.2, 0.3);
+        nodeSetScale(oldNode, 1, 1.5, 0.75);
+        nodeAdd(meshSphere(1, 8), material);
+        nodeAdd(meshPlane(4, 3, 2, 3), material);
+        nodeAdd(
+          meshFrom(
+            [
+              0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 1,
+              1, 0, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1,
+              0, 1, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1,
+            ],
+            [0, 1, 2],
+          ),
+          material,
+        );
+      },
+    },
+    { canvas: fakeCanvas(), context, onError() {} },
+  );
+
+  assert.deepEqual(elementDraws, [36, 192, 36, 3]);
+  assert.equal(uploads.some((upload) => upload.length === 24 * 12), true);
+  const modelUploads = uniformMatrix4Values.filter(
+    (upload) => upload.name === "u_model",
+  );
+  assert.equal(modelUploads.length, 4);
+  assert.equal(modelUploads[0].value[12], -2);
+  assert.throws(
+    () => meshFrom([0, 1, 2], [0, 1, 2]),
+    /12 finite values per vertex/,
+  );
+  handle.stop();
+
+  const next = fakeWebGl2();
+  await assert.rejects(
+    start(
+      {
+        setup() {
+          nodeSetRot(oldNode, 0, 0, 0);
+        },
+      },
+      { canvas: fakeCanvas(), context: next.context, onError() {} },
+    ),
+    /another runtime session/,
+  );
+});
+
+test("uploads custom shader uniforms independently for each node", async () => {
+  const {
+    context,
+    elementDraws,
+    uniform3fvValues,
+    uniformMatrix4Values,
+  } = fakeWebGl2();
+  const bundle = shaderBundle([
+    {
+      name: "lit",
+      attributes: [
+        {
+          name: "position",
+          glslName: "a_position",
+          location: 0,
+          type: "vec3",
+        },
+      ],
+      uniforms: [
+        {
+          name: "u_model",
+          glslName: "u_model",
+          type: "mat4",
+          source: "automatic",
+        },
+        {
+          name: "tint",
+          glslName: "pgl_u_tint",
+          type: "vec3",
+          source: "user",
+        },
+      ],
+    },
+  ]);
+  const handle = await start(
+    {
+      setup() {
+        const mesh = meshBox(1, 1, 1);
+        const material = materialShader("lit");
+        const left = nodeAdd(mesh, material);
+        const right = nodeAdd(mesh, material);
+        nodeSetPos(left, -1.5, 0, 0);
+        nodeSetPos(right, 1.5, 0, 0);
+        shaderSet(left, "tint", [1, 0, 0]);
+        shaderSet(right, "tint", [0, 0, 1]);
+      },
+    },
+    {
+      canvas: fakeCanvas(),
+      context,
+      shaderBundle: bundle,
+      onError() {},
+    },
+  );
+
+  assert.deepEqual(elementDraws, [36, 36]);
+  assert.deepEqual(uniform3fvValues.slice(-2), [[1, 0, 0], [0, 0, 1]]);
+  const models = uniformMatrix4Values.filter(
+    (upload) => upload.name === "u_model",
+  );
+  assert.equal(models.at(-2).value[12], -1.5);
+  assert.equal(models.at(-1).value[12], 1.5);
+  handle.stop();
+});
+
+test("waits for setup textures and uses a white placeholder during frames", async () => {
+  const setupGl = fakeWebGl2();
+  const setupDocument = fakeDocument();
+  setupDocument.baseURI = "https://example.test/demo/";
+  let finishSetupImage;
+  let setupTexture;
+  const setupUrls = [];
+  const setupStarted = start(
+    {
+      setup() {
+        setupTexture = textureLoad("assets/grid.png");
+      },
+    },
+    {
+      canvas: fakeCanvas(),
+      context: setupGl.context,
+      document: setupDocument,
+      imageLoader(url) {
+        setupUrls.push(url);
+        return new Promise((resolve) => {
+          finishSetupImage = resolve;
+        });
+      },
+      onError() {},
+    },
+  );
+  let setupSettled = false;
+  void setupStarted.then(() => {
+    setupSettled = true;
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(setupSettled, false);
+  assert.equal(setupTexture.loaded, false);
+  assert.deepEqual(setupUrls, ["https://example.test/demo/assets/grid.png"]);
+  assert.deepEqual(
+    [...setupGl.textureUploads[0].at(-1)],
+    [255, 255, 255, 255],
+  );
+  finishSetupImage({ width: 2, height: 2 });
+  const setupHandle = await setupStarted;
+  assert.equal(setupTexture.loaded, true);
+  assert.equal(setupGl.textureUploads.length, 2);
+  setupHandle.stop();
+
+  const frameGl = fakeWebGl2();
+  const frames = [];
+  let finishFrameImage;
+  let frameTexture;
+  const frameHandle = await start(
+    {
+      frame() {
+        frameTexture ??= textureLoad("assets/dynamic.png");
+      },
+    },
+    {
+      canvas: fakeCanvas(),
+      context: frameGl.context,
+      requestAnimationFrame(callback) {
+        frames.push(callback);
+        return frames.length;
+      },
+      cancelAnimationFrame() {},
+      imageLoader() {
+        return new Promise((resolve) => {
+          finishFrameImage = resolve;
+        });
+      },
+      onError() {},
+    },
+  );
+  frames[0](1000);
+  assert.equal(frameTexture.loaded, false);
+  assert.deepEqual(
+    [...frameGl.textureUploads[0].at(-1)],
+    [255, 255, 255, 255],
+  );
+  finishFrameImage({ width: 4, height: 4 });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(frameTexture.loaded, true);
+  assert.equal(frameGl.textureUploads.length, 2);
+  frameHandle.stop();
+});
+
+test("turns setup texture failures into startup failures", async () => {
+  const { context } = fakeWebGl2();
+  const canvas = fakeCanvas();
+  const failures = [];
+  await assert.rejects(
+    start(
+      {
+        setup() {
+          textureLoad("assets/missing.png");
+        },
+      },
+      {
+        canvas,
+        context,
+        imageLoader: async () => {
+          throw new Error("not found");
+        },
+        onError(reason) {
+          failures.push(reason);
+        },
+      },
+    ),
+    /failed to load texture `assets\/missing.png`: not found/,
+  );
+  assert.equal(failures.length, 1);
+  assert.equal(canvas.listeners.size, 0);
+});
+
 test("releases built-in renderer resources when startup fails", async () => {
   const failed = fakeWebGl2({ failShaderAt: 2 });
   await assert.rejects(
@@ -482,6 +739,13 @@ test("reports shader startup failures at the originating source", async () => {
             ],
           },
         ]),
+        setup() {
+          const node = nodeAdd(
+            meshBox(1, 1, 1),
+            materialShader("needs_color"),
+          );
+          nodeSetRot(node, 0, 0.25, 0);
+        },
       },
       {
         canvas: fakeCanvas(),
@@ -682,27 +946,44 @@ function fakeTextOverlay(canvas) {
 
 function fakeWebGl2(options = {}) {
   const draws = [];
+  const elementDraws = [];
   const clears = [];
   const uploads = [];
+  const textureUploads = [];
   const uniform1fValues = [];
   const uniform3fvValues = [];
+  const uniformMatrix4Values = [];
   const deletedShaders = [];
   let shaderChecks = 0;
   const context = {
     ARRAY_BUFFER: 0x8892,
     BLEND: 0x0be2,
+    CLAMP_TO_EDGE: 0x812f,
     COLOR_BUFFER_BIT: 0x4000,
     COMPILE_STATUS: 0x8b81,
+    DEPTH_BUFFER_BIT: 0x0100,
+    DEPTH_TEST: 0x0b71,
     DYNAMIC_DRAW: 0x88e8,
+    ELEMENT_ARRAY_BUFFER: 0x8893,
     FLOAT: 0x1406,
     FRAGMENT_SHADER: 0x8b30,
+    LEQUAL: 0x0203,
+    LINEAR: 0x2601,
     LINK_STATUS: 0x8b82,
     NO_ERROR: 0,
     ONE_MINUS_SRC_ALPHA: 0x0303,
+    RGBA: 0x1908,
     SRC_ALPHA: 0x0302,
+    STATIC_DRAW: 0x88e4,
+    TEXTURE_MAG_FILTER: 0x2800,
+    TEXTURE_MIN_FILTER: 0x2801,
+    TEXTURE_WRAP_S: 0x2802,
+    TEXTURE_WRAP_T: 0x2803,
     TRIANGLES: 0x0004,
     TEXTURE0: 0x84c0,
     TEXTURE_2D: 0x0de1,
+    UNSIGNED_BYTE: 0x1401,
+    UNSIGNED_INT: 0x1405,
     VERTEX_SHADER: 0x8b31,
     activeTexture() {},
     attachShader() {},
@@ -717,6 +998,9 @@ function fakeWebGl2(options = {}) {
     },
     clearColor() {},
     compileShader() {},
+    createTexture() {
+      return { texture: true };
+    },
     createBuffer() {
       return {};
     },
@@ -731,8 +1015,14 @@ function fakeWebGl2(options = {}) {
     deleteShader(shader) {
       deletedShaders.push(shader);
     },
+    deleteTexture() {},
+    depthFunc() {},
+    disable() {},
     drawArrays(_mode, _first, count) {
       draws.push(count);
+    },
+    drawElements(_mode, count) {
+      elementDraws.push(count);
     },
     enable() {},
     enableVertexAttribArray() {},
@@ -753,7 +1043,7 @@ function fakeWebGl2(options = {}) {
       return shaderChecks !== options.failShaderAt;
     },
     getUniformLocation(_program, name) {
-      return name === options.inactiveUniform ? null : {};
+      return name === options.inactiveUniform ? null : { name };
     },
     getError() {
       return options.uniformError ?? 0;
@@ -763,6 +1053,10 @@ function fakeWebGl2(options = {}) {
     },
     linkProgram() {},
     shaderSource() {},
+    texImage2D(...args) {
+      textureUploads.push(args);
+    },
+    texParameteri() {},
     uniform2f() {},
     uniform1f(_location, value) {
       uniform1fValues.push(value);
@@ -775,7 +1069,12 @@ function fakeWebGl2(options = {}) {
     uniform4fv() {},
     uniformMatrix2fv() {},
     uniformMatrix3fv() {},
-    uniformMatrix4fv() {},
+    uniformMatrix4fv(location, _transpose, value) {
+      uniformMatrix4Values.push({
+        name: location.name,
+        value: [...value],
+      });
+    },
     useProgram() {},
     vertexAttribPointer() {},
     viewport() {},
@@ -783,10 +1082,13 @@ function fakeWebGl2(options = {}) {
   return {
     context,
     draws,
+    elementDraws,
     clears,
     uploads,
+    textureUploads,
     uniform1fValues,
     uniform3fvValues,
+    uniformMatrix4Values,
     deletedShaders,
   };
 }

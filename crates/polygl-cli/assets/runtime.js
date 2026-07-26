@@ -28,6 +28,21 @@ export const runtimeOps = Object.freeze({
     key_down: "keyDown",
     random: "random",
     material_shader: "materialShader",
+    mesh_box: "meshBox",
+    mesh_sphere: "meshSphere",
+    mesh_plane: "meshPlane",
+    mesh_from: "meshFrom",
+    material_basic: "materialBasic",
+    node_add: "nodeAdd",
+    node_set_pos: "nodeSetPos",
+    node_set_rot: "nodeSetRot",
+    node_set_scale: "nodeSetScale",
+    camera_perspective: "cameraPerspective",
+    camera_look_at: "cameraLookAt",
+    light_directional: "lightDirectional",
+    texture_load: "textureLoad",
+    shader_set: "shaderSet",
+    sample: "sampleTexture",
 });
 export const runtimeSignatures = Object.freeze({
     floor: { domain: "both", params: [{ name: "value", type: "float" }], result: "int" },
@@ -56,6 +71,21 @@ export const runtimeSignatures = Object.freeze({
     key_down: { domain: "host", params: [{ name: "key", type: "str" }], result: "bool" },
     random: { domain: "host", params: [{ name: "a", type: "float" }, { name: "b", type: "float" }], result: "float" },
     material_shader: { domain: "host", params: [{ name: "name", type: "str" }], result: "Material" },
+    mesh_box: { domain: "host", params: [{ name: "w", type: "float" }, { name: "h", type: "float" }, { name: "d", type: "float" }], result: "Mesh" },
+    mesh_sphere: { domain: "host", params: [{ name: "r", type: "float" }, { name: "segments", type: "int" }], result: "Mesh" },
+    mesh_plane: { domain: "host", params: [{ name: "w", type: "float" }, { name: "d", type: "float" }, { name: "columns", type: "int", default: 1 }, { name: "rows", type: "int", default: 1 }], result: "Mesh" },
+    mesh_from: { domain: "host", params: [{ name: "vertices", type: "float[]" }, { name: "indices", type: "int[]" }], result: "Mesh" },
+    material_basic: { domain: "host", params: [{ name: "color", type: "vec4" }], result: "Material" },
+    node_add: { domain: "host", params: [{ name: "mesh", type: "Mesh" }, { name: "material", type: "Material" }], result: "Node" },
+    node_set_pos: { domain: "host", params: [{ name: "node", type: "Node" }, { name: "x", type: "float" }, { name: "y", type: "float" }, { name: "z", type: "float" }], result: "void" },
+    node_set_rot: { domain: "host", params: [{ name: "node", type: "Node" }, { name: "x", type: "float" }, { name: "y", type: "float" }, { name: "z", type: "float" }], result: "void" },
+    node_set_scale: { domain: "host", params: [{ name: "node", type: "Node" }, { name: "x", type: "float" }, { name: "y", type: "float" }, { name: "z", type: "float" }], result: "void" },
+    camera_perspective: { domain: "host", params: [{ name: "fov", type: "float" }, { name: "near", type: "float" }, { name: "far", type: "float" }], result: "void" },
+    camera_look_at: { domain: "host", params: [{ name: "eye", type: "vec3" }, { name: "target", type: "vec3" }, { name: "up", type: "vec3" }], result: "void" },
+    light_directional: { domain: "host", params: [{ name: "direction", type: "vec3" }, { name: "color", type: "vec3" }], result: "void" },
+    texture_load: { domain: "host", params: [{ name: "path", type: "str" }], result: "Texture" },
+    shader_set: { domain: "host", params: [{ name: "node", type: "Node" }, { name: "name", type: "str" }, { name: "value", type: "ShaderValue" }], result: "void" },
+    sample: { domain: "gpu", params: [{ name: "texture", type: "Texture" }, { name: "uv", type: "vec2" }], result: "vec4" },
 });
 const OVERLAY_ID = "polygl-error-overlay";
 export function runtimeError(message, location) {
@@ -145,6 +175,264 @@ function normalizeSeed(seed) {
     const normalized = Math.trunc(seed) >>> 0;
     return normalized === 0 ? DEFAULT_SEED : normalized;
 }
+export function identity4() {
+    return new Float32Array([
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1,
+    ]);
+}
+export function perspective4(verticalFov, aspect, near, far) {
+    const scale = 1 / Math.tan(verticalFov / 2);
+    const depth = 1 / (near - far);
+    return new Float32Array([
+        scale / aspect, 0, 0, 0,
+        0, scale, 0, 0,
+        0, 0, (far + near) * depth, -1,
+        0, 0, 2 * far * near * depth, 0,
+    ]);
+}
+export function lookAt4(eye, target, up) {
+    const z = normalize3(subtract3(eye, target), "camera eye and target");
+    const x = normalize3(cross3(up, z), "camera up direction");
+    const y = cross3(z, x);
+    return new Float32Array([
+        x[0], y[0], z[0], 0,
+        x[1], y[1], z[1], 0,
+        x[2], y[2], z[2], 0,
+        -dot3(x, eye), -dot3(y, eye), -dot3(z, eye), 1,
+    ]);
+}
+export function model4(position, rotation, scale) {
+    const [rx, ry, rz] = rotation;
+    const sx = Math.sin(rx);
+    const cx = Math.cos(rx);
+    const sy = Math.sin(ry);
+    const cy = Math.cos(ry);
+    const sz = Math.sin(rz);
+    const cz = Math.cos(rz);
+    const rotationX = new Float32Array([
+        1, 0, 0, 0,
+        0, cx, sx, 0,
+        0, -sx, cx, 0,
+        0, 0, 0, 1,
+    ]);
+    const rotationY = new Float32Array([
+        cy, 0, -sy, 0,
+        0, 1, 0, 0,
+        sy, 0, cy, 0,
+        0, 0, 0, 1,
+    ]);
+    const rotationZ = new Float32Array([
+        cz, sz, 0, 0,
+        -sz, cz, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1,
+    ]);
+    const scaling = new Float32Array([
+        scale[0], 0, 0, 0,
+        0, scale[1], 0, 0,
+        0, 0, scale[2], 0,
+        0, 0, 0, 1,
+    ]);
+    const translation = identity4();
+    translation[12] = position[0];
+    translation[13] = position[1];
+    translation[14] = position[2];
+    return multiply4(translation, multiply4(rotationZ, multiply4(rotationY, multiply4(rotationX, scaling))));
+}
+export function normal3(model) {
+    const a00 = model[0] ?? 0;
+    const a01 = model[1] ?? 0;
+    const a02 = model[2] ?? 0;
+    const a10 = model[4] ?? 0;
+    const a11 = model[5] ?? 0;
+    const a12 = model[6] ?? 0;
+    const a20 = model[8] ?? 0;
+    const a21 = model[9] ?? 0;
+    const a22 = model[10] ?? 0;
+    const determinant = a00 * (a11 * a22 - a12 * a21) -
+        a10 * (a01 * a22 - a02 * a21) +
+        a20 * (a01 * a12 - a02 * a11);
+    if (!Number.isFinite(determinant) || Math.abs(determinant) < 1e-12) {
+        throw new RangeError("node scale must produce an invertible model matrix");
+    }
+    const inverse = 1 / determinant;
+    return new Float32Array([
+        (a11 * a22 - a12 * a21) * inverse,
+        (a12 * a20 - a10 * a22) * inverse,
+        (a10 * a21 - a11 * a20) * inverse,
+        (a02 * a21 - a01 * a22) * inverse,
+        (a00 * a22 - a02 * a20) * inverse,
+        (a01 * a20 - a00 * a21) * inverse,
+        (a01 * a12 - a02 * a11) * inverse,
+        (a02 * a10 - a00 * a12) * inverse,
+        (a00 * a11 - a01 * a10) * inverse,
+    ]);
+}
+export function normalize3(value, label = "vector") {
+    const length = Math.hypot(...value);
+    if (!Number.isFinite(length) || length <= 1e-12) {
+        throw new RangeError(`${label} must not be zero`);
+    }
+    return [value[0] / length, value[1] / length, value[2] / length];
+}
+function multiply4(left, right) {
+    const result = new Float32Array(16);
+    for (let column = 0; column < 4; column += 1) {
+        for (let row = 0; row < 4; row += 1) {
+            let value = 0;
+            for (let index = 0; index < 4; index += 1) {
+                value +=
+                    (left[index * 4 + row] ?? 0) *
+                        (right[column * 4 + index] ?? 0);
+            }
+            result[column * 4 + row] = value;
+        }
+    }
+    return result;
+}
+function subtract3(left, right) {
+    return [
+        left[0] - right[0],
+        left[1] - right[1],
+        left[2] - right[2],
+    ];
+}
+function cross3(left, right) {
+    return [
+        left[1] * right[2] - left[2] * right[1],
+        left[2] * right[0] - left[0] * right[2],
+        left[0] * right[1] - left[1] * right[0],
+    ];
+}
+function dot3(left, right) {
+    return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
+}
+export const FLOATS_PER_MESH_VERTEX = 12;
+export function boxMesh(width, height, depth) {
+    const x = positive(width, "box width") / 2;
+    const y = positive(height, "box height") / 2;
+    const z = positive(depth, "box depth") / 2;
+    const vertices = [];
+    const indices = [];
+    const faces = [
+        [[0, 0, 1], [-x, -y, z], [x, -y, z], [x, y, z], [-x, y, z]],
+        [[0, 0, -1], [x, -y, -z], [-x, -y, -z], [-x, y, -z], [x, y, -z]],
+        [[1, 0, 0], [x, -y, z], [x, -y, -z], [x, y, -z], [x, y, z]],
+        [[-1, 0, 0], [-x, -y, -z], [-x, -y, z], [-x, y, z], [-x, y, -z]],
+        [[0, 1, 0], [-x, y, z], [x, y, z], [x, y, -z], [-x, y, -z]],
+        [[0, -1, 0], [-x, -y, -z], [x, -y, -z], [x, -y, z], [-x, -y, z]],
+    ];
+    const uvs = [[0, 0], [1, 0], [1, 1], [0, 1]];
+    for (const [normal, ...positions] of faces) {
+        const start = vertices.length / FLOATS_PER_MESH_VERTEX;
+        for (let index = 0; index < positions.length; index += 1) {
+            pushVertex(vertices, positions[index], normal, uvs[index]);
+        }
+        indices.push(start, start + 1, start + 2, start, start + 2, start + 3);
+    }
+    return createMeshData(vertices, indices);
+}
+export function sphereMesh(radius, segments) {
+    const safeRadius = positive(radius, "sphere radius");
+    const columns = boundedSegments(segments, "sphere segments");
+    const rows = Math.max(2, Math.ceil(columns / 2));
+    const vertices = [];
+    const indices = [];
+    for (let row = 0; row <= rows; row += 1) {
+        const v = row / rows;
+        const latitude = v * Math.PI;
+        const y = Math.cos(latitude);
+        const ring = Math.sin(latitude);
+        for (let column = 0; column <= columns; column += 1) {
+            const u = column / columns;
+            const longitude = u * Math.PI * 2;
+            const normal = [
+                ring * Math.cos(longitude),
+                y,
+                ring * Math.sin(longitude),
+            ];
+            pushVertex(vertices, [
+                normal[0] * safeRadius,
+                normal[1] * safeRadius,
+                normal[2] * safeRadius,
+            ], normal, [u, 1 - v]);
+        }
+    }
+    for (let row = 0; row < rows; row += 1) {
+        for (let column = 0; column < columns; column += 1) {
+            const topLeft = row * (columns + 1) + column;
+            const bottomLeft = topLeft + columns + 1;
+            indices.push(topLeft, bottomLeft, topLeft + 1, topLeft + 1, bottomLeft, bottomLeft + 1);
+        }
+    }
+    return createMeshData(vertices, indices);
+}
+export function planeMesh(width, depth, columns = 1, rows = 1) {
+    const safeWidth = positive(width, "plane width");
+    const safeDepth = positive(depth, "plane depth");
+    const safeColumns = boundedSegments(columns, "plane columns", 1);
+    const safeRows = boundedSegments(rows, "plane rows", 1);
+    const vertices = [];
+    const indices = [];
+    for (let row = 0; row <= safeRows; row += 1) {
+        const v = row / safeRows;
+        for (let column = 0; column <= safeColumns; column += 1) {
+            const u = column / safeColumns;
+            pushVertex(vertices, [(u - 0.5) * safeWidth, 0, (v - 0.5) * safeDepth], [0, 1, 0], [u, v]);
+        }
+    }
+    for (let row = 0; row < safeRows; row += 1) {
+        for (let column = 0; column < safeColumns; column += 1) {
+            const topLeft = row * (safeColumns + 1) + column;
+            const bottomLeft = topLeft + safeColumns + 1;
+            indices.push(topLeft, topLeft + 1, bottomLeft, topLeft + 1, bottomLeft + 1, bottomLeft);
+        }
+    }
+    return createMeshData(vertices, indices);
+}
+export function customMesh(vertices, indices) {
+    if (vertices.length === 0 ||
+        vertices.length % FLOATS_PER_MESH_VERTEX !== 0) {
+        throw new RangeError(`mesh vertices must contain ${FLOATS_PER_MESH_VERTEX} finite values per vertex`);
+    }
+    if (vertices.some((value) => !Number.isFinite(value))) {
+        throw new RangeError("mesh vertices must be finite numbers");
+    }
+    const vertexCount = vertices.length / FLOATS_PER_MESH_VERTEX;
+    if (indices.length === 0 ||
+        indices.length % 3 !== 0 ||
+        indices.some((value) => !Number.isInteger(value) ||
+            value < 0 ||
+            value >= vertexCount ||
+            value > 4294967295)) {
+        throw new RangeError("mesh indices must be in-range unsigned triangle indices");
+    }
+    return createMeshData(vertices, indices);
+}
+function createMeshData(vertices, indices) {
+    return {
+        vertices: new Float32Array(vertices),
+        indices: new Uint32Array(indices),
+    };
+}
+function pushVertex(target, position, normal, uv) {
+    target.push(...position, ...normal, ...uv, 1, 1, 1, 1);
+}
+function positive(value, label) {
+    if (!Number.isFinite(value) || value <= 0) {
+        throw new RangeError(`${label} must be a positive finite number`);
+    }
+    return value;
+}
+function boundedSegments(value, label, minimum = 3) {
+    if (!Number.isInteger(value) || value < minimum || value > 512) {
+        throw new RangeError(`${label} must be an integer between ${minimum} and 512`);
+    }
+    return value;
+}
 const FLOATS_PER_VERTEX = 6;
 const CIRCLE_SEGMENTS = 32;
 const IDENTITY_TRANSFORM = [1, 0, 0, 1, 0, 0];
@@ -183,15 +471,17 @@ export class WebGL2BatchRenderer {
             gl.deleteProgram(this.program);
             throw new Error("the built-in WebGL2 shader interface is incomplete");
         }
+        this.positionAttribute = position;
+        this.colorAttribute = color;
         this.resolution = resolution;
         gl.useProgram(this.program);
         gl.enable(gl.BLEND);
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
         gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
-        gl.enableVertexAttribArray(position);
-        gl.vertexAttribPointer(position, 2, gl.FLOAT, false, FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT, 0);
-        gl.enableVertexAttribArray(color);
-        gl.vertexAttribPointer(color, 4, gl.FLOAT, false, FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT, 2 * Float32Array.BYTES_PER_ELEMENT);
+        gl.enableVertexAttribArray(this.positionAttribute);
+        gl.vertexAttribPointer(this.positionAttribute, 2, gl.FLOAT, false, FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT, 0);
+        gl.enableVertexAttribArray(this.colorAttribute);
+        gl.vertexAttribPointer(this.colorAttribute, 4, gl.FLOAT, false, FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT, 2 * Float32Array.BYTES_PER_ELEMENT);
         let overlay;
         try {
             overlay = Canvas2DTextOverlay.attach(canvas, documentObject);
@@ -220,7 +510,7 @@ export class WebGL2BatchRenderer {
     background(r, g, b) {
         this.flush();
         this.gl.clearColor(channel(r), channel(g), channel(b), 1);
-        this.gl.clear(this.gl.COLOR_BUFFER_BIT);
+        this.gl.clear(this.gl.COLOR_BUFFER_BIT | this.gl.DEPTH_BUFFER_BIT);
         this.textOverlay?.clear();
     }
     fill(r, g, b, a = 1) {
@@ -307,8 +597,13 @@ export class WebGL2BatchRenderer {
             return;
         }
         const gl = this.gl;
+        gl.disable(gl.DEPTH_TEST);
         gl.useProgram(this.program);
         gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+        gl.enableVertexAttribArray(this.positionAttribute);
+        gl.vertexAttribPointer(this.positionAttribute, 2, gl.FLOAT, false, FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT, 0);
+        gl.enableVertexAttribArray(this.colorAttribute);
+        gl.vertexAttribPointer(this.colorAttribute, 4, gl.FLOAT, false, FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT, 2 * Float32Array.BYTES_PER_ELEMENT);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(this.vertices), gl.DYNAMIC_DRAW);
         gl.uniform2f(this.resolution, this.canvas.width, this.canvas.height);
         gl.drawArrays(gl.TRIANGLES, 0, this.vertices.length / FLOATS_PER_VERTEX);
@@ -572,6 +867,7 @@ export class WebGL2ShaderRegistry {
         }
         validateUniformValue(this.gl, binding, value, shader.artifact.fragmentLocation);
         shader.userValues.set(uniformName, Array.isArray(value) ? Object.freeze([...value]) : value);
+        shader.globalUniformsSet = true;
     }
     material(shaderName) {
         const shader = this.shaders.get(shaderName);
@@ -579,6 +875,44 @@ export class WebGL2ShaderRegistry {
             throw new Error(`unknown shader pair \`${shaderName}\``);
         }
         return shader.material;
+    }
+    owns(material) {
+        return this.shaders.get(material.shaderName)?.material === material;
+    }
+    nodeUniform(material, uniformName, value) {
+        const shader = this.requireMaterial(material);
+        const binding = shader.artifact.uniforms.find((uniform) => uniform.name === uniformName);
+        if (binding === undefined || binding.source !== "user") {
+            throw runtimeError(`shader \`${shader.artifact.name}\` has no user uniform \`${uniformName}\``, shader.artifact.fragmentLocation);
+        }
+        validateUniformValue(this.gl, binding, value, shader.artifact.fragmentLocation);
+        return Array.isArray(value) ? Object.freeze([...value]) : value;
+    }
+    bindForDraw(material, userValues, automatic) {
+        const shader = this.requireMaterial(material);
+        this.gl.useProgram(shader.program);
+        let textureUnit = 0;
+        for (const binding of shader.artifact.uniforms) {
+            const location = shader.uniforms.get(binding.name);
+            if (location === undefined) {
+                continue;
+            }
+            if (binding.source === "automatic") {
+                this.uploadAutomaticForDraw(binding, location, automatic);
+                this.assertUploadSucceeded(shader, binding);
+                continue;
+            }
+            const value = userValues.get(binding.name);
+            if (value === undefined) {
+                if (this.debug) {
+                    throw runtimeError(`user uniform \`${binding.name}\` is unset for shader \`${shader.artifact.name}\``, shader.artifact.fragmentLocation);
+                }
+                continue;
+            }
+            textureUnit = this.uploadUser(binding, location, value, textureUnit);
+            this.assertUploadSucceeded(shader, binding);
+        }
+        return shader.artifact.attributes;
     }
     updateAutomaticUniforms(elapsedSeconds, width, height) {
         for (const shader of this.shaders.values()) {
@@ -596,7 +930,7 @@ export class WebGL2ShaderRegistry {
                 }
                 const value = shader.userValues.get(binding.name);
                 if (value === undefined) {
-                    if (this.debug) {
+                    if (this.debug && shader.globalUniformsSet) {
                         throw runtimeError(`user uniform \`${binding.name}\` is unset for shader \`${shader.artifact.name}\``, shader.artifact.fragmentLocation);
                     }
                     continue;
@@ -642,6 +976,7 @@ export class WebGL2ShaderRegistry {
                 program,
                 uniforms,
                 userValues: new Map(),
+                globalUniformsSet: false,
             };
         }
         catch (error) {
@@ -669,6 +1004,27 @@ export class WebGL2ShaderRegistry {
             case "u_view":
             case "u_proj":
                 this.gl.uniformMatrix4fv(location, false, IDENTITY_MATRIX);
+                return;
+            default:
+                throw new Error(`unknown automatic uniform \`${binding.name}\``);
+        }
+    }
+    uploadAutomaticForDraw(binding, location, automatic) {
+        switch (binding.name) {
+            case "u_time":
+                this.gl.uniform1f(location, automatic.elapsedSeconds);
+                return;
+            case "u_resolution":
+                this.gl.uniform2f(location, automatic.width, automatic.height);
+                return;
+            case "u_model":
+                this.gl.uniformMatrix4fv(location, false, automatic.model);
+                return;
+            case "u_view":
+                this.gl.uniformMatrix4fv(location, false, automatic.view);
+                return;
+            case "u_proj":
+                this.gl.uniformMatrix4fv(location, false, automatic.projection);
                 return;
             default:
                 throw new Error(`unknown automatic uniform \`${binding.name}\``);
@@ -715,6 +1071,13 @@ export class WebGL2ShaderRegistry {
         if (error !== this.gl.NO_ERROR) {
             throw runtimeError(`WebGL rejected uniform \`${binding.name}\` for shader \`${shader.artifact.name}\` (error 0x${error.toString(16)})`, shader.artifact.fragmentLocation);
         }
+    }
+    requireMaterial(material) {
+        const shader = this.shaders.get(material.shaderName);
+        if (shader === undefined || shader.material !== material) {
+            throw new Error("shader material belongs to another runtime session");
+        }
+        return shader;
     }
 }
 function createShaderMaterial(shaderName) {
@@ -791,6 +1154,526 @@ function validateNumericArray(value, length, invalid) {
         invalid();
     }
 }
+const sceneOwnerBrand = Symbol("SceneOwner");
+export class WebGL2SceneRenderer {
+    constructor(gl, shaderRegistry, documentObject, imageLoader = defaultImageLoader, onAsyncError = () => { }) {
+        this.gl = gl;
+        this.documentObject = documentObject;
+        this.imageLoader = imageLoader;
+        this.onAsyncError = onAsyncError;
+        this.owner = {};
+        this.meshes = new Set();
+        this.nodes = new Set();
+        this.textures = new Map();
+        this.pendingSetupAssets = new Set();
+        this.startupPhase = true;
+        this.disposed = false;
+        this.camera = {
+            verticalFov: Math.PI / 4,
+            near: 0.1,
+            far: 100,
+            eye: [0, 0, 5],
+            target: [0, 0, 0],
+            up: [0, 1, 0],
+        };
+        this.light = {
+            direction: normalize3([-0.5, -1, -0.5]),
+            color: [1, 1, 1],
+        };
+        this.shaderRegistry = shaderRegistry;
+    }
+    replaceShaderRegistry(registry) {
+        this.shaderRegistry = registry;
+    }
+    meshBox(width, height, depth) {
+        return this.createMesh(boxMesh(width, height, depth));
+    }
+    meshSphere(radius, segments) {
+        return this.createMesh(sphereMesh(radius, segments));
+    }
+    meshPlane(width, depth, columns = 1, rows = 1) {
+        return this.createMesh(planeMesh(width, depth, columns, rows));
+    }
+    meshFrom(vertices, indices) {
+        return this.createMesh(customMesh(vertices, indices));
+    }
+    materialBasic(color) {
+        const safeColor = fixedVector(color, 4, "basic material color");
+        const material = {
+            kind: "basic",
+            color: safeColor,
+        };
+        return brand(material, this.owner);
+    }
+    nodeAdd(mesh, material) {
+        const resource = this.requireMesh(mesh);
+        if (material.kind === "basic") {
+            this.requireOwned(material, "material");
+        }
+        else if (!this.shaderRegistry.owns(material)) {
+            throw new Error("shader material belongs to another runtime session");
+        }
+        const node = brand({
+            kind: "node",
+            mesh: resource,
+            material,
+            position: [0, 0, 0],
+            rotation: [0, 0, 0],
+            scale: [1, 1, 1],
+            uniforms: new Map(),
+        }, this.owner);
+        this.nodes.add(node);
+        return node;
+    }
+    nodeSetPosition(node, x, y, z) {
+        this.requireNode(node).position = finiteVec3([x, y, z], "node position");
+    }
+    nodeSetRotation(node, x, y, z) {
+        this.requireNode(node).rotation = finiteVec3([x, y, z], "node rotation");
+    }
+    nodeSetScale(node, x, y, z) {
+        const scale = finiteVec3([x, y, z], "node scale");
+        if (scale.some((value) => Math.abs(value) <= 1e-12)) {
+            throw new RangeError("node scale components must not be zero");
+        }
+        this.requireNode(node).scale = scale;
+    }
+    cameraPerspective(verticalFov, near, far) {
+        if (!Number.isFinite(verticalFov) ||
+            verticalFov <= 0 ||
+            verticalFov >= Math.PI) {
+            throw new RangeError("camera field of view must be in radians between 0 and pi");
+        }
+        if (!Number.isFinite(near) ||
+            !Number.isFinite(far) ||
+            near <= 0 ||
+            far <= near) {
+            throw new RangeError("camera clipping planes must satisfy 0 < near < far");
+        }
+        this.camera = { ...this.camera, verticalFov, near, far };
+    }
+    cameraLookAt(eye, target, up) {
+        const safeEye = fixedVec3(eye, "camera eye");
+        const safeTarget = fixedVec3(target, "camera target");
+        const safeUp = fixedVec3(up, "camera up");
+        lookAt4(safeEye, safeTarget, safeUp);
+        this.camera = {
+            ...this.camera,
+            eye: safeEye,
+            target: safeTarget,
+            up: safeUp,
+        };
+    }
+    lightDirectional(direction, color) {
+        const safeColor = fixedVec3(color, "directional light color");
+        if (safeColor.some((value) => value < 0)) {
+            throw new RangeError("directional light color must not be negative");
+        }
+        this.light = {
+            direction: normalize3(fixedVec3(direction, "directional light direction"), "directional light direction"),
+            color: safeColor,
+        };
+    }
+    textureLoad(path) {
+        const safePath = validateAssetPath(path);
+        const cached = this.textures.get(safePath);
+        if (cached !== undefined) {
+            return cached;
+        }
+        const texture = this.gl.createTexture();
+        if (texture === null) {
+            throw new Error(`failed to create texture for \`${safePath}\``);
+        }
+        this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
+        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.LINEAR);
+        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.LINEAR);
+        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
+        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
+        this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, 1, 1, 0, this.gl.RGBA, this.gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
+        const handle = brand({
+            kind: "texture",
+            path: safePath,
+            loaded: false,
+            texture,
+        }, this.owner);
+        this.textures.set(safePath, handle);
+        const load = this.loadTexture(handle);
+        if (this.startupPhase) {
+            this.pendingSetupAssets.add(load);
+        }
+        else {
+            void load.catch(this.onAsyncError);
+        }
+        return handle;
+    }
+    shaderSet(node, uniformName, value) {
+        const sceneNode = this.requireNode(node);
+        if (sceneNode.material.kind !== "shader") {
+            throw new Error("shader_set requires a node with a shader material");
+        }
+        let uploadValue;
+        if (isTextureHandle(value)) {
+            uploadValue = this.requireTexture(value).texture;
+        }
+        else {
+            uploadValue = value;
+        }
+        sceneNode.uniforms.set(uniformName, this.shaderRegistry.nodeUniform(sceneNode.material, uniformName, uploadValue));
+    }
+    async awaitSetupAssets() {
+        while (this.pendingSetupAssets.size > 0) {
+            const pending = [...this.pendingSetupAssets];
+            this.pendingSetupAssets.clear();
+            await Promise.all(pending);
+        }
+        this.startupPhase = false;
+    }
+    render(elapsedSeconds, width, height) {
+        if (this.nodes.size === 0) {
+            return;
+        }
+        const view = lookAt4(this.camera.eye, this.camera.target, this.camera.up);
+        const projection = perspective4(this.camera.verticalFov, Math.max(1, width) / Math.max(1, height), this.camera.near, this.camera.far);
+        this.gl.enable(this.gl.DEPTH_TEST);
+        this.gl.depthFunc(this.gl.LEQUAL);
+        this.gl.clear(this.gl.DEPTH_BUFFER_BIT);
+        for (const node of this.nodes) {
+            const model = model4(node.position, node.rotation, node.scale);
+            if (node.material.kind === "basic") {
+                this.bindBasic(node.material, model, view, projection);
+                this.bindMesh(node.mesh, STANDARD_ATTRIBUTES);
+            }
+            else {
+                const attributes = this.shaderRegistry.bindForDraw(node.material, node.uniforms, {
+                    elapsedSeconds,
+                    width,
+                    height,
+                    model,
+                    view,
+                    projection,
+                });
+                this.bindMesh(node.mesh, attributes);
+            }
+            this.gl.drawElements(this.gl.TRIANGLES, node.mesh.indexCount, this.gl.UNSIGNED_INT, 0);
+        }
+        this.gl.disable(this.gl.DEPTH_TEST);
+    }
+    dispose() {
+        if (this.disposed) {
+            return;
+        }
+        this.disposed = true;
+        for (const mesh of this.meshes) {
+            this.gl.deleteBuffer(mesh.vertexBuffer);
+            this.gl.deleteBuffer(mesh.indexBuffer);
+        }
+        for (const texture of this.textures.values()) {
+            this.gl.deleteTexture(texture.texture);
+        }
+        if (this.basicProgram !== undefined) {
+            this.gl.deleteProgram(this.basicProgram.program);
+        }
+        this.meshes.clear();
+        this.nodes.clear();
+        this.textures.clear();
+        this.pendingSetupAssets.clear();
+    }
+    createMesh(data) {
+        const vertexBuffer = this.gl.createBuffer();
+        const indexBuffer = this.gl.createBuffer();
+        if (vertexBuffer === null || indexBuffer === null) {
+            if (vertexBuffer !== null)
+                this.gl.deleteBuffer(vertexBuffer);
+            if (indexBuffer !== null)
+                this.gl.deleteBuffer(indexBuffer);
+            throw new Error("failed to create mesh buffers");
+        }
+        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, vertexBuffer);
+        this.gl.bufferData(this.gl.ARRAY_BUFFER, data.vertices, this.gl.STATIC_DRAW);
+        this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+        this.gl.bufferData(this.gl.ELEMENT_ARRAY_BUFFER, data.indices, this.gl.STATIC_DRAW);
+        const mesh = brand({
+            kind: "mesh",
+            vertexBuffer,
+            indexBuffer,
+            indexCount: data.indices.length,
+        }, this.owner);
+        this.meshes.add(mesh);
+        return mesh;
+    }
+    bindMesh(mesh, attributes) {
+        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, mesh.vertexBuffer);
+        this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, mesh.indexBuffer);
+        const stride = FLOATS_PER_MESH_VERTEX * Float32Array.BYTES_PER_ELEMENT;
+        for (const attribute of attributes) {
+            const layout = ATTRIBUTE_LAYOUT[attribute.name];
+            if (layout === undefined) {
+                throw new Error(`unknown standard mesh attribute \`${attribute.name}\``);
+            }
+            this.gl.enableVertexAttribArray(attribute.location);
+            this.gl.vertexAttribPointer(attribute.location, layout.size, this.gl.FLOAT, false, stride, layout.offset * Float32Array.BYTES_PER_ELEMENT);
+        }
+    }
+    bindBasic(material, model, view, projection) {
+        const basic = this.basicProgram ?? this.createBasicProgram();
+        this.basicProgram = basic;
+        this.gl.useProgram(basic.program);
+        this.gl.uniformMatrix4fv(basic.model, false, model);
+        this.gl.uniformMatrix4fv(basic.view, false, view);
+        this.gl.uniformMatrix4fv(basic.projection, false, projection);
+        this.gl.uniformMatrix3fv(basic.normal, false, normal3(model));
+        this.gl.uniform4fv(basic.materialColor, material.color);
+        this.gl.uniform3fv(basic.lightDirection, this.light.direction);
+        this.gl.uniform3fv(basic.lightColor, this.light.color);
+        this.gl.uniform3fv(basic.eye, this.camera.eye);
+    }
+    createBasicProgram() {
+        const program = sceneLinkProgram(this.gl, BASIC_VERTEX_SHADER, BASIC_FRAGMENT_SHADER);
+        try {
+            return {
+                program,
+                model: requiredUniform(this.gl, program, "u_model"),
+                view: requiredUniform(this.gl, program, "u_view"),
+                projection: requiredUniform(this.gl, program, "u_proj"),
+                normal: requiredUniform(this.gl, program, "u_normal"),
+                materialColor: requiredUniform(this.gl, program, "u_material_color"),
+                lightDirection: requiredUniform(this.gl, program, "u_light_direction"),
+                lightColor: requiredUniform(this.gl, program, "u_light_color"),
+                eye: requiredUniform(this.gl, program, "u_eye"),
+            };
+        }
+        catch (error) {
+            this.gl.deleteProgram(program);
+            throw error;
+        }
+    }
+    async loadTexture(handle) {
+        const url = resolveAssetUrl(handle.path, this.documentObject);
+        let image;
+        try {
+            image = await this.imageLoader(url);
+        }
+        catch (error) {
+            throw new Error(`failed to load texture \`${handle.path}\`: ${errorMessage(error)}`);
+        }
+        if (this.disposed) {
+            return;
+        }
+        this.gl.bindTexture(this.gl.TEXTURE_2D, handle.texture);
+        this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, image);
+        handle.loaded = true;
+    }
+    requireMesh(mesh) {
+        this.requireOwned(mesh, "mesh");
+        const resource = mesh;
+        if (!this.meshes.has(resource)) {
+            throw new Error("mesh handle is no longer valid");
+        }
+        return resource;
+    }
+    requireNode(node) {
+        this.requireOwned(node, "node");
+        const sceneNode = node;
+        if (!this.nodes.has(sceneNode)) {
+            throw new Error("node handle is no longer valid");
+        }
+        return sceneNode;
+    }
+    requireTexture(texture) {
+        this.requireOwned(texture, "texture");
+        const resource = texture;
+        if (this.textures.get(resource.path) !== resource) {
+            throw new Error("texture handle is no longer valid");
+        }
+        return resource;
+    }
+    requireOwned(handle, kind) {
+        if (handle[sceneOwnerBrand] !== this.owner) {
+            throw new Error(`${kind} belongs to another runtime session`);
+        }
+    }
+}
+const ATTRIBUTE_LAYOUT = Object.freeze({
+    position: { size: 3, offset: 0 },
+    normal: { size: 3, offset: 3 },
+    uv: { size: 2, offset: 6 },
+    color: { size: 4, offset: 8 },
+});
+const STANDARD_ATTRIBUTES = Object.freeze([
+    {
+        name: "position",
+        glslName: "a_position",
+        location: 0,
+        type: "vec3",
+    },
+    {
+        name: "normal",
+        glslName: "a_normal",
+        location: 1,
+        type: "vec3",
+    },
+    {
+        name: "uv",
+        glslName: "a_uv",
+        location: 2,
+        type: "vec2",
+    },
+    {
+        name: "color",
+        glslName: "a_color",
+        location: 3,
+        type: "vec4",
+    },
+]);
+const BASIC_VERTEX_SHADER = `#version 300 es
+precision highp float;
+layout(location = 0) in vec3 a_position;
+layout(location = 1) in vec3 a_normal;
+layout(location = 2) in vec2 a_uv;
+layout(location = 3) in vec4 a_color;
+uniform mat4 u_model;
+uniform mat4 u_view;
+uniform mat4 u_proj;
+uniform mat3 u_normal;
+out vec3 v_world_position;
+out vec3 v_normal;
+out vec4 v_color;
+
+void main() {
+  vec4 world = u_model * vec4(a_position, 1.0);
+  gl_Position = u_proj * u_view * world;
+  v_world_position = world.xyz;
+  v_normal = normalize(u_normal * a_normal);
+  v_color = a_color;
+}`;
+const BASIC_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+in vec3 v_world_position;
+in vec3 v_normal;
+in vec4 v_color;
+uniform vec4 u_material_color;
+uniform vec3 u_light_direction;
+uniform vec3 u_light_color;
+uniform vec3 u_eye;
+out vec4 out_color;
+
+void main() {
+  vec3 normal = normalize(v_normal);
+  vec3 light = normalize(-u_light_direction);
+  vec3 view = normalize(u_eye - v_world_position);
+  vec3 half_vector = normalize(light + view);
+  float diffuse = max(dot(normal, light), 0.0);
+  float specular = pow(max(dot(normal, half_vector), 0.0), 32.0);
+  vec3 lighting = vec3(0.12) + u_light_color * (diffuse + specular * 0.35);
+  out_color = vec4(
+    u_material_color.rgb * v_color.rgb * lighting,
+    u_material_color.a * v_color.a
+  );
+}`;
+function sceneLinkProgram(gl, vertexSource, fragmentSource) {
+    const vertex = compileSceneShader(gl, gl.VERTEX_SHADER, vertexSource);
+    let fragment;
+    let program;
+    try {
+        fragment = compileSceneShader(gl, gl.FRAGMENT_SHADER, fragmentSource);
+        program = gl.createProgram() ?? undefined;
+        if (program === undefined) {
+            throw new Error("failed to create the built-in 3D program");
+        }
+        gl.attachShader(program, vertex);
+        gl.attachShader(program, fragment);
+        gl.linkProgram(program);
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+            const log = gl.getProgramInfoLog(program) ?? "unknown link failure";
+            throw new Error(`failed to link the built-in 3D program: ${log}`);
+        }
+        return program;
+    }
+    catch (error) {
+        if (program !== undefined)
+            gl.deleteProgram(program);
+        throw error;
+    }
+    finally {
+        gl.deleteShader(vertex);
+        if (fragment !== undefined)
+            gl.deleteShader(fragment);
+    }
+}
+function compileSceneShader(gl, kind, source) {
+    const shader = gl.createShader(kind);
+    if (shader === null) {
+        throw new Error("failed to create a built-in 3D shader");
+    }
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        const log = gl.getShaderInfoLog(shader) ?? "unknown compilation failure";
+        gl.deleteShader(shader);
+        throw new Error(`failed to compile a built-in 3D shader: ${log}`);
+    }
+    return shader;
+}
+function requiredUniform(gl, program, name) {
+    const location = gl.getUniformLocation(program, name);
+    if (location === null) {
+        throw new Error(`the built-in 3D shader is missing uniform \`${name}\``);
+    }
+    return location;
+}
+function brand(value, owner) {
+    Object.defineProperty(value, sceneOwnerBrand, { value: owner });
+    return value;
+}
+function fixedVector(value, length, label) {
+    if (!Array.isArray(value) ||
+        value.length !== length ||
+        value.some((component) => !Number.isFinite(component))) {
+        throw new RangeError(`${label} must contain ${length} finite numbers`);
+    }
+    return Object.freeze([...value]);
+}
+function fixedVec3(value, label) {
+    return fixedVector(value, 3, label);
+}
+function finiteVec3(value, label) {
+    if (value.some((component) => !Number.isFinite(component))) {
+        throw new RangeError(`${label} must contain finite numbers`);
+    }
+    return value;
+}
+function validateAssetPath(path) {
+    if (path.length === 0 ||
+        path.startsWith("/") ||
+        path.includes("\\") ||
+        path.includes("://") ||
+        path.split("/").some((part) => part === "" || part === "." || part === "..")) {
+        throw new Error("texture path must be a non-empty relative slash-separated path");
+    }
+    return path;
+}
+function resolveAssetUrl(path, documentObject) {
+    const base = documentObject?.baseURI ?? globalThis.location?.href;
+    return base === undefined ? path : new URL(path, base).href;
+}
+async function defaultImageLoader(url) {
+    if (typeof globalThis.Image !== "function") {
+        throw new Error("image loading is unavailable outside a browser");
+    }
+    return await new Promise((resolve, reject) => {
+        const image = new globalThis.Image();
+        image.addEventListener("load", () => resolve(image), { once: true });
+        image.addEventListener("error", () => reject(new Error(`browser could not decode ${url}`)), { once: true });
+        image.src = url;
+    });
+}
+function isTextureHandle(value) {
+    return typeof value === "object" && value !== null && "kind" in value &&
+        value.kind === "texture";
+}
+function errorMessage(error) {
+    return error instanceof Error ? error.message : String(error);
+}
 export class RuntimeSession {
     constructor(canvas, options) {
         this.canvas = canvas;
@@ -809,12 +1692,11 @@ export class RuntimeSession {
             const dt = previous === undefined ? 0 : Math.max(0, (timestamp - previous) / 1000);
             this.elapsedSeconds += dt;
             try {
-                this.updateShaderUniforms();
                 this.program?.frame?.(dt);
                 if (this.stopped) {
                     return;
                 }
-                this.renderer.flush();
+                this.render();
                 this.animationHandle = this.requestFrame(this.tick);
             }
             catch (error) {
@@ -875,6 +1757,7 @@ export class RuntimeSession {
         this.windowObject = this.documentObject?.defaultView ?? undefined;
         this.renderer = new WebGL2BatchRenderer(canvas, options.context, this.documentObject);
         this.shaderRegistry = WebGL2ShaderRegistry.fromBundle(this.renderer.context);
+        this.scene = new WebGL2SceneRenderer(this.renderer.context, this.shaderRegistry, this.documentObject, options.imageLoader, (reason) => this.fail(reason));
         this.initialShaderBundle = options.shaderBundle;
         this.randomSource = new SeededRandom(options.seed);
         this.requestFrame =
@@ -900,11 +1783,11 @@ export class RuntimeSession {
                 this.replaceShaderBundle(program.__polyglShaderBundle);
             }
             await program.setup?.();
+            await this.scene.awaitSetupAssets();
             if (this.stopped) {
                 return;
             }
-            this.updateShaderUniforms();
-            this.renderer.flush();
+            this.render();
             if (program.frame !== undefined) {
                 this.animationHandle = this.requestFrame(this.tick);
             }
@@ -931,6 +1814,7 @@ export class RuntimeSession {
         this.documentObject?.removeEventListener("keyup", this.handleKeyUp);
         this.windowObject?.removeEventListener("blur", this.handleBlur);
         this.renderer.dispose();
+        this.scene.dispose();
         this.shaderRegistry.dispose();
         this.onStop();
     }
@@ -945,6 +1829,48 @@ export class RuntimeSession {
     }
     materialShader(shaderName) {
         return this.shaderRegistry.material(shaderName);
+    }
+    meshBox(width, height, depth) {
+        return this.scene.meshBox(width, height, depth);
+    }
+    meshSphere(radius, segments) {
+        return this.scene.meshSphere(radius, segments);
+    }
+    meshPlane(width, depth, columns = 1, rows = 1) {
+        return this.scene.meshPlane(width, depth, columns, rows);
+    }
+    meshFrom(vertices, indices) {
+        return this.scene.meshFrom(vertices, indices);
+    }
+    materialBasic(color) {
+        return this.scene.materialBasic(color);
+    }
+    nodeAdd(mesh, material) {
+        return this.scene.nodeAdd(mesh, material);
+    }
+    nodeSetPosition(node, x, y, z) {
+        this.scene.nodeSetPosition(node, x, y, z);
+    }
+    nodeSetRotation(node, x, y, z) {
+        this.scene.nodeSetRotation(node, x, y, z);
+    }
+    nodeSetScale(node, x, y, z) {
+        this.scene.nodeSetScale(node, x, y, z);
+    }
+    cameraPerspective(verticalFov, near, far) {
+        this.scene.cameraPerspective(verticalFov, near, far);
+    }
+    cameraLookAt(eye, target, up) {
+        this.scene.cameraLookAt(eye, target, up);
+    }
+    lightDirectional(direction, color) {
+        this.scene.lightDirectional(direction, color);
+    }
+    textureLoad(path) {
+        return this.scene.textureLoad(path);
+    }
+    shaderSet(node, name, value) {
+        this.scene.shaderSet(node, name, value);
     }
     installInputListeners() {
         this.canvas.addEventListener("pointermove", this.handlePointerMove);
@@ -978,7 +1904,7 @@ export class RuntimeSession {
             if (this.stopped) {
                 return;
             }
-            this.renderer.flush();
+            this.render();
         }
         catch (error) {
             this.fail(error);
@@ -987,9 +1913,15 @@ export class RuntimeSession {
     updateShaderUniforms() {
         this.shaderRegistry.updateAutomaticUniforms(this.elapsedSeconds, this.canvas.width, this.canvas.height);
     }
+    render() {
+        this.updateShaderUniforms();
+        this.scene.render(this.elapsedSeconds, this.canvas.width, this.canvas.height);
+        this.renderer.flush();
+    }
     replaceShaderBundle(bundle) {
         this.shaderRegistry.dispose();
         this.shaderRegistry = WebGL2ShaderRegistry.fromBundle(this.renderer.context, bundle);
+        this.scene.replaceShaderRegistry(this.shaderRegistry);
     }
     fail(reason) {
         this.stop();
@@ -1092,6 +2024,48 @@ export function setShaderUniform(shaderName, uniformName, value) {
 }
 export function materialShader(shaderName) {
     return session().materialShader(shaderName);
+}
+export function meshBox(width, height, depth) {
+    return session().meshBox(width, height, depth);
+}
+export function meshSphere(radius, segments) {
+    return session().meshSphere(radius, segments);
+}
+export function meshPlane(width, depth, columns = 1, rows = 1) {
+    return session().meshPlane(width, depth, columns, rows);
+}
+export function meshFrom(vertices, indices) {
+    return session().meshFrom(vertices, indices);
+}
+export function materialBasic(color) {
+    return session().materialBasic(color);
+}
+export function nodeAdd(mesh, material) {
+    return session().nodeAdd(mesh, material);
+}
+export function nodeSetPos(node, x, y, z) {
+    session().nodeSetPosition(node, x, y, z);
+}
+export function nodeSetRot(node, x, y, z) {
+    session().nodeSetRotation(node, x, y, z);
+}
+export function nodeSetScale(node, x, y, z) {
+    session().nodeSetScale(node, x, y, z);
+}
+export function cameraPerspective(verticalFov, near, far) {
+    session().cameraPerspective(verticalFov, near, far);
+}
+export function cameraLookAt(eye, target, up) {
+    session().cameraLookAt(eye, target, up);
+}
+export function lightDirectional(direction, color) {
+    session().lightDirectional(direction, color);
+}
+export function textureLoad(path) {
+    return session().textureLoad(path);
+}
+export function shaderSet(node, name, value) {
+    session().shaderSet(node, name, value);
 }
 export function floorToInt(value) {
     return Math.floor(value) | 0;

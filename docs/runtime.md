@@ -24,6 +24,16 @@ runtime error. Text is rendered with the current fill and transform on a
 pointer-transparent Canvas2D overlay. `background` clears both layers, `size`
 keeps them aligned, and session disposal removes the overlay.
 
+The Tier 2 renderer retains session-owned mesh, material, node, and texture
+handles. Boxes, spheres, planes, and custom meshes all upload the shader ABI's
+12-float interleaved vertex layout. Nodes hold independent position, XYZ Euler
+rotation in radians, scale, and user-uniform maps. The active perspective
+camera and directional light feed either the built-in Blinn-Phong material or
+a reflected custom shader. Each frame clears depth, draws retained nodes, then
+restores the Tier 1 attribute and depth state so immediate-mode geometry can be
+used as an overlay. Passing a handle to another runtime session is an error;
+stopping its owner deletes mesh buffers, textures, and linked programs.
+
 Random values come from a session-local seeded generator. Supplying the same
 `seed` option to `start` produces the same sequence. Pointer coordinates are
 normalized into drawing-buffer coordinates for `mouseX` and `mouseY`; keyboard
@@ -36,15 +46,26 @@ shader registry compiles and links every pair, resolves reflected uniform
 locations, and reports driver logs at the original vertex or fragment source
 location. Driver-optimized inactive uniforms have no location and are skipped.
 It uploads `u_time`, `u_resolution`, and identity transform defaults after
-`setup` and before each frame. User uniform values are type-checked and copied
-when set; debug builds additionally reject an unset active user uniform after
-`setup`, while release builds retain WebGL's zero/default value until one is
-set. Registry programs are deleted with the runtime session.
+`setup` and before each frame for the legacy global binding surface. A retained
+node instead receives its actual model, view, and projection matrices at draw
+time. `shader_set` type-checks and copies values into that node; debug builds
+reject an unset active user uniform when the node is first drawn, while release
+builds retain WebGL's zero/default value until one is set. Registry programs
+are deleted with the runtime session.
 
 `material_shader("<name>")` returns an immutable handle backed by the eager
 registry. Split requires a literal name and resolves it against complete shader
 pairs, so the runtime lookup is a defensive invariant check rather than normal
 string-based discovery.
+
+`texture_load` immediately creates a handle containing a 1x1 white WebGL
+texture. Relative URLs are cached per session. Requests made while the
+application module or `setup` is running join a startup barrier, so initial
+drawing and the first `frame` wait for image decoding and upload. Requests
+first made by `frame` keep the white texture and do not pause the loop; the same
+handle begins sampling the decoded image after its asynchronous upload. Setup
+load failures reject `start`, while later failures stop the running session and
+use the normal error overlay.
 
 GPU split warnings such as W0401 and W0402 are rendered by both `check` and
 `build`; successful compilation no longer discards non-fatal diagnostics.
