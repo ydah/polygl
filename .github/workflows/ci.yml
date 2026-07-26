@@ -120,3 +120,17 @@ jobs:
 
       - name: Check generated-file freshness
         run: cargo xtask gen-runtime --check
+
+      - name: Install pinned license generator
+        run: cargo install --locked --version 0.9.1 --features cli cargo-about
+
+      - name: Check third-party license notices
+        run: |
+          generated="$(mktemp)"
+          trap 'rm -f "$generated"' EXIT
+          cargo about generate --locked \
+            --manifest-path crates/polygl-cli/Cargo.toml \
+            about.hbs \
+            -o "$generated"
+          perl -pi -e 's/\r\n\z/\n/; s/[ \t]+\n\z/\n/' "$generated"
+          cmp THIRD_PARTY_LICENSES.txt "$generated"

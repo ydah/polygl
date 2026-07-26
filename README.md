@@ -131,4 +131,8 @@ Start with the [architecture contracts](docs/common-core.md) or the
 ## License
 
 PolyGL is licensed under either the Apache License, Version 2.0 or the MIT
-license, at your option. See `LICENSE-APACHE` and `LICENSE-MIT`.
+license, at your option. See `LICENSE-APACHE` and `LICENSE-MIT`. Native release
+archives and npm packages also include `THIRD_PARTY_LICENSES.txt` for the
+complete crate dependency closure linked into the command-line executable,
+including publishable PolyGL workspace crates and third-party crates. The
+separate PolyGL license files remain authoritative for PolyGL itself.

@@ -1,0 +1,20 @@
+PolyGL dependency license notices
+=================================
+
+This document contains the license texts selected for the complete Rust crate
+dependency closure linked into the PolyGL command-line executable for its
+supported release targets. It includes publishable PolyGL workspace crates as
+well as third-party crates. LICENSE-MIT and LICENSE-APACHE are the authoritative
+license texts for PolyGL itself.
+
+{{#each licenses}}
+--------------------------------------------------------------------------------
+{{{name}}}
+
+Used by:
+{{#each used_by}}
+- {{crate.name}} {{crate.version}}
+{{/each}}
+
+{{{text}}}
+{{/each}}

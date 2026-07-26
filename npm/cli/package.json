@@ -8,7 +8,10 @@
   },
   "files": [
     "bin",
-    "lib"
+    "lib",
+    "LICENSE-MIT",
+    "LICENSE-APACHE",
+    "THIRD_PARTY_LICENSES.txt"
   ],
   "scripts": {
     "test": "node --test test/*.test.mjs"

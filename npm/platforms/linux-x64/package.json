@@ -4,7 +4,12 @@
   "description": "PolyGL native executable for Linux x64",
   "os": ["linux"],
   "cpu": ["x64"],
-  "files": ["bin"],
+  "files": [
+    "bin",
+    "LICENSE-MIT",
+    "LICENSE-APACHE",
+    "THIRD_PARTY_LICENSES.txt"
+  ],
   "license": "MIT OR Apache-2.0",
   "repository": {
     "type": "git",

@@ -3,6 +3,13 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const npmRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const repositoryRoot = resolve(npmRoot, "..");
+
+export const LEGAL_FILES = Object.freeze([
+  "LICENSE-MIT",
+  "LICENSE-APACHE",
+  "THIRD_PARTY_LICENSES.txt",
+]);
 
 export const NATIVE_PACKAGES = Object.freeze([
   {
@@ -46,10 +53,19 @@ async function writePackage(path, manifest) {
   await writeFile(path, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
+async function copyLegalFiles(packageRoot, legalRoot) {
+  await Promise.all(
+    LEGAL_FILES.map((file) =>
+      copyFile(join(legalRoot, file), join(packageRoot, file)),
+    ),
+  );
+}
+
 export async function prepareRelease(
   version,
   artifactsRoot,
   packagesRoot = npmRoot,
+  legalRoot = repositoryRoot,
 ) {
   validateVersion(version);
 
@@ -70,9 +86,11 @@ export async function prepareRelease(
     if (entry.binary === "polygl") {
       await chmod(destination, 0o755);
     }
+    await copyLegalFiles(packageRoot, legalRoot);
   }
 
-  const launcherPath = join(packagesRoot, "cli", "package.json");
+  const launcherRoot = join(packagesRoot, "cli");
+  const launcherPath = join(launcherRoot, "package.json");
   const launcher = await readPackage(launcherPath);
   launcher.version = version;
   for (const entry of NATIVE_PACKAGES) {
@@ -82,6 +100,7 @@ export async function prepareRelease(
     launcher.optionalDependencies[entry.name] = version;
   }
   await writePackage(launcherPath, launcher);
+  await copyLegalFiles(launcherRoot, legalRoot);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {

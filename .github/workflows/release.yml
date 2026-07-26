@@ -73,9 +73,13 @@ jobs:
             "bundle/${{ matrix.package }}/${{ matrix.binary }}"
           cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" \
             "release/stage/${{ matrix.binary }}"
+          cp LICENSE-MIT LICENSE-APACHE THIRD_PARTY_LICENSES.txt release/stage/
           tar -C release/stage -czf \
             "release/polygl-${version}-${{ matrix.target }}.tar.gz" \
-            "${{ matrix.binary }}"
+            "${{ matrix.binary }}" \
+            LICENSE-MIT \
+            LICENSE-APACHE \
+            THIRD_PARTY_LICENSES.txt
 
       - name: Upload native artifacts
         uses: actions/upload-artifact@v4
