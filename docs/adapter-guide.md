@@ -45,10 +45,12 @@ workspace:
 polygl new-adapter example -o crates/polygl-adapter-example
 ```
 
-The command refuses to overwrite an existing path. Add the adapter to compiler
-orchestration only after its shell compiles, then confirm that `polygl
-languages` shows its stable identifier and extension. The generated
-implementation has this shape:
+The command refuses to overwrite an existing path and removes a partial new
+directory if writing fails. It generates a compilable adapter stub, metadata
+and diagnostic contract tests, a parser/mapping checklist, and a README. Add
+the adapter to compiler orchestration only after its shell compiles, then
+confirm that `polygl languages` shows its stable identifier and extension. The
+generated implementation has this shape:
 
 ```rust
 use polygl_adapter_api::{FeatureTag, LanguageAdapter, LowerCtx};

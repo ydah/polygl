@@ -1541,11 +1541,52 @@ fn new_adapter(language: &str, destination: &Path, output: &mut dyn Write) -> Re
             destination.display()
         )));
     }
-    let source_directory = destination.join("src");
-    fs::create_dir_all(&source_directory).map_err(|error| {
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            CliError::new(format!(
+                "failed to create adapter parent directory {}: {error}",
+                parent.display()
+            ))
+        })?;
+    }
+    fs::create_dir(destination).map_err(|error| {
         CliError::new(format!(
             "failed to create adapter directory {}: {error}",
             destination.display()
+        ))
+    })?;
+    if let Err(error) = write_adapter_scaffold(language, destination) {
+        let _ = fs::remove_dir_all(destination);
+        return Err(error);
+    }
+    writeln!(
+        output,
+        "created {} for the `{language}` adapter",
+        destination.display()
+    )
+    .map_err(|error| CliError::new(format!("failed to write scaffold result: {error}")))
+}
+
+fn write_adapter_scaffold(language: &str, destination: &Path) -> Result<(), CliError> {
+    let source_directory = destination.join("src");
+    let test_directory = destination.join("tests");
+    let documentation_directory = destination.join("docs");
+    fs::create_dir(&source_directory).map_err(|error| {
+        CliError::new(format!(
+            "failed to create adapter source directory {}: {error}",
+            source_directory.display()
+        ))
+    })?;
+    fs::create_dir(&test_directory).map_err(|error| {
+        CliError::new(format!(
+            "failed to create adapter test directory {}: {error}",
+            test_directory.display()
+        ))
+    })?;
+    fs::create_dir(&documentation_directory).map_err(|error| {
+        CliError::new(format!(
+            "failed to create adapter documentation directory {}: {error}",
+            documentation_directory.display()
         ))
     })?;
     let crate_name = format!("polygl-adapter-{language}");
@@ -1554,16 +1595,26 @@ fn new_adapter(language: &str, destination: &Path, output: &mut dyn Write) -> Re
     );
     let adapter_name = format!("{}Adapter", pascal_case(language));
     let implementation = format!(
-        "use polygl_adapter_api::{{FeatureTag, LanguageAdapter, LowerCtx}};\nuse polygl_hir::Module;\nuse polygl_span::{{Diagnostic, Diagnostics, Severity, SourceFile, Suggestion}};\n\n#[derive(Clone, Copy, Debug, Default)]\npub struct {adapter_name};\n\nimpl LanguageAdapter for {adapter_name} {{\n    fn id(&self) -> &'static str {{\n        \"{language}\"\n    }}\n\n    fn file_extensions(&self) -> &'static [&'static str] {{\n        &[\"{language}\"]\n    }}\n\n    fn lower(\n        &self,\n        source: &SourceFile,\n        _context: &mut LowerCtx<'_>,\n    ) -> Result<Module, Diagnostics> {{\n        let span = source.span(0, source.len()).expect(\"complete source span\");\n        let mut diagnostics = Diagnostics::new();\n        diagnostics.push(\n            Diagnostic::new(\n                Severity::Error,\n                \"E0200\",\n                \"the {language} adapter lowering is not implemented\",\n                span,\n            )\n            .with_suggestion(Suggestion::rewrite(\n                span,\n                \"implement parser-specific lowering to Common Core HIR\",\n            )),\n        );\n        Err(diagnostics)\n    }}\n\n    fn capabilities(&self) -> &'static [FeatureTag] {{\n        &[]\n    }}\n}}\n"
+        "#![forbid(unsafe_code)]\n\nuse polygl_adapter_api::{{FeatureTag, LanguageAdapter, LowerCtx}};\nuse polygl_hir::Module;\nuse polygl_span::{{Diagnostic, DiagnosticCode, Diagnostics, Severity, SourceFile, Suggestion}};\n\n#[derive(Clone, Copy, Debug, Default)]\npub struct {adapter_name};\n\nimpl LanguageAdapter for {adapter_name} {{\n    fn id(&self) -> &'static str {{\n        \"{language}\"\n    }}\n\n    fn file_extensions(&self) -> &'static [&'static str] {{\n        &[\"{language}\"]\n    }}\n\n    fn lower(\n        &self,\n        source: &SourceFile,\n        _context: &mut LowerCtx<'_>,\n    ) -> Result<Module, Diagnostics> {{\n        let span = source.span(0, source.len()).expect(\"complete source span\");\n        let mut diagnostics = Diagnostics::new();\n        diagnostics.push(\n            Diagnostic::new(\n                Severity::Error,\n                DiagnosticCode::E0200,\n                \"the {language} adapter lowering is not implemented\",\n                span,\n            )\n            .with_suggestion(Suggestion::rewrite(\n                span,\n                \"implement parser-specific lowering to Common Core HIR\",\n            )),\n        );\n        Err(diagnostics)\n    }}\n\n    fn capabilities(&self) -> &'static [FeatureTag] {{\n        &[]\n    }}\n}}\n"
+    );
+    let tests = format!(
+        "use polygl_adapter_api::{{BuiltinResolver, LanguageAdapter, LowerCtx}};\nuse polygl_hir::BuiltinId;\nuse polygl_span::{{DiagnosticCode, SourceFile, SourceId}};\nuse {crate_ident}::{adapter_name};\n\nstruct NoBuiltins;\n\nimpl BuiltinResolver for NoBuiltins {{\n    fn resolve_builtin(&self, _canonical_name: &str) -> Option<BuiltinId> {{\n        None\n    }}\n}}\n\n#[test]\nfn declares_stable_metadata() {{\n    assert_eq!({adapter_name}.id(), \"{language}\");\n    assert_eq!({adapter_name}.file_extensions(), &[\"{language}\"]);\n    assert!({adapter_name}.capabilities().is_empty());\n}}\n\n#[test]\nfn stub_reports_a_valid_positioned_diagnostic() {{\n    let source = SourceFile::new(SourceId::new(0), \"fixture.{language}\", \"unsupported\");\n    let mut context = LowerCtx::new(&NoBuiltins);\n    let diagnostics = {adapter_name}.lower(&source, &mut context).unwrap_err();\n    diagnostics.validate().unwrap();\n    let diagnostic = diagnostics.iter().next().unwrap();\n    assert_eq!(diagnostic.code, DiagnosticCode::E0200);\n    diagnostic.primary_span.validate_for(&source).unwrap();\n}}\n",
+        crate_ident = crate_name.replace('-', "_")
+    );
+    let readme = format!(
+        "# `{crate_name}`\n\nGenerated language-adapter shell for `{language}`. It intentionally advertises no\ncapabilities until their parser mapping, diagnostics, and conformance cases pass.\n\n## Start here\n\n1. Record the parser choice, supported language version, and span behavior.\n2. Fill in `docs/mapping.md` before accepting syntax.\n3. Replace the E0200 stub in `src/lib.rs` with parser-backed lowering.\n4. Add parser characterization and adversarial rejection tests.\n5. Advertise each `FeatureTag` only with a matching conformance case.\n6. Register the adapter with `AdapterRegistry`; do not add language branches to HIR.\n\nRun `cargo test` and `cargo clippy --all-targets -- -D warnings` before integration.\n"
+    );
+    let mapping = format!(
+        "# `{language}` mapping\n\nRecord the exact supported source-language version and parser version here.\n\n| Common Core construct | `{language}` syntax | accepted/rejected details |\n| --- | --- | --- |\n| function and return | TODO | TODO |\n| setup/frame/on_event | TODO | TODO |\n| literals and variables | TODO | TODO |\n| arithmetic and comparisons | TODO | document division and remainder |\n| boolean conditions and absence | TODO | document truthiness policy |\n| control flow and loops | TODO | TODO |\n| arrays, maps, and indexing | TODO | TODO |\n| struct-like classes | TODO | TODO |\n| `@pgl` annotations | TODO | document adjacency and comment form |\n| shader entry points | TODO | TODO |\n"
     );
     write_file(&destination.join("Cargo.toml"), manifest.as_bytes())?;
     write_file(&source_directory.join("lib.rs"), implementation.as_bytes())?;
-    writeln!(
-        output,
-        "created {} for the `{language}` adapter",
-        destination.display()
+    write_file(&test_directory.join("adapter.rs"), tests.as_bytes())?;
+    write_file(&destination.join("README.md"), readme.as_bytes())?;
+    write_file(
+        &documentation_directory.join("mapping.md"),
+        mapping.as_bytes(),
     )
-    .map_err(|error| CliError::new(format!("failed to write scaffold result: {error}")))
 }
 
 fn write_file(path: &Path, contents: &[u8]) -> Result<(), CliError> {
@@ -1896,6 +1947,16 @@ mod tests {
         let implementation = fs::read_to_string(adapter.join("src/lib.rs")).unwrap();
         assert!(implementation.contains("pub struct ToyAdapter;"));
         assert!(implementation.contains("impl LanguageAdapter for ToyAdapter"));
+        assert!(implementation.contains("DiagnosticCode::E0200"));
+        let tests = fs::read_to_string(adapter.join("tests/adapter.rs")).unwrap();
+        assert!(tests.contains("diagnostics.validate().unwrap()"));
+        assert!(tests.contains("diagnostic.primary_span.validate_for(&source)"));
+        assert!(adapter.join("docs/mapping.md").is_file());
+        assert!(
+            fs::read_to_string(adapter.join("README.md"))
+                .unwrap()
+                .contains("Advertise each `FeatureTag` only")
+        );
         assert!(
             run(
                 arguments(["new-adapter", "toy", "-o", adapter.to_str().unwrap(),]),
