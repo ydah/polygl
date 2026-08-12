@@ -10,9 +10,6 @@ repository.workspace = true
 [dependencies]
 blake3 = "=1.8.5"
 polygl-adapter-api = { path = "../polygl-adapter-api", version = "=0.1.0" }
-polygl-adapter-perl = { path = "../polygl-adapter-perl", version = "=0.1.0" }
-polygl-adapter-php = { path = "../polygl-adapter-php", version = "=0.1.0" }
-polygl-adapter-ruby = { path = "../polygl-adapter-ruby", version = "=0.1.0" }
 polygl-backend-glsl = { path = "../polygl-backend-glsl", version = "=0.1.0" }
 polygl-backend-js = { path = "../polygl-backend-js", version = "=0.1.0" }
 polygl-core = { path = "../polygl-core", version = "=0.1.0" }

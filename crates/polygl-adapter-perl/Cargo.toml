@@ -16,7 +16,7 @@ tree-sitter = "=0.26.11"
 ts-parser-perl = "=1.2.1"
 
 [dev-dependencies]
-polygl-core = { path = "../polygl-core", version = "=0.1.0" }
+polygl-builtins = { path = "../polygl-builtins", version = "=0.1.0" }
 polygl-types = { path = "../polygl-types", version = "=0.1.0" }
 
 [lints]

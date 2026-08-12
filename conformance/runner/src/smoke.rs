@@ -2,13 +2,10 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
-use polygl_adapter_api::{LanguageAdapter, LowerCtx};
-use polygl_adapter_perl::PerlAdapter;
-use polygl_adapter_php::PhpAdapter;
-use polygl_adapter_ruby::RubyAdapter;
-use polygl_core::BuiltinTable;
+use polygl_adapter_api::LanguageAdapter;
+use polygl_core::Compiler;
 use polygl_hir::dump;
-use polygl_span::{Diagnostics, SourceFile, SourceId};
+use polygl_span::{SourceFile, SourceId};
 
 use crate::{
     ConformanceCase, ConformanceError, ConformanceLanguage, ConformanceLayer, L1BaselineStore,
@@ -138,11 +135,10 @@ fn validate_capabilities(case: &ConformanceCase) -> Result<(), ConformanceError>
 }
 
 fn adapter(language: ConformanceLanguage) -> &'static dyn LanguageAdapter {
-    match language {
-        ConformanceLanguage::Ruby => &RubyAdapter,
-        ConformanceLanguage::Php => &PhpAdapter,
-        ConformanceLanguage::Perl => &PerlAdapter,
-    }
+    Compiler::standard()
+        .adapters()
+        .by_id(language.id())
+        .expect("every conformance language must have a bundled adapter")
 }
 
 fn compile_typed(
@@ -157,12 +153,13 @@ fn compile_typed(
             case: case.id.clone(),
             message: error.to_string(),
         })?;
-    let mut context = LowerCtx::new(&BuiltinTable);
-    let hir = adapter(language)
-        .lower(&source, &mut context)
-        .map_err(|diagnostics| compile_diagnostics(&case.id, &diagnostics, &source))?;
-    polygl_types::analyze(&hir)
-        .map_err(|diagnostics| compile_diagnostics(&case.id, &diagnostics, &source))
+    Compiler::standard()
+        .analyze(&source, language.id())
+        .map(|output| output.typed)
+        .map_err(|error| ConformanceError::Compile {
+            case: case.id.clone(),
+            message: error.render(&source),
+        })
 }
 
 fn verify_gpu_program(
@@ -220,29 +217,12 @@ fn verify_gpu_program(
     }
 }
 
-fn compile_diagnostics(
-    case: &str,
-    diagnostics: &Diagnostics,
-    source: &SourceFile,
-) -> ConformanceError {
-    let message = diagnostics
-        .render(source)
-        .unwrap_or_else(|error| format!("diagnostic rendering failed: {error}"));
-    ConformanceError::Compile {
-        case: case.to_owned(),
-        message,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use polygl_adapter_api::{FeatureTag, LanguageAdapter, LowerCtx};
-    use polygl_adapter_perl::PerlAdapter;
-    use polygl_adapter_php::PhpAdapter;
-    use polygl_adapter_ruby::RubyAdapter;
-    use polygl_core::BuiltinTable;
+    use polygl_adapter_api::{FeatureTag, LowerCtx};
+    use polygl_core::{BuiltinTable, Compiler};
     use polygl_hir::dump;
     use polygl_span::{SourceFile, SourceId};
 
@@ -300,29 +280,28 @@ mod tests {
 
     #[test]
     fn division_difference_is_explicitly_language_defined() {
-        let ruby = lower_text(
-            "main.rb",
-            "def half(value)\n  value / 2\nend\n",
-            &RubyAdapter,
-        );
+        let ruby = lower_text("main.rb", "def half(value)\n  value / 2\nend\n", "ruby");
         let php = lower_text(
             "main.php",
             "<?php function half($value) { return $value / 2; }",
-            &PhpAdapter,
+            "php",
         );
         let perl = lower_text(
             "main.pl",
             "sub half { my ($value) = @_; return $value / 2; }\n",
-            &PerlAdapter,
+            "perl",
         );
         assert!(dump(&ruby).contains("(value /int 2)"));
         assert!(dump(&php).contains("(value /float 2)"));
         assert!(dump(&perl).contains("(value /float 2)"));
     }
 
-    fn lower_text(name: &str, text: &str, adapter: &dyn LanguageAdapter) -> polygl_hir::Module {
+    fn lower_text(name: &str, text: &str, language: &str) -> polygl_hir::Module {
         let source = SourceFile::new(SourceId::new(9), name, text);
-        adapter
+        Compiler::standard()
+            .adapters()
+            .by_id(language)
+            .unwrap()
             .lower(&source, &mut LowerCtx::new(&BuiltinTable))
             .unwrap()
     }

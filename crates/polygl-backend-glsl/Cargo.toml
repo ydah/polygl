@@ -17,7 +17,6 @@ polygl-types = { path = "../polygl-types", version = "=0.1.0" }
 [dev-dependencies]
 polygl-adapter-api = { path = "../polygl-adapter-api", version = "=0.1.0" }
 polygl-adapter-ruby = { path = "../polygl-adapter-ruby", version = "=0.1.0" }
-polygl-core = { path = "../polygl-core", version = "=0.1.0" }
 
 [lints]
 workspace = true

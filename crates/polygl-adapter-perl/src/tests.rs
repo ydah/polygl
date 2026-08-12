@@ -1,5 +1,5 @@
 use polygl_adapter_api::{FeatureTag, LanguageAdapter, LowerCtx};
-use polygl_core::BuiltinTable;
+use polygl_builtins::BuiltinTable;
 use polygl_hir::{Module, dump};
 use polygl_span::{Diagnostics, SourceFile, SourceId};
 

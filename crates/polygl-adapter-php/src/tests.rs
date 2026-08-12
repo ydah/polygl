@@ -4,7 +4,7 @@ use mago_span::HasSpan;
 use mago_syntax::comments::docblock::get_docblock_for_node;
 use mago_syntax::parser::parse_file_content;
 use polygl_adapter_api::{FeatureTag, LanguageAdapter, LowerCtx};
-use polygl_core::BuiltinTable;
+use polygl_builtins::BuiltinTable;
 use polygl_hir::dump;
 use polygl_span::{SourceFile, SourceId};
 

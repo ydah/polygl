@@ -14,7 +14,7 @@ polygl-span = { path = "../polygl-span", version = "=0.1.0" }
 ruby-prism = "=1.9.0"
 
 [dev-dependencies]
-polygl-core = { path = "../polygl-core", version = "=0.1.0" }
+polygl-builtins = { path = "../polygl-builtins", version = "=0.1.0" }
 
 [lints]
 workspace = true

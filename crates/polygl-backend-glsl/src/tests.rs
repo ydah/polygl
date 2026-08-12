@@ -1,6 +1,6 @@
 use polygl_adapter_api::{LanguageAdapter, LowerCtx};
 use polygl_adapter_ruby::RubyAdapter;
-use polygl_core::BuiltinTable;
+use polygl_builtins::BuiltinTable;
 use polygl_hir::Symbol;
 use polygl_lir::{
     BinaryOp, Block, CallTarget, Constant, Domain, EntryKind, EntryPoint, Expr, ExprKind, Field,

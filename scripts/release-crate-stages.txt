@@ -2,8 +2,9 @@ polygl-span
 polygl-hir
 polygl-adapter-api polygl-adapter-treesitter-util
 polygl-builtins
-polygl-core polygl-types
+polygl-types
 polygl-lir
 polygl-adapter-perl polygl-adapter-php polygl-adapter-ruby
 polygl-backend-js polygl-backend-glsl
+polygl-core
 polygl-cli

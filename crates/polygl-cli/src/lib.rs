@@ -7,17 +7,14 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use polygl_adapter_api::{ADAPTER_API_VERSION, LanguageAdapter, LowerCtx};
-use polygl_adapter_perl::PerlAdapter;
-use polygl_adapter_php::PhpAdapter;
-use polygl_adapter_ruby::RubyAdapter;
-use polygl_backend_glsl::{GlslArtifacts, GlslBackend, SHADER_ABI_VERSION, UniformSource};
-use polygl_backend_js::{BuildMode, JavaScriptBackend, RUNTIME_ABI_VERSION, SourceMapMode};
-use polygl_core::{BUILTIN_SCHEMA_VERSION, BuiltinTable};
+use polygl_adapter_api::{ADAPTER_API_VERSION, LanguageAdapter};
+use polygl_backend_glsl::{GlslArtifacts, SHADER_ABI_VERSION, UniformSource};
+use polygl_backend_js::{BuildMode, RUNTIME_ABI_VERSION, SourceMapMode};
+use polygl_core::{
+    AdapterRegistry, BUILTIN_SCHEMA_VERSION, CompileError, CompileOptions, Compiler,
+};
 use polygl_hir::HIR_SCHEMA_VERSION;
-use polygl_lir::AssetReference;
 use polygl_span::{Diagnostics, SourceFile, SourceId};
-use polygl_types::TypedModule;
 
 mod artifact;
 mod serve;
@@ -127,6 +124,14 @@ impl BuildOptions {
             sources_content: true,
         }
     }
+
+    const fn compiler(self) -> CompileOptions {
+        CompileOptions {
+            mode: self.mode,
+            source_map: self.source_map,
+            sources_content: self.sources_content,
+        }
+    }
 }
 
 pub fn run(
@@ -140,9 +145,13 @@ pub fn run(
             options,
         } => build(&source, &destination, options, output).map(|_| ()),
         Command::Check { source } => {
-            let (source, typed) = compile_frontend(&source)?;
-            let (_, _, _, warnings) = compile_backends(&source, &typed, BuildOptions::check())?;
-            write_diagnostics(&warnings, &source, output)?;
+            let source_file = load_source(&source)?;
+            let compiler = compiler();
+            let adapter = adapter_for_source(compiler.adapters(), &source)?;
+            let compiled = compiler
+                .compile(&source_file, adapter.id(), BuildOptions::check().compiler())
+                .map_err(|error| compilation_error(error, &source_file))?;
+            write_diagnostics(&compiled.warnings, &source_file, output)?;
             Ok(())
         }
         Command::Serve {
@@ -151,7 +160,13 @@ pub fn run(
             port,
         } => serve::serve(&source, watch, port, output),
         Command::DumpHir { source } => {
-            let (_, typed) = compile_frontend(&source)?;
+            let source_file = load_source(&source)?;
+            let compiler = compiler();
+            let adapter = adapter_for_source(compiler.adapters(), &source)?;
+            let typed = compiler
+                .analyze(&source_file, adapter.id())
+                .map_err(|error| compilation_error(error, &source_file))?
+                .typed;
             output
                 .write_all(polygl_hir::dump(typed.as_hir()).as_bytes())
                 .map_err(|error| CliError::new(format!("failed to write HIR dump: {error}")))
@@ -367,24 +382,27 @@ fn build(
     options: BuildOptions,
     messages: &mut dyn Write,
 ) -> Result<BuildReport, CliError> {
-    let (source, typed) = compile_frontend(source_path)?;
-    let (javascript, shaders, assets, warnings) = compile_backends(&source, &typed, options)?;
-    let assets = prepare_assets(source_path, &assets)?;
-    write_diagnostics(&warnings, &source, messages)?;
+    let source = load_source(source_path)?;
+    let compiler = compiler();
+    let adapter = adapter_for_source(compiler.adapters(), source_path)?;
+    let compiled = compiler
+        .compile(&source, adapter.id(), options.compiler())
+        .map_err(|error| compilation_error(error, &source))?;
+    let assets = prepare_assets(source_path, &compiled.assets)?;
+    write_diagnostics(&compiled.warnings, &source, messages)?;
 
-    let shader_module = render_shader_module(&shaders, &source, options.mode)?;
+    let shader_module = render_shader_module(&compiled.shaders, &source, options.mode)?;
     let mut files = vec![
-        ArtifactFile::new("app.js", javascript.javascript.into_bytes()),
+        ArtifactFile::new("app.js", compiled.javascript.javascript.into_bytes()),
         ArtifactFile::new("shaders.js", shader_module.into_bytes()),
         ArtifactFile::new("runtime.js", RUNTIME_BUNDLE.to_vec()),
         ArtifactFile::new("index.html", INDEX_HTML.as_bytes().to_vec()),
     ];
-    if let Some(source_map) = javascript.source_map {
+    if let Some(source_map) = compiled.javascript.source_map {
         files.push(ArtifactFile::new("app.js.map", source_map.into_bytes()));
     }
     files.extend(assets.files);
     files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    let adapter = adapter_for_source(source_path)?;
     let manifest = render_artifact_manifest(&source, adapter, options, &files)?;
     files.push(ArtifactFile::new("polygl-manifest.json", manifest));
     let mut watched_paths = Vec::with_capacity(assets.source_paths.len() + 1);
@@ -392,33 +410,6 @@ fn build(
     watched_paths.extend(assets.source_paths);
     publish(destination, files)?;
     Ok(BuildReport { watched_paths })
-}
-
-fn compile_backends(
-    source: &SourceFile,
-    typed: &TypedModule,
-    options: BuildOptions,
-) -> Result<
-    (
-        polygl_backend_js::Artifacts,
-        GlslArtifacts,
-        Vec<AssetReference>,
-        Diagnostics,
-    ),
-    CliError,
-> {
-    let lir = polygl_lir::lower(typed);
-    let split =
-        polygl_lir::split(&lir).map_err(|diagnostics| diagnostic_error(&diagnostics, source))?;
-    let javascript = JavaScriptBackend::new(options.mode)
-        .with_source_map_mode(options.source_map)
-        .with_sources_content(options.sources_content)
-        .generate(&split.host, std::slice::from_ref(source))
-        .map_err(|error| CliError::new(format!("JavaScript generation failed: {error}")))?;
-    let shaders = GlslBackend::new()
-        .generate(&split.gpu)
-        .map_err(|error| CliError::new(format!("GLSL generation failed: {error}")))?;
-    Ok((javascript, shaders, split.assets, split.warnings))
 }
 
 fn render_shader_module(
@@ -515,9 +506,7 @@ fn js_string(value: &str) -> String {
     serde_json::to_string(value).expect("serializing a UTF-8 string cannot fail")
 }
 
-fn compile_frontend(source_path: &Path) -> Result<(SourceFile, TypedModule), CliError> {
-    let adapter = adapter_for_source(source_path)?;
-
+fn load_source(source_path: &Path) -> Result<SourceFile, CliError> {
     let bytes = fs::read(source_path).map_err(|error| {
         CliError::new(format!(
             "failed to read source {}: {error}",
@@ -525,33 +514,42 @@ fn compile_frontend(source_path: &Path) -> Result<(SourceFile, TypedModule), Cli
         ))
     })?;
     let source_name = normalized_source_name(source_path)?;
-    let source = SourceFile::from_bytes(SourceId::new(0), source_name, bytes)
-        .map_err(|error| CliError::new(error.to_string()))?;
-
-    let mut context = LowerCtx::new(&BuiltinTable);
-    let hir = adapter
-        .lower(&source, &mut context)
-        .map_err(|diagnostics| diagnostic_error(&diagnostics, &source))?;
-    let typed = polygl_types::analyze(&hir)
-        .map_err(|diagnostics| diagnostic_error(&diagnostics, &source))?;
-    Ok((source, typed))
+    SourceFile::from_bytes(SourceId::new(0), source_name, bytes)
+        .map_err(|error| CliError::new(error.to_string()))
 }
 
-fn adapter_for_source(source_path: &Path) -> Result<&'static dyn LanguageAdapter, CliError> {
+fn compiler() -> Compiler<'static> {
+    Compiler::standard()
+}
+
+fn adapter_for_source<'adapter>(
+    registry: &'adapter AdapterRegistry<'adapter>,
+    source_path: &Path,
+) -> Result<&'adapter dyn LanguageAdapter, CliError> {
     match source_path
         .extension()
         .and_then(|extension| extension.to_str())
     {
-        Some("rb") => Ok(&RubyAdapter),
-        Some("php") => Ok(&PhpAdapter),
-        Some("pl") => Ok(&PerlAdapter),
-        Some(extension) => Err(CliError::new(format!(
-            "unsupported source extension `.{extension}`; supported extensions are `.rb`, `.php`, and `.pl`"
+        Some(extension) => registry.for_extension(extension).ok_or_else(|| {
+            CliError::new(format!(
+                "unsupported source extension `.{extension}`; supported extensions are {}",
+                supported_extensions(registry)
+            ))
+        }),
+        None => Err(CliError::new(format!(
+            "source file must have one of these extensions: {}",
+            supported_extensions(registry)
         ))),
-        None => Err(CliError::new(
-            "source file must have a `.rb`, `.php`, or `.pl` extension",
-        )),
     }
+}
+
+fn supported_extensions(registry: &AdapterRegistry<'_>) -> String {
+    registry
+        .iter()
+        .flat_map(LanguageAdapter::file_extensions)
+        .map(|extension| format!("`.{extension}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn render_artifact_manifest(
@@ -665,11 +663,8 @@ fn normalized_source_name(source_path: &Path) -> Result<String, CliError> {
     Ok(components.join("/"))
 }
 
-fn diagnostic_error(diagnostics: &Diagnostics, source: &SourceFile) -> CliError {
-    match diagnostics.render(source) {
-        Ok(rendered) => CliError::new(rendered),
-        Err(error) => CliError::new(format!("failed to render diagnostics: {error}")),
-    }
+fn compilation_error(error: CompileError, source: &SourceFile) -> CliError {
+    CliError::new(error.render(source))
 }
 
 fn write_diagnostics(
@@ -689,11 +684,8 @@ fn write_diagnostics(
 }
 
 fn write_languages(output: &mut dyn Write) -> Result<(), CliError> {
-    for adapter in [
-        &RubyAdapter as &dyn LanguageAdapter,
-        &PhpAdapter,
-        &PerlAdapter,
-    ] {
+    let compiler = compiler();
+    for adapter in compiler.adapters().iter() {
         writeln!(
             output,
             "{}\t{}",

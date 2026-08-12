@@ -649,7 +649,7 @@ version = "0.1.0"
 dependencies = [
  "polygl-adapter-api",
  "polygl-adapter-treesitter-util",
- "polygl-core",
+ "polygl-builtins",
  "polygl-hir",
  "polygl-span",
  "polygl-types",
@@ -670,7 +670,7 @@ dependencies = [
  "mago-syntax-core",
  "mago-text-edit",
  "polygl-adapter-api",
- "polygl-core",
+ "polygl-builtins",
  "polygl-hir",
  "polygl-span",
  "polygl-types",
@@ -681,7 +681,7 @@ name = "polygl-adapter-ruby"
 version = "0.1.0"
 dependencies = [
  "polygl-adapter-api",
- "polygl-core",
+ "polygl-builtins",
  "polygl-hir",
  "polygl-span",
  "ruby-prism",
@@ -703,7 +703,6 @@ dependencies = [
  "polygl-adapter-api",
  "polygl-adapter-ruby",
  "polygl-builtins",
- "polygl-core",
  "polygl-hir",
  "polygl-lir",
  "polygl-span",
@@ -736,9 +735,6 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "polygl-adapter-api",
- "polygl-adapter-perl",
- "polygl-adapter-php",
- "polygl-adapter-ruby",
  "polygl-backend-glsl",
  "polygl-backend-js",
  "polygl-core",
@@ -757,9 +753,6 @@ version = "0.1.0"
 dependencies = [
  "insta",
  "polygl-adapter-api",
- "polygl-adapter-perl",
- "polygl-adapter-php",
- "polygl-adapter-ruby",
  "polygl-backend-glsl",
  "polygl-core",
  "polygl-hir",
@@ -775,7 +768,17 @@ dependencies = [
 name = "polygl-core"
 version = "0.1.0"
 dependencies = [
+ "polygl-adapter-api",
+ "polygl-adapter-perl",
+ "polygl-adapter-php",
+ "polygl-adapter-ruby",
+ "polygl-backend-glsl",
+ "polygl-backend-js",
  "polygl-builtins",
+ "polygl-hir",
+ "polygl-lir",
+ "polygl-span",
+ "polygl-types",
 ]
 
 [[package]]
@@ -1388,6 +1391,7 @@ dependencies = [
  "polygl-conformance",
  "polygl-core",
  "polygl-span",
+ "serde_json",
 ]
 
 [[package]]
