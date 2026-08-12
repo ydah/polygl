@@ -1,11 +1,13 @@
 //! Shared selection and comparison machinery for all conformance layers.
 
+mod adapter_corpus;
 mod case;
 mod error;
 mod frame;
 mod smoke;
 mod snapshot;
 
+pub use adapter_corpus::verify_adapter_corpus;
 pub use case::{
     ConformanceCase, ConformanceLanguage, ConformanceLayer, load_manifest, select_cases,
 };

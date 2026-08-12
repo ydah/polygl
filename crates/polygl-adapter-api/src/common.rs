@@ -110,7 +110,7 @@ mod tests {
 
     use super::{
         automatic_uniform_type, canonical_entry_kind, constructor_function_name,
-        parse_annotation_type, vector_constructor_size,
+        is_portable_identifier, parse_annotation_type, vector_constructor_size,
     };
 
     fn span() -> Span {
@@ -137,6 +137,17 @@ mod tests {
         );
         assert!(parse_annotation_type("Map<int, float>", span()).is_none());
         assert!(parse_annotation_type("void", span()).is_none());
+    }
+
+    #[test]
+    fn portable_annotation_identifiers_have_an_explicit_unicode_policy() {
+        assert!(is_portable_identifier("value_2"));
+        assert!(is_portable_identifier("café"));
+        assert!(is_portable_identifier("日本語2"));
+        assert!(!is_portable_identifier("2value"));
+        assert!(!is_portable_identifier("cafe\u{301}"));
+        assert!(!is_portable_identifier("zero\u{200b}width"));
+        assert!(!is_portable_identifier("emoji😀"));
     }
 
     #[test]

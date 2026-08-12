@@ -1,0 +1,74 @@
+[
+  {
+    "id": "ruby-multiple-parse-errors",
+    "language": "ruby",
+    "source": "adapter-corpus/ruby/multiple-parse-errors.rb",
+    "outcome": { "status": "diagnostics", "code": "E0100", "minimum_count": 2 }
+  },
+  {
+    "id": "php-multiple-parse-errors",
+    "language": "php",
+    "source": "adapter-corpus/php/multiple-parse-errors.php",
+    "outcome": { "status": "diagnostics", "code": "E0100", "minimum_count": 2 }
+  },
+  {
+    "id": "perl-multiple-parse-errors",
+    "language": "perl",
+    "source": "adapter-corpus/perl/multiple-parse-errors.pl",
+    "outcome": { "status": "diagnostics", "code": "E0100", "minimum_count": 2 }
+  },
+  {
+    "id": "ruby-attached-annotation",
+    "language": "ruby",
+    "source": "adapter-corpus/ruby/attached-annotation.rb",
+    "outcome": { "status": "success" }
+  },
+  {
+    "id": "php-attached-annotation",
+    "language": "php",
+    "source": "adapter-corpus/php/attached-annotation.php",
+    "outcome": { "status": "success" }
+  },
+  {
+    "id": "perl-attached-annotation",
+    "language": "perl",
+    "source": "adapter-corpus/perl/attached-annotation.pl",
+    "outcome": { "status": "success" }
+  },
+  {
+    "id": "ruby-detached-annotation",
+    "language": "ruby",
+    "source": "adapter-corpus/ruby/detached-annotation.rb",
+    "outcome": { "status": "diagnostics", "code": "E0314", "minimum_count": 1 }
+  },
+  {
+    "id": "php-detached-annotation",
+    "language": "php",
+    "source": "adapter-corpus/php/detached-annotation.php",
+    "outcome": { "status": "diagnostics", "code": "E0314", "minimum_count": 1 }
+  },
+  {
+    "id": "perl-detached-annotation",
+    "language": "perl",
+    "source": "adapter-corpus/perl/detached-annotation.pl",
+    "outcome": { "status": "diagnostics", "code": "E0314", "minimum_count": 1 }
+  },
+  {
+    "id": "ruby-unicode-identifiers",
+    "language": "ruby",
+    "source": "adapter-corpus/ruby/unicode-identifiers.rb",
+    "outcome": { "status": "success" }
+  },
+  {
+    "id": "php-unicode-identifiers",
+    "language": "php",
+    "source": "adapter-corpus/php/unicode-identifiers.php",
+    "outcome": { "status": "success" }
+  },
+  {
+    "id": "perl-unicode-identifiers",
+    "language": "perl",
+    "source": "adapter-corpus/perl/unicode-identifiers.pl",
+    "outcome": { "status": "success" }
+  }
+]

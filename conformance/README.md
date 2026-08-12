@@ -16,6 +16,12 @@ diagnostics. It also rejects an advertised feature without a case. The
 `lit-cubes` L1 case exercises the Tier 2 camera, light, retained mesh, node
 transform, and material path.
 
+`adapter-corpus.json` separately declares parser-recovery, directive
+attachment, and Unicode-identifier regressions for every bundled adapter. Its
+runner validates all primary, label, and suggestion spans against the original
+source, requires multiple E0100 diagnostics for independent syntax failures,
+and confirms that NFC and NFD source identifiers remain distinct.
+
 `pnpm --dir conformance/browser test` rebuilds every L1 case in Ruby, PHP, and Perl
 with the CLI and compares both real WebGL2 framebuffers against the same bytes
 under pinned Chromium + SwiftShader. It

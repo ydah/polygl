@@ -40,6 +40,16 @@ temporary-name hygiene, and semantic expansion remain inside each adapter.
 See the [post-PHP boundary review](adapter-boundary-review.md) and
 [ADR 0026](decisions/0026-centralize-language-neutral-adapter-conventions.md).
 
+Source identifiers retain their parser-provided UTF-8 spelling and are
+case-sensitive. PolyGL deliberately does not normalize them: NFC and NFD
+spellings remain distinct so compilation cannot silently merge two bindings
+that the source parser kept separate. Backends encode the original bytes into
+collision-free target identifiers. The narrower identifier grammar inside
+portable `@pgl` directives starts with `_` or an alphabetic Unicode scalar and
+continues with `_` or alphanumeric scalars; combining marks, format controls,
+emoji, and whitespace are rejected. Adapters must not apply locale-sensitive
+case conversion.
+
 The trait is `Send + Sync` and has no generic methods, so
 `Box<dyn LanguageAdapter>` is supported by the static v1 registry and a future
 plugin boundary.
