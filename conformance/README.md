@@ -36,3 +36,10 @@ with the CLI and compares both real WebGL2 framebuffers against the same bytes
 under pinned Chromium + SwiftShader. It
 also starts the plasma case to exercise driver compilation, linking, automatic
 uniform reflection, and compile-time material name resolution.
+
+Firefox and WebKit use a separate portability smoke test because their
+headless software renderers do not share Chromium/SwiftShader's renderer key or
+byte-exact baseline. Install them with `pnpm --dir conformance/browser exec
+playwright install firefox webkit`, then run `pnpm --dir conformance/browser
+test:portability`. This is suitable for a non-blocking scheduled/manual job;
+the Chromium/SwiftShader suite remains the deterministic required gate.
