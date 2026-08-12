@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "rendererKey": "swiftshader",
+  "runner": {
+    "os": "ubuntu-24.04",
+    "architecture": "x64",
+    "node": "24.14.1",
+    "playwright": "1.57.0"
+  },
+  "browser": {
+    "name": "chromium",
+    "version": "143.0.7499.4",
+    "revision": "1200"
+  },
+  "graphics": {
+    "api": "WebGL2",
+    "renderer": "SwiftShader",
+    "colorSpace": "srgb",
+    "alpha": "premultiplied",
+    "preserveDrawingBuffer": true
+  }
+}

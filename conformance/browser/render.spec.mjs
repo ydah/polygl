@@ -14,6 +14,12 @@ const executable = path.join(workspaceRoot, "target", "debug", "polygl");
 const manifest = JSON.parse(
   await readFile(path.join(conformanceRoot, "cases.json"), "utf8"),
 );
+const baselineEnvironment = JSON.parse(
+  await readFile(
+    path.join(conformanceRoot, "l1-render", "environment.json"),
+    "utf8",
+  ),
+);
 const browserCases = manifest.filter((item) => item.browser);
 const renderCases = browserCases.filter((item) =>
   item.layers.includes("l1-render"),
@@ -69,9 +75,11 @@ test.afterAll(async () => {
 for (const item of renderCases) {
   for (const language of item.languages) {
     const name = item.id;
-    test(`${name} in ${language} matches the SwiftShader framebuffer`, async ({
-      page,
-    }) => {
+    test(`${name} in ${language} matches the SwiftShader framebuffer`, async (
+      { browser, page },
+      testInfo,
+    ) => {
+      expect(browser.version()).toBe(baselineEnvironment.browser.version);
       await page.addInitScript(() => {
         const originalGetContext = HTMLCanvasElement.prototype.getContext;
         HTMLCanvasElement.prototype.getContext = function getContext(
@@ -133,7 +141,37 @@ for (const item of renderCases) {
         await mkdir(path.dirname(baselinePath), { recursive: true });
         await writeFile(baselinePath, baseline);
       } else {
-        expect(baseline).toBe(await readFile(baselinePath, "utf8"));
+        const expected = await readFile(baselinePath, "utf8");
+        if (baseline !== expected) {
+          const expectedLines = expected.trimEnd().split("\n");
+          const [expectedWidth, expectedHeight] = expectedLines[0]
+            .split("x")
+            .map(Number);
+          const expectedPixels = Buffer.from(expectedLines[1], "hex");
+          const actualPixels = Buffer.from(frame.pixels);
+          const diffPixels = Buffer.alloc(actualPixels.length);
+          for (let offset = 0; offset < actualPixels.length; offset += 4) {
+            const changed =
+              actualPixels[offset] !== expectedPixels[offset] ||
+              actualPixels[offset + 1] !== expectedPixels[offset + 1] ||
+              actualPixels[offset + 2] !== expectedPixels[offset + 2] ||
+              actualPixels[offset + 3] !== expectedPixels[offset + 3];
+            diffPixels.set(changed ? [255, 0, 0, 255] : [0, 0, 0, 255], offset);
+          }
+          await testInfo.attach("expected-frame.ppm", {
+            body: rgbaToPpm(expectedWidth, expectedHeight, expectedPixels),
+            contentType: "image/x-portable-pixmap",
+          });
+          await testInfo.attach("actual-frame.ppm", {
+            body: rgbaToPpm(frame.width, frame.height, actualPixels),
+            contentType: "image/x-portable-pixmap",
+          });
+          await testInfo.attach("frame-diff.ppm", {
+            body: rgbaToPpm(frame.width, frame.height, diffPixels),
+            contentType: "image/x-portable-pixmap",
+          });
+        }
+        expect(baseline).toBe(expected);
       }
     });
   }
@@ -454,4 +492,14 @@ function contentType(file) {
     default:
       return "application/octet-stream";
   }
+}
+
+function rgbaToPpm(width, height, rgba) {
+  const rgb = Buffer.alloc(width * height * 3);
+  for (let source = 0, target = 0; source < rgba.length; source += 4) {
+    rgb[target++] = rgba[source];
+    rgb[target++] = rgba[source + 1];
+    rgb[target++] = rgba[source + 2];
+  }
+  return Buffer.concat([Buffer.from(`P6\n${width} ${height}\n255\n`), rgb]);
 }
