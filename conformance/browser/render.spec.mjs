@@ -323,6 +323,92 @@ void main() { out_color = texture(pgl_u_texture_map, v_uv); }`,
   expect(pixel).toEqual([255, 0, 0, 255]);
 });
 
+test("unset user uniforms fail in debug and retain defaults in release", async ({
+  page,
+}) => {
+  await routeBuild(page);
+  await page.goto("http://polygl.test/rectangle/ruby/index.html");
+  await page.evaluate(() => globalThis.__polyglReady);
+  const result = await page.evaluate(async () => {
+    const runtime = await import("./runtime.js");
+    const location = {
+      source: "uniform-policy.test",
+      line: 7,
+      column: 4,
+      start: 10,
+      end: 20,
+    };
+    const shader = {
+      name: "uniform_policy",
+      vertex: `#version 300 es
+precision highp float;
+layout(location = 0) in vec3 a_position;
+void main() { gl_Position = vec4(a_position.x, a_position.z, 0.0, 1.0); }`,
+      fragment: `#version 300 es
+precision highp float;
+uniform vec4 pgl_u_tint;
+out vec4 out_color;
+void main() { out_color = pgl_u_tint; }`,
+      attributes: [
+        {
+          name: "position",
+          glslName: "a_position",
+          location: 0,
+          type: "vec3",
+        },
+      ],
+      uniforms: [
+        {
+          name: "tint",
+          glslName: "pgl_u_tint",
+          type: "vec4",
+          source: "user",
+        },
+      ],
+      vertexLocation: location,
+      fragmentLocation: location,
+    };
+    const source = {
+      setup() {
+        runtime.nodeAdd(
+          runtime.meshPlane(2, 2, 1, 1),
+          runtime.materialShader("uniform_policy"),
+        );
+      },
+    };
+    async function attempt(debug) {
+      const canvas = document.createElement("canvas");
+      canvas.width = 4;
+      canvas.height = 4;
+      document.body.append(canvas);
+      try {
+        const handle = await runtime.start(
+          {
+            ...source,
+            __polyglShaderBundle: {
+              debug,
+              shaderAbi: runtime.shaderAbi,
+              shaders: [shader],
+            },
+          },
+          { canvas, onError() {} },
+        );
+        handle.stop();
+        return "success";
+      } catch (error) {
+        return runtime.formatRuntimeError(error);
+      } finally {
+        canvas.remove();
+      }
+    }
+    return { debug: await attempt(true), release: await attempt(false) };
+  });
+  expect(result.debug).toContain(
+    "uniform-policy.test:7:4: user uniform `tint` is unset",
+  );
+  expect(result.release).toBe("success");
+});
+
 async function routeBuild(page) {
   await page.route("http://polygl.test/**", async (route) => {
     const url = new URL(route.request().url());
