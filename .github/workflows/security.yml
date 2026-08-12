@@ -58,3 +58,4 @@ jobs:
           --lockfile spikes/type-inference/Cargo.lock
           --lockfile spikes/php-parser/Cargo.lock
           --lockfile spikes/perl-parser/Cargo.lock
+          --lockfile fuzz/Cargo.lock

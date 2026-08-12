@@ -9,3 +9,5 @@ node_modules/
 test-results/
 playwright-report/
 dist/
+fuzz/artifacts/
+fuzz/corpus/*/[0-9a-f][0-9a-f]*

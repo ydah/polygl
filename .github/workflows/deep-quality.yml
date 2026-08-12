@@ -1,0 +1,114 @@
+name: Deep quality
+
+on:
+  schedule:
+    - cron: "43 3 * * 6"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sanitizer:
+    name: Parser and backend address sanitizer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install fixed nightly with sanitizer support
+        run: >-
+          rustup toolchain install nightly-2026-08-01
+          --profile minimal --component rust-src
+
+      - name: Run parser and backend tests under ASan
+        env:
+          RUSTFLAGS: -Zsanitizer=address
+          RUSTDOCFLAGS: -Zsanitizer=address
+        run: >-
+          cargo +nightly-2026-08-01 test
+          -Zbuild-std
+          --target x86_64-unknown-linux-gnu
+          --locked
+          -p polygl-adapter-ruby
+          -p polygl-adapter-php
+          -p polygl-adapter-perl
+          -p polygl-backend-js
+          -p polygl-backend-glsl
+
+  fuzz:
+    name: Parser-to-backend fuzzing
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install fixed fuzz toolchain
+        run: |
+          rustup toolchain install nightly-2026-08-01 --profile minimal
+          cargo +nightly-2026-08-01 install --locked --version 0.13.2 cargo-fuzz
+
+      - name: Fuzz source frontends
+        run: >-
+          cargo +nightly-2026-08-01 fuzz run frontend
+          fuzz/corpus/frontend
+          -- -max_total_time=180 -timeout=10
+
+      - name: Fuzz the valid pipeline through both backends
+        run: >-
+          cargo +nightly-2026-08-01 fuzz run pipeline
+          fuzz/corpus/pipeline
+          -- -max_total_time=180 -timeout=10
+
+  mutation:
+    name: Path and optimizer mutation tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install pinned mutation runner
+        run: cargo install --locked --version 27.1.0 cargo-mutants
+
+      - name: Challenge artifact and asset path validation
+        run: >-
+          cargo mutants
+          --package polygl-cli
+          --package polygl-lir
+          --re 'portable_component_key|insert_path|invalid_asset_path_reason'
+          --cargo-arg=--locked
+          --timeout 120
+          --jobs 2
+
+      - name: Challenge capability-driven conformance selection
+        run: >-
+          cargo mutants
+          --package polygl-conformance
+          --re 'load_manifest|select_manifest_cases|validate_capabilities'
+          --cargo-arg=--locked
+          --timeout 120
+          --jobs 2
+
+  benchmark:
+    name: Compiler benchmark record
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build release compiler
+        run: cargo build --locked --release -p polygl-cli
+
+      - name: Measure representative compiler workloads
+        run: node benchmarks/compiler/run.mjs > compiler-benchmark.json
+
+      - name: Upload benchmark record
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: compiler-benchmark
+          path: compiler-benchmark.json
+          if-no-files-found: error
+          retention-days: 30

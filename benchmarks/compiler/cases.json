@@ -1,0 +1,8 @@
+[
+  { "id": "small", "source": "examples/triangle.rb", "expectSuccess": true },
+  { "id": "medium", "source": "examples/rotating_cubes.rb", "expectSuccess": true },
+  { "id": "large", "source": "examples/terrain.rb", "expectSuccess": true },
+  { "id": "shader-heavy", "source": "examples/plasma.rb", "expectSuccess": true },
+  { "id": "class-heavy", "source": "conformance/cases/classes/main.rb", "expectSuccess": true },
+  { "id": "error-heavy", "source": "benchmarks/compiler/error-heavy.rb", "expectSuccess": false }
+]

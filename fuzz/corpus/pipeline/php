@@ -1,0 +1,2 @@
+1<?php
+function setup() { size(64, 64); }

@@ -1,0 +1,2 @@
+2use strict;
+sub setup { size(64, 64); }

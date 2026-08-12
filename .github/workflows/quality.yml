@@ -1,0 +1,67 @@
+name: Quality metrics
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  coverage:
+    name: Rust coverage
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install coverage instrumentation
+        run: |
+          rustup component add llvm-tools-preview
+          cargo install --locked --version 0.8.7 cargo-llvm-cov
+
+      - name: Measure workspace coverage
+        run: >-
+          cargo llvm-cov
+          --locked --workspace --all-features
+          --lcov --output-path coverage.lcov
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rust-coverage
+          path: coverage.lcov
+          if-no-files-found: error
+          retention-days: 14
+
+  size:
+    name: Release size budget
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check generated payload sizes
+        run: scripts/check-size-budget.sh
+
+  semver:
+    name: Public Rust API compatibility
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source and base revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install pinned compatibility checker
+        run: cargo install --locked --version 0.50.0 cargo-semver-checks
+
+      - name: Check public workspace crates
+        run: >-
+          cargo semver-checks
+          --workspace
+          --baseline-rev "${{ github.event.pull_request.base.sha }}"

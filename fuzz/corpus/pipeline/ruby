@@ -1,0 +1,7 @@
+0def setup
+  size(64, 64)
+end
+
+def frame(dt)
+  background(dt, 0.0, 0.0)
+end

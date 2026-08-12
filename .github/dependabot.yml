@@ -32,6 +32,14 @@ updates:
       webgl-stability:
         patterns: ["*"]
 
+  - package-ecosystem: cargo
+    directory: /fuzz
+    schedule:
+      interval: weekly
+    groups:
+      fuzz:
+        patterns: ["*"]
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
