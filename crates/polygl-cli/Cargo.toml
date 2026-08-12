@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 blake3 = "=1.8.5"
+caseless = "=0.2.2"
 polygl-adapter-api = { path = "../polygl-adapter-api", version = "=0.1.0" }
 polygl-backend-glsl = { path = "../polygl-backend-glsl", version = "=0.1.0" }
 polygl-backend-js = { path = "../polygl-backend-js", version = "=0.1.0" }

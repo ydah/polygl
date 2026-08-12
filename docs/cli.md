@@ -24,20 +24,34 @@ polygl --version
 - `runtime.js`, embedded in the CLI binary from the tested TypeScript runtime;
 - `polygl-manifest.json`, a reproducible provenance record for the build.
 
-The manifest records compiler and adapter versions, versioned feature tags,
-HIR/builtin/runtime/shader ABI versions, normalized source path and BLAKE3 digest,
-effective build options, and a sorted size/digest inventory of every payload
-artifact. It deliberately omits generation time so identical inputs and options
-produce identical bytes. The manifest does not hash itself.
+Manifest schema 2 records compiler and adapter versions, versioned feature
+tags, HIR/LIR/builtin schemas, runtime/shader ABI versions, normalized source
+path and BLAKE3 digest, effective build options, and a sorted size/digest
+inventory of every payload artifact. It deliberately omits generation time so
+identical inputs and options produce identical bytes. The manifest does not
+hash itself.
+
+The manifest is build provenance for deployment tools; browsers do not load it.
+Runtime compatibility is enforced from the ABI markers embedded in `app.js` and
+`shaders.js`, which the runtime validates before drawing. HIR, LIR, builtin, and
+adapter schema versions describe compiler/tooling exchange contracts and are not
+runtime inputs.
 
 Every `texture_load` argument must be a literal relative slash-separated path.
 `build` reads it relative to the source file and copies it to the same path
 under the output directory. Dynamic paths, absolute paths, `.` or `..`
 components, URL/drive prefixes, backslashes, and names that would overwrite a
-generated artifact produce E0501. A missing source asset fails before the
-staged generation replaces the last successful output. Complete generations
-are published together, so failed builds cannot mix old and new files and
-stale files disappear on success.
+generated artifact produce E0501. Output paths are compared after NFC and full
+locale-independent Unicode case folding, and Windows-reserved names and
+characters are rejected, so a build cannot contain names that collide on a
+supported filesystem. A missing source asset fails before the staged generation
+replaces the last successful output. Complete generations are written to an
+adjacent staging directory before activation, so failed builds cannot mix old
+and new files and stale files disappear on success. Replacing a non-empty output
+directory requires a portable two-rename transaction: there is a brief interval
+where that path is absent, and a machine crash in that interval may require the
+next build to recreate it. Consumers that require uninterrupted publication
+should deploy versioned directories and switch a server-owned pointer.
 
 Debug output includes source-located array, vector, matrix, and nil checks.
 Release output removes those checks. Debug builds default to an external Source

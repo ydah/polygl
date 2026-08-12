@@ -14,6 +14,7 @@ use polygl_core::{
     AdapterRegistry, BUILTIN_SCHEMA_VERSION, CompileError, CompileOptions, Compiler,
 };
 use polygl_hir::HIR_SCHEMA_VERSION;
+use polygl_lir::LIR_SCHEMA_VERSION;
 use polygl_span::{Diagnostics, SourceFile, SourceId};
 
 mod artifact;
@@ -23,6 +24,7 @@ use artifact::{ArtifactFile, prepare_assets, publish};
 
 const RUNTIME_BUNDLE: &[u8] = include_bytes!("../assets/runtime.js");
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const ARTIFACT_MANIFEST_SCHEMA_VERSION: u32 = 2;
 const INDEX_HTML: &str = r#"<!doctype html>
 <html lang="en">
 <head>
@@ -606,10 +608,11 @@ fn render_artifact_manifest(
         },
         "runtimeAbi": RUNTIME_ABI_VERSION,
         "shaderAbi": SHADER_ABI_VERSION,
-        "schemaVersion": 1,
+        "schemaVersion": ARTIFACT_MANIFEST_SCHEMA_VERSION,
         "schemas": {
             "builtins": BUILTIN_SCHEMA_VERSION,
             "hir": HIR_SCHEMA_VERSION,
+            "lir": LIR_SCHEMA_VERSION,
         },
         "source": {
             "blake3": blake3::hash(source.text().as_bytes()).to_hex().to_string(),
@@ -969,13 +972,14 @@ end
         let debug_manifest_bytes = fs::read(debug.join("polygl-manifest.json")).unwrap();
         let debug_manifest: serde_json::Value =
             serde_json::from_slice(&debug_manifest_bytes).unwrap();
-        assert_eq!(debug_manifest["schemaVersion"], 1);
+        assert_eq!(debug_manifest["schemaVersion"], 2);
         assert_eq!(debug_manifest["compiler"]["version"], VERSION);
         assert_eq!(debug_manifest["adapter"]["id"], "ruby");
         assert_eq!(debug_manifest["adapter"]["apiVersion"], 1);
         assert_eq!(debug_manifest["runtimeAbi"], 2);
         assert_eq!(debug_manifest["shaderAbi"], 1);
         assert_eq!(debug_manifest["schemas"]["hir"], 1);
+        assert_eq!(debug_manifest["schemas"]["lir"], 1);
         assert_eq!(debug_manifest["schemas"]["builtins"], 2);
         assert_eq!(debug_manifest["source"]["path"], "triangle.rb");
         assert_eq!(debug_manifest["options"]["mode"], "debug");

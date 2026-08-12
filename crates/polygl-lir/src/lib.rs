@@ -1,5 +1,8 @@
 //! Structured, typed low-level intermediate representation.
 
+/// Serialization and tooling contract version for the low-level IR schema.
+pub const LIR_SCHEMA_VERSION: u32 = 1;
+
 mod domain;
 mod expr;
 mod lower;

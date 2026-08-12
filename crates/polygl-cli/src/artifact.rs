@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+use caseless::Caseless;
 use polygl_lir::AssetReference;
 use tempfile::TempDir;
 use unicode_normalization::UnicodeNormalization;
@@ -282,7 +283,15 @@ fn portable_component_key(component: &str) -> Result<String, CliError> {
             "build artifact component `{component}` contains a Windows-incompatible character"
         )));
     }
-    let normalized = component.nfc().collect::<String>().to_lowercase();
+    // Canonical caseless matching is deliberately more conservative than any
+    // one supported filesystem. Both normalization passes are required by the
+    // Unicode default caseless-matching algorithm (notably for U+0345).
+    let normalized = component
+        .chars()
+        .nfd()
+        .default_case_fold()
+        .nfd()
+        .collect::<String>();
     let device_name = normalized.split('.').next().unwrap_or_default();
     if is_windows_device_name(device_name) {
         return Err(CliError::new(format!(
@@ -349,6 +358,9 @@ mod tests {
         for paths in [
             vec!["A.png", "a.png"],
             vec!["caf\u{e9}.png", "cafe\u{301}.png"],
+            vec!["Stra\u{df}e.png", "STRASSE.png"],
+            vec!["\u{3a3}.png", "\u{3c2}.png"],
+            vec!["\u{1fc3}.png", "\u{3b7}\u{3b9}.png"],
             vec!["foo", "foo/bar.png"],
             vec!["app.js", "app.js/texture.png"],
         ] {
