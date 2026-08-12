@@ -14,6 +14,9 @@ const {
   formatRuntimeError,
   keyDown,
   line,
+  mapFromEntries,
+  mapGet,
+  mapSet,
   cameraLookAt,
   cameraPerspective,
   lightDirectional,
@@ -44,6 +47,7 @@ const {
   size,
   start,
   stroke,
+  structFromEntries,
   text,
   textureLoad,
   time,
@@ -90,6 +94,49 @@ test("debug checks preserve original source locations", () => {
   );
   assert.equal(roundToInt(-1.5), -2);
   assert.equal(roundToInt(1.5), 2);
+});
+
+test("maps and structs isolate special keys from JavaScript prototypes", () => {
+  const location = {
+    source: "map.rb",
+    line: 7,
+    column: 3,
+    start: 30,
+    end: 41,
+  };
+  const map = mapFromEntries([
+    ["__proto__", 1],
+    ["constructor", 2],
+    ["toString", 3],
+    ["", 4],
+    ["日本語", 5],
+  ]);
+
+  assert.equal(Object.getPrototypeOf(map), null);
+  assert.equal(mapGet(map, "__proto__"), 1);
+  assert.equal(mapGet(map, "constructor"), 2);
+  assert.equal(mapGet(map, "toString"), 3);
+  assert.equal(mapGet(map, ""), 4);
+  assert.equal(mapGet(map, "日本語"), 5);
+  const replacement = { polluted: true };
+  assert.equal(mapSet(map, "__proto__", replacement), replacement);
+  assert.equal(mapGet(map, "__proto__"), replacement);
+  assert.equal({}.polluted, undefined);
+
+  assert.throws(
+    () => mapGet(map, "valueOf", location),
+    (error) =>
+      formatRuntimeError(error) ===
+      'map.rb:7:3: map key "valueOf" is not present',
+  );
+
+  const struct = structFromEntries([
+    ["__proto__", "field"],
+    ["constructor", "also a field"],
+  ]);
+  assert.equal(Object.getPrototypeOf(struct), null);
+  assert.equal(struct.__proto__, "field");
+  assert.equal(struct.constructor, "also a field");
 });
 
 test("runs setup and frames while batching shape vertices", async () => {

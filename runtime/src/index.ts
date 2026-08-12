@@ -13,6 +13,13 @@ export {
 } from "./errors.js";
 export type { LocatedError, SourceLocation } from "./errors.js";
 export { SeededRandom } from "./random.js";
+export {
+  mapFromEntries,
+  mapGet,
+  mapSet,
+  structFromEntries,
+} from "./records.js";
+export type { PolyglRecord } from "./records.js";
 export { WebGL2BatchRenderer } from "./renderer.js";
 export { WebGL2SceneRenderer } from "./scene.js";
 export type {

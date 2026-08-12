@@ -400,6 +400,21 @@ impl<'source> Emitter<'source> {
                 self.write(" = ");
                 self.expression(value)?;
             }
+            PlaceKind::Index { base, index } if matches!(base.ty, Type::Map(_)) => {
+                self.write("__pglRuntime.mapSet(");
+                self.expression(base)?;
+                self.write(", ");
+                self.expression(index)?;
+                self.write(", ");
+                self.expression(value)?;
+                if self.mode == BuildMode::Debug {
+                    let span = self.span_id(target.span)?;
+                    self.write(", __pglSpans[");
+                    self.write(&span.to_string());
+                    self.write("]");
+                }
+                self.write(")");
+            }
             PlaceKind::Index { base, index }
                 if self.mode == BuildMode::Debug && requires_bounds_check(&base.ty) =>
             {
@@ -482,6 +497,19 @@ impl<'source> Emitter<'source> {
                 self.expressions(args)?;
                 self.write(")");
             }
+            ExprKind::Index { base, index } if matches!(base.ty, Type::Map(_)) => {
+                self.write("__pglRuntime.mapGet(");
+                self.expression(base)?;
+                self.write(", ");
+                self.expression(index)?;
+                if self.mode == BuildMode::Debug {
+                    let span = self.span_id(expression.span)?;
+                    self.write(", __pglSpans[");
+                    self.write(&span.to_string());
+                    self.write("]");
+                }
+                self.write(")");
+            }
             ExprKind::Index { base, index }
                 if self.mode == BuildMode::Debug && requires_bounds_check(&base.ty) =>
             {
@@ -529,7 +557,7 @@ impl<'source> Emitter<'source> {
                 self.write("]");
             }
             ExprKind::Map(entries) => {
-                self.write("Object.fromEntries([");
+                self.write("__pglRuntime.mapFromEntries([");
                 for (index, entry) in entries.iter().enumerate() {
                     if index > 0 {
                         self.write(", ");
@@ -543,16 +571,18 @@ impl<'source> Emitter<'source> {
                 self.write("])");
             }
             ExprKind::Struct { fields, .. } => {
-                self.write("{");
+                self.write("__pglRuntime.structFromEntries([");
                 for (index, field) in fields.iter().enumerate() {
                     if index > 0 {
                         self.write(", ");
                     }
+                    self.write("[");
                     self.write(&json_string(&field.name));
-                    self.write(": ");
+                    self.write(", ");
                     self.expression(&field.value)?;
+                    self.write("]");
                 }
-                self.write("}");
+                self.write("])");
             }
             ExprKind::Vector { args, .. } => {
                 self.write("new Float32Array([");

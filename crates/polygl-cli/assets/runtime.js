@@ -175,6 +175,43 @@ function normalizeSeed(seed) {
     const normalized = Math.trunc(seed) >>> 0;
     return normalized === 0 ? DEFAULT_SEED : normalized;
 }
+export function mapFromEntries(entries) {
+    return recordFromEntries(entries);
+}
+export function structFromEntries(entries) {
+    return recordFromEntries(entries);
+}
+export function mapGet(collection, key, location) {
+    if (collection === null || collection === undefined) {
+        throw runtimeError("cannot index nil", location);
+    }
+    if (!Object.prototype.hasOwnProperty.call(collection, key)) {
+        throw runtimeError(`map key ${JSON.stringify(key)} is not present`, location);
+    }
+    return collection[key];
+}
+export function mapSet(collection, key, value, location) {
+    if (collection === null || collection === undefined) {
+        throw runtimeError("cannot index nil", location);
+    }
+    defineEntry(collection, key, value);
+    return value;
+}
+function recordFromEntries(entries) {
+    const record = Object.create(null);
+    for (const [key, value] of entries) {
+        defineEntry(record, key, value);
+    }
+    return record;
+}
+function defineEntry(record, key, value) {
+    Object.defineProperty(record, key, {
+        configurable: true,
+        enumerable: true,
+        value,
+        writable: true,
+    });
+}
 export function identity4() {
     return new Float32Array([
         1, 0, 0, 0,

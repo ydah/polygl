@@ -95,6 +95,12 @@ source code must convert one side explicitly when the types differ. Arrays and
 maps keep their element/value type after initialization; reassignment cannot
 change a variable's type except for the permitted `int`-to-`float` widening.
 
+Map keys are own string keys, including `"__proto__"`, `"constructor"`, the
+empty string, and arbitrary Unicode. Host implementations must not expose
+inherited object properties as entries. Reading a missing key is a runtime
+error in every build mode; debug builds attach the original source location.
+Writing a missing key inserts it while preserving the map's value type.
+
 Empty aggregate literals are inferred from their use. If their type remains
 unknown, the adapter must require the language-specific `@pgl` annotation.
 User functions are monomorphized per concrete argument-type tuple as specified

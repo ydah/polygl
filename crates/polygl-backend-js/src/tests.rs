@@ -2,8 +2,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use polygl_builtins::RuntimeOp;
 use polygl_lir::{
-    BinaryOp, Block, CallTarget, Constant, Domain, EntryKind, EntryPoint, Expr, ExprKind, Function,
-    Literal, Module, Parameter, Place, PlaceKind, Range, Statement, StatementKind,
+    BinaryOp, Block, CallTarget, Constant, Domain, EntryKind, EntryPoint, Expr, ExprKind,
+    FieldInit, Function, Literal, MapEntry, Module, Parameter, Place, PlaceKind, Range, Statement,
+    StatementKind,
 };
 use polygl_span::{SourceFile, SourceId, Span};
 use polygl_types::Type;
@@ -409,9 +410,9 @@ fn inserts_debug_index_and_nil_checks_and_removes_them_in_release() {
     assert!(debug.contains("\"source\":\"main.rb\""));
     assert!(debug.contains("__pglRuntime.checkedIndex("));
     assert!(debug.contains("__pglRuntime.checkIndex("));
+    assert!(debug.contains("__pglRuntime.mapGet(record, \"value\", __pglSpans["));
+    assert!(debug.contains("__pglRuntime.mapSet(record, \"value\", 4, __pglSpans["));
     assert!(debug.contains("__pglRuntime.requireNonNil("));
-    assert!(debug.contains("let mapped = (record)[\"value\"]"));
-    assert!(debug.contains("(record)[\"value\"] = 4"));
 
     let release = JavaScriptBackend::new(BuildMode::Release)
         .generate(&module, std::slice::from_ref(&source))
@@ -421,7 +422,84 @@ fn inserts_debug_index_and_nil_checks_and_removes_them_in_release() {
     assert!(!release.contains("checkedIndex"));
     assert!(!release.contains("requireNonNil"));
     assert!(release.contains("(values)[0]"));
-    assert!(release.contains("(record)[\"value\"]"));
+    assert!(release.contains("__pglRuntime.mapGet(record, \"value\")"));
+    assert!(release.contains("__pglRuntime.mapSet(record, \"value\", 4)"));
+}
+
+#[test]
+fn emits_safe_records_for_map_and_struct_literals() {
+    let source = source();
+    let literal_span = span(&source, 38, source.len());
+    let entries = ["__proto__", "constructor", "toString", "", "日本語"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, key)| MapEntry {
+            key: string(key, literal_span),
+            value: int(i32::try_from(index).unwrap(), literal_span),
+            span: literal_span,
+        })
+        .collect();
+    let module = Module {
+        functions: Vec::new(),
+        structs: Vec::new(),
+        constants: Vec::new(),
+        entries: vec![EntryPoint {
+            kind: EntryKind::Setup,
+            params: Vec::new(),
+            result: Type::Unit,
+            body: block(
+                vec![
+                    statement(
+                        StatementKind::Expr(expression(
+                            ExprKind::Map(entries),
+                            Type::Map(Box::new(Type::Int)),
+                            literal_span,
+                        )),
+                        literal_span,
+                    ),
+                    statement(
+                        StatementKind::Expr(expression(
+                            ExprKind::Struct {
+                                name: "SpecialFields".to_owned(),
+                                fields: vec![
+                                    FieldInit {
+                                        name: "__proto__".to_owned(),
+                                        value: int(1, literal_span),
+                                        span: literal_span,
+                                    },
+                                    FieldInit {
+                                        name: "constructor".to_owned(),
+                                        value: int(2, literal_span),
+                                        span: literal_span,
+                                    },
+                                ],
+                            },
+                            Type::Unit,
+                            literal_span,
+                        )),
+                        literal_span,
+                    ),
+                ],
+                literal_span,
+            ),
+            domain: Domain::Host,
+            span: literal_span,
+        }],
+        span: literal_span,
+    };
+
+    let javascript = JavaScriptBackend::default()
+        .generate(&module, std::slice::from_ref(&source))
+        .unwrap()
+        .javascript;
+    assert!(javascript.contains(
+        "__pglRuntime.mapFromEntries([[\"__proto__\", 0], [\"constructor\", 1], [\"toString\", 2], [\"\", 3], [\"日本語\", 4]])"
+    ));
+    assert!(
+        javascript
+            .contains("__pglRuntime.structFromEntries([[\"__proto__\", 1], [\"constructor\", 2]])")
+    );
+    assert!(!javascript.contains("Object.fromEntries"));
 }
 
 #[test]

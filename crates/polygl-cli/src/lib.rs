@@ -980,7 +980,9 @@ end
         )
         .unwrap();
         let javascript = fs::read_to_string(output.join("app.js")).unwrap();
-        assert!(javascript.contains("Object.fromEntries"));
+        assert!(javascript.contains("__pglRuntime.mapFromEntries"));
+        assert!(javascript.contains("__pglRuntime.mapGet"));
+        assert!(!javascript.contains("Object.fromEntries"));
         assert!(javascript.contains(").length"));
         assert!(javascript.contains("__pglRuntime.checkedIndex"));
         assert!(javascript.contains("__pglRangeIndex"));
@@ -1057,7 +1059,11 @@ end
         )
         .unwrap();
         let javascript = fs::read_to_string(output.join("app.js")).unwrap();
-        assert!(javascript.contains(r#"{"x": x, "y": __pglFunction_"#));
+        assert!(
+            javascript.contains(
+                r#"__pglRuntime.structFromEntries([["x", x], ["y", __pglFunction_"#
+            )
+        );
         assert!(javascript.contains("[\"x\"] ="));
         assert!(javascript.contains("__pglRuntime.circle"));
         assert!(javascript.contains("return 99;"));

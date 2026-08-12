@@ -18,6 +18,11 @@ a source name is reserved or unsafe in JavaScript, while constant and function
 names use separate namespaces so a local may shadow a source constant. Nested
 blocks preserve parameter, loop-variable, and local shadowing from LIR.
 
+Maps and structs use null-prototype records. Map reads check own-property
+presence in every build mode, so JavaScript prototype names cannot masquerade
+as Common Core entries. Struct construction defines fields explicitly, making
+`__proto__` an ordinary field rather than prototype mutation.
+
 ## Artifacts and source maps
 
 `JavaScriptBackend::generate` accepts the LIR module and every `SourceFile`
@@ -41,14 +46,17 @@ The emitter uses these runtime hooks:
 
 - `checkedIndex(base, index, location)` for collection reads;
 - `checkIndex(base, index, location)` before collection writes; and
+- `mapGet(base, key, location)` for own-key-checked map reads;
 - `requireNonNil(base, location)` before field reads or writes.
 
-Collection writes use an internal expression wrapper so the base and index are
+Array writes use an internal expression wrapper so the base and index are
 evaluated once, validation happens before the right-hand side, and source
 evaluation order is unchanged. Generated integer division and remainder errors
 also carry the same location as `error.polyglLocation`. Release mode emits
-direct JavaScript access and omits the location table and these checks. Source
-Map packaging policy is independent of debug/release runtime checks.
+direct JavaScript access for arrays and fields and omits their location table
+checks. Map own-key validation remains because missing entries would otherwise
+violate the static value type. Source Map packaging policy is independent of
+debug/release runtime checks.
 
 Unset-uniform validation belongs to the shader ABI and GPU split introduced in
 M2; it uses the same source-location contract rather than being approximated
