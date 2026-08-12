@@ -7,8 +7,11 @@ mod render_error;
 mod source;
 mod span;
 
-pub use collection::Diagnostics;
-pub use diagnostic::{Diagnostic, Label, Severity, Suggestion};
+pub use collection::{DiagnosticInvariantError, Diagnostics};
+pub use diagnostic::{
+    Applicability, Diagnostic, DiagnosticPosition, DiagnosticRange, Label, Severity,
+    StructuredDiagnostic, StructuredLabel, StructuredSuggestion, Suggestion,
+};
 pub use diagnostic_code::{DiagnosticCode, DiagnosticMetadata, Fixability};
 pub use render_error::RenderError;
 pub use source::{SourceError, SourceFile, SourceId, SourcePosition};

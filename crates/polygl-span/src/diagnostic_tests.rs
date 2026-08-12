@@ -1,4 +1,7 @@
-use crate::{Diagnostic, Diagnostics, Label, Severity, SourceFile, SourceId, Suggestion};
+use crate::{
+    Applicability, Diagnostic, DiagnosticInvariantError, Diagnostics, Label, Severity, SourceFile,
+    SourceId, Suggestion,
+};
 
 #[test]
 fn renders_codes_labels_notes_and_suggestions_without_color() {
@@ -103,4 +106,49 @@ fn renders_empty_eof_span_after_crlf_on_the_trailing_line() {
         .unwrap();
 
     assert!(rendered.contains("main.rb:2:1"), "{rendered}");
+}
+
+#[test]
+fn preserves_multiple_fixes_applicability_and_utf16_ranges() {
+    let source = SourceFile::new(SourceId::new(1), "unicode.php", "😀 $x == 1");
+    let operator = source.span(8, 10).unwrap();
+    let diagnostic = Diagnostic::new(Severity::Error, "E0302", "loose equality", operator)
+        .with_suggestion(Suggestion::new(operator, "===", "use strict equality"))
+        .with_suggestion(Suggestion::with_placeholders(
+            operator,
+            "compare(<value>)",
+            "write an explicit comparison",
+        ));
+
+    let structured = diagnostic.structured(&source).unwrap();
+    assert_eq!(structured.primary_range.start.line, 0);
+    assert_eq!(structured.primary_range.start.character, 6);
+    assert_eq!(structured.suggestions.len(), 2);
+    assert_eq!(
+        structured.suggestions[0].applicability,
+        Applicability::MachineApplicable
+    );
+    assert_eq!(
+        structured.suggestions[1].applicability,
+        Applicability::HasPlaceholders
+    );
+    let rendered = diagnostic.render(&source).unwrap();
+    assert!(rendered.contains("replace with `===`"));
+    assert!(rendered.contains("replace with `compare(<value>)`"));
+}
+
+#[test]
+fn validates_required_fixes_at_the_trust_boundary() {
+    let source = SourceFile::new(SourceId::new(1), "main.rb", "dynamic");
+    let mut diagnostics = Diagnostics::new();
+    diagnostics.push(Diagnostic::new(
+        Severity::Error,
+        "E0200",
+        "unsupported syntax",
+        source.span(0, source.len()).unwrap(),
+    ));
+    assert_eq!(
+        diagnostics.validate(),
+        Err(DiagnosticInvariantError::MissingRequiredFix)
+    );
 }

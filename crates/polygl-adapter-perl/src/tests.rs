@@ -166,7 +166,7 @@ fn requires_boolean_conditions_instead_of_perl_truthiness() {
         polygl_types::analyze(&hir).expect_err("integer Perl truthiness must not be reproduced");
     assert!(diagnostics.iter().any(|diagnostic| {
         diagnostic.code == "E0301"
-            && diagnostic.suggestion.is_some()
+            && !diagnostic.suggestions.is_empty()
             && diagnostic.primary_span.start() < diagnostic.primary_span.end()
     }));
 }
@@ -190,7 +190,7 @@ fn common_core_rejections_cover_ten_perl_specific_forms_with_suggestions() {
         let diagnostics = lower(source).expect_err(source);
         assert!(
             diagnostics.iter().any(|diagnostic| {
-                diagnostic.code.starts_with("E02") && diagnostic.suggestion.is_some()
+                diagnostic.code.starts_with("E02") && !diagnostic.suggestions.is_empty()
             }),
             "{source}: {diagnostics:?}"
         );

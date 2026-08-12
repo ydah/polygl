@@ -8,7 +8,9 @@ use polygl_adapter_ruby::RubyAdapter;
 use polygl_backend_glsl::{GlslArtifacts, GlslBackend};
 use polygl_backend_js::{Artifacts, BuildMode, JavaScriptBackend, SourceMapMode};
 use polygl_lir::AssetReference;
-use polygl_span::{Diagnostic, DiagnosticCode, Diagnostics, Severity, SourceFile};
+use polygl_span::{
+    Diagnostic, DiagnosticCode, DiagnosticInvariantError, Diagnostics, Severity, SourceFile,
+};
 use polygl_types::TypedModule;
 
 use crate::{AdapterRegistry, BuiltinTable};
@@ -90,8 +92,9 @@ impl<'adapter> Compiler<'adapter> {
         let mut context = LowerCtx::new(&BuiltinTable);
         let hir = adapter
             .lower(source, &mut context)
-            .map_err(CompileError::Frontend)?;
-        let typed = polygl_types::analyze(&hir).map_err(CompileError::Frontend)?;
+            .map_err(|diagnostics| validated_diagnostics("adapter", diagnostics))?;
+        let typed = polygl_types::analyze(&hir)
+            .map_err(|diagnostics| validated_diagnostics("type analyzer", diagnostics))?;
         Ok(FrontendOutput { typed })
     }
 
@@ -113,7 +116,15 @@ impl<'adapter> Compiler<'adapter> {
         options: CompileOptions,
     ) -> Result<CompileOutput, CompileError> {
         let lir = polygl_lir::lower(&typed);
-        let split = polygl_lir::split(&lir).map_err(CompileError::Split)?;
+        let split = polygl_lir::split(&lir)
+            .map_err(|diagnostics| validated_split_diagnostics("LIR split", diagnostics))?;
+        split
+            .warnings
+            .validate()
+            .map_err(|reason| CompileError::InvalidDiagnostics {
+                producer: "LIR split",
+                reason,
+            })?;
         let javascript = JavaScriptBackend::new(options.mode)
             .with_source_map_mode(options.source_map)
             .with_sources_content(options.sources_content)
@@ -174,6 +185,10 @@ pub enum CompileError {
     Split(Diagnostics),
     JavaScript(polygl_backend_js::EmitError),
     Glsl(polygl_backend_glsl::EmitError),
+    InvalidDiagnostics {
+        producer: &'static str,
+        reason: DiagnosticInvariantError,
+    },
 }
 
 impl CompileError {
@@ -183,7 +198,10 @@ impl CompileError {
             Self::Configuration(diagnostics)
             | Self::Frontend(diagnostics)
             | Self::Split(diagnostics) => Some(diagnostics),
-            Self::UnsupportedLanguage(_) | Self::JavaScript(_) | Self::Glsl(_) => None,
+            Self::UnsupportedLanguage(_)
+            | Self::JavaScript(_)
+            | Self::Glsl(_)
+            | Self::InvalidDiagnostics { .. } => None,
         }
     }
 
@@ -209,6 +227,12 @@ impl fmt::Display for CompileError {
             Self::Split(_) => formatter.write_str("Host/GPU boundary validation failed"),
             Self::JavaScript(error) => write!(formatter, "JavaScript generation failed: {error}"),
             Self::Glsl(error) => write!(formatter, "GLSL generation failed: {error}"),
+            Self::InvalidDiagnostics { producer, reason } => {
+                write!(
+                    formatter,
+                    "{producer} produced an invalid diagnostic: {reason}"
+                )
+            }
         }
     }
 }
@@ -222,7 +246,22 @@ impl Error for CompileError {
             | Self::Configuration(_)
             | Self::Frontend(_)
             | Self::Split(_) => None,
+            Self::InvalidDiagnostics { reason, .. } => Some(reason),
         }
+    }
+}
+
+fn validated_diagnostics(producer: &'static str, diagnostics: Diagnostics) -> CompileError {
+    match diagnostics.validate() {
+        Ok(()) => CompileError::Frontend(diagnostics),
+        Err(reason) => CompileError::InvalidDiagnostics { producer, reason },
+    }
+}
+
+fn validated_split_diagnostics(producer: &'static str, diagnostics: Diagnostics) -> CompileError {
+    match diagnostics.validate() {
+        Ok(()) => CompileError::Split(diagnostics),
+        Err(reason) => CompileError::InvalidDiagnostics { producer, reason },
     }
 }
 
@@ -230,7 +269,7 @@ impl Error for CompileError {
 mod tests {
     use polygl_adapter_api::{FeatureTag, LanguageAdapter, LowerCtx};
     use polygl_hir::HirBuilder;
-    use polygl_span::{Diagnostics, SourceFile, SourceId};
+    use polygl_span::{Diagnostic, Diagnostics, Severity, SourceFile, SourceId};
 
     use super::{CompileError, CompileOptions, Compiler};
     use crate::AdapterRegistry;
@@ -261,6 +300,39 @@ mod tests {
     }
 
     static EMPTY: EmptyAdapter = EmptyAdapter;
+
+    struct InvalidDiagnosticAdapter;
+
+    impl LanguageAdapter for InvalidDiagnosticAdapter {
+        fn id(&self) -> &'static str {
+            "invalid"
+        }
+
+        fn file_extensions(&self) -> &'static [&'static str] {
+            &["invalid"]
+        }
+
+        fn lower(
+            &self,
+            source: &SourceFile,
+            _context: &mut LowerCtx<'_>,
+        ) -> Result<polygl_hir::Module, Diagnostics> {
+            let mut diagnostics = Diagnostics::new();
+            diagnostics.push(Diagnostic::new(
+                Severity::Error,
+                "E0200",
+                "missing the required rewrite",
+                source.span(0, source.len()).unwrap(),
+            ));
+            Err(diagnostics)
+        }
+
+        fn capabilities(&self) -> &'static [FeatureTag] {
+            &[]
+        }
+    }
+
+    static INVALID_DIAGNOSTIC: InvalidDiagnosticAdapter = InvalidDiagnosticAdapter;
 
     #[test]
     fn compiles_in_memory_without_cli_or_filesystem_state() {
@@ -299,6 +371,22 @@ mod tests {
         let diagnostic = diagnostics.iter().next().unwrap();
         assert_eq!(diagnostic.code, polygl_span::DiagnosticCode::E0001);
         assert!(error.render(&source).contains("E0001"));
+    }
+
+    #[test]
+    fn rejects_invalid_diagnostics_from_an_external_adapter() {
+        let registry =
+            AdapterRegistry::from_adapters([&INVALID_DIAGNOSTIC as &dyn LanguageAdapter]).unwrap();
+        let compiler = Compiler::new(registry);
+        let source = SourceFile::new(SourceId::new(0), "main.invalid", "dynamic");
+
+        let error = compiler.analyze(&source, "invalid").unwrap_err();
+        assert!(matches!(error, CompileError::InvalidDiagnostics { .. }));
+        assert!(
+            error
+                .to_string()
+                .contains("requires at least one suggested fix")
+        );
     }
 
     #[test]

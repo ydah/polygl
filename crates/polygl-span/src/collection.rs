@@ -1,4 +1,24 @@
-use crate::{Diagnostic, Fixability, RenderError, Severity, SourceFile};
+use std::error::Error;
+use std::fmt;
+
+use crate::{Diagnostic, Fixability, RenderError, Severity, SourceFile, StructuredDiagnostic};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiagnosticInvariantError {
+    SeverityMismatch,
+    MissingRequiredFix,
+}
+
+impl fmt::Display for DiagnosticInvariantError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::SeverityMismatch => "diagnostic severity does not match its registered code",
+            Self::MissingRequiredFix => "diagnostic code requires at least one suggested fix",
+        })
+    }
+}
+
+impl Error for DiagnosticInvariantError {}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Diagnostics {
@@ -14,13 +34,6 @@ impl Diagnostics {
     }
 
     pub fn push(&mut self, diagnostic: Diagnostic) {
-        debug_assert_eq!(diagnostic.severity, diagnostic.code.metadata().severity);
-        debug_assert!(
-            diagnostic.code.metadata().fixability != Fixability::Required
-                || diagnostic.suggestion.is_some(),
-            "{} requires a rewrite suggestion",
-            diagnostic.code
-        );
         if !self.entries.contains(&diagnostic) {
             self.entries.push(diagnostic);
         }
@@ -43,6 +56,21 @@ impl Diagnostics {
             .any(|diagnostic| diagnostic.severity == Severity::Error)
     }
 
+    /// Validates the structural contract at an adapter/compiler trust boundary.
+    pub fn validate(&self) -> Result<(), DiagnosticInvariantError> {
+        for diagnostic in &self.entries {
+            if diagnostic.severity != diagnostic.code.metadata().severity {
+                return Err(DiagnosticInvariantError::SeverityMismatch);
+            }
+            if diagnostic.code.metadata().fixability == Fixability::Required
+                && diagnostic.suggestions.is_empty()
+            {
+                return Err(DiagnosticInvariantError::MissingRequiredFix);
+            }
+        }
+        Ok(())
+    }
+
     pub fn render(&self, source: &SourceFile) -> Result<String, RenderError> {
         let rendered = self
             .entries
@@ -50,5 +78,15 @@ impl Diagnostics {
             .map(|diagnostic| diagnostic.render(source))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rendered.join("\n"))
+    }
+
+    pub fn structured(
+        &self,
+        source: &SourceFile,
+    ) -> Result<Vec<StructuredDiagnostic>, RenderError> {
+        self.entries
+            .iter()
+            .map(|diagnostic| diagnostic.structured(source))
+            .collect()
     }
 }

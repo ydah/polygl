@@ -29,19 +29,82 @@ impl Label {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Suggestion {
     pub span: Span,
-    /// `Some` is a machine-applicable replacement, including `Some("")` for
-    /// deletion. `None` is a human-applicable rewrite.
     pub replacement: Option<String>,
+    pub message: String,
+    pub applicability: Applicability,
+}
+
+/// How safely a diagnostic fix can be applied without human review.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Applicability {
+    MachineApplicable,
+    MaybeIncorrect,
+    HasPlaceholders,
+}
+
+impl Applicability {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::MachineApplicable => "machine-applicable",
+            Self::MaybeIncorrect => "maybe-incorrect",
+            Self::HasPlaceholders => "has-placeholders",
+        }
+    }
+}
+
+/// Zero-based UTF-16 position used by structured editor diagnostics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiagnosticPosition {
+    pub line: usize,
+    pub character: usize,
+}
+
+/// A source range carrying both canonical bytes and editor coordinates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiagnosticRange {
+    pub byte_start: usize,
+    pub byte_end: usize,
+    pub start: DiagnosticPosition,
+    pub end: DiagnosticPosition,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StructuredLabel {
+    pub range: DiagnosticRange,
     pub message: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StructuredSuggestion {
+    pub range: DiagnosticRange,
+    pub replacement: Option<String>,
+    pub message: String,
+    pub applicability: Applicability,
+}
+
+/// Renderer-independent diagnostic data for JSON, SARIF, and LSP adapters.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StructuredDiagnostic {
+    pub severity: Severity,
+    pub code: DiagnosticCode,
+    pub message: String,
+    pub source: String,
+    pub primary_range: DiagnosticRange,
+    pub labels: Vec<StructuredLabel>,
+    pub notes: Vec<String>,
+    pub suggestions: Vec<StructuredSuggestion>,
+}
+
 impl Suggestion {
+    /// A complete textual edit which is safe to apply automatically.
     #[must_use]
     pub fn new(span: Span, replacement: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             span,
             replacement: Some(replacement.into()),
             message: message.into(),
+            applicability: Applicability::MachineApplicable,
         }
     }
 
@@ -52,6 +115,22 @@ impl Suggestion {
             span,
             replacement: None,
             message: message.into(),
+            applicability: Applicability::MaybeIncorrect,
+        }
+    }
+
+    /// A textual edit whose replacement still contains user-filled fields.
+    #[must_use]
+    pub fn with_placeholders(
+        span: Span,
+        replacement: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            span,
+            replacement: Some(replacement.into()),
+            message: message.into(),
+            applicability: Applicability::HasPlaceholders,
         }
     }
 }
@@ -64,7 +143,7 @@ pub struct Diagnostic {
     pub primary_span: Span,
     pub labels: Vec<Label>,
     pub notes: Vec<String>,
-    pub suggestion: Option<Suggestion>,
+    pub suggestions: Vec<Suggestion>,
 }
 
 impl Diagnostic {
@@ -84,7 +163,7 @@ impl Diagnostic {
             primary_span,
             labels: Vec::new(),
             notes: Vec::new(),
-            suggestion: None,
+            suggestions: Vec::new(),
         }
     }
 
@@ -102,7 +181,7 @@ impl Diagnostic {
 
     #[must_use]
     pub fn with_suggestion(mut self, suggestion: Suggestion) -> Self {
-        self.suggestion = Some(suggestion);
+        self.suggestions.push(suggestion);
         self
     }
 
@@ -111,7 +190,7 @@ impl Diagnostic {
         for label in &self.labels {
             label.span.validate_for(source)?;
         }
-        if let Some(suggestion) = &self.suggestion {
+        for suggestion in &self.suggestions {
             suggestion.span.validate_for(source)?;
         }
 
@@ -145,7 +224,7 @@ impl Diagnostic {
         for note in &self.notes {
             builder.add_note(note);
         }
-        if let Some(suggestion) = &self.suggestion {
+        for suggestion in &self.suggestions {
             builder.add_label(
                 AriadneLabel::new((name.clone(), render_range(suggestion.span)))
                     .with_message(&suggestion.message),
@@ -175,14 +254,50 @@ impl Diagnostic {
         String::from_utf8(output).map_err(RenderError::InvalidOutput)
     }
 
+    pub fn structured(&self, source: &SourceFile) -> Result<StructuredDiagnostic, RenderError> {
+        let primary_range = structured_range(self.primary_span, source)?;
+        let labels = self
+            .labels
+            .iter()
+            .map(|label| {
+                Ok(StructuredLabel {
+                    range: structured_range(label.span, source)?,
+                    message: label.message.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>, RenderError>>()?;
+        let suggestions = self
+            .suggestions
+            .iter()
+            .map(|suggestion| {
+                Ok(StructuredSuggestion {
+                    range: structured_range(suggestion.span, source)?,
+                    replacement: suggestion.replacement.clone(),
+                    message: suggestion.message.clone(),
+                    applicability: suggestion.applicability,
+                })
+            })
+            .collect::<Result<Vec<_>, RenderError>>()?;
+        Ok(StructuredDiagnostic {
+            severity: self.severity,
+            code: self.code,
+            message: self.message.clone(),
+            source: source.name().to_owned(),
+            primary_range,
+            labels,
+            notes: self.notes.clone(),
+            suggestions,
+        })
+    }
+
     fn has_empty_eof_span(&self, source: &SourceFile) -> bool {
         let is_empty_eof = |span: Span| span.is_empty() && span.end() == source.len();
         is_empty_eof(self.primary_span)
             || self.labels.iter().any(|label| is_empty_eof(label.span))
             || self
-                .suggestion
-                .as_ref()
-                .is_some_and(|suggestion| is_empty_eof(suggestion.span))
+                .suggestions
+                .iter()
+                .any(|suggestion| is_empty_eof(suggestion.span))
     }
 
     fn render_range(span: Span, source: &SourceFile, has_eof_sentinel: bool) -> Range<usize> {
@@ -192,4 +307,22 @@ impl Diagnostic {
             span.range()
         }
     }
+}
+
+fn structured_range(span: Span, source: &SourceFile) -> Result<DiagnosticRange, RenderError> {
+    span.validate_for(source)?;
+    let start = source.position(span.start())?;
+    let end = source.position(span.end())?;
+    Ok(DiagnosticRange {
+        byte_start: span.start(),
+        byte_end: span.end(),
+        start: DiagnosticPosition {
+            line: start.line - 1,
+            character: start.utf16_column - 1,
+        },
+        end: DiagnosticPosition {
+            line: end.line - 1,
+            character: end.utf16_column - 1,
+        },
+    })
 }

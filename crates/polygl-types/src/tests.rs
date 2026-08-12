@@ -1118,7 +1118,7 @@ fn rejects_a_ninth_function_instance_with_e0310() {
         .iter()
         .find(|diagnostic| diagnostic.code == "E0310")
         .expect("instance limit diagnostic");
-    assert!(diagnostic.suggestion.is_some());
+    assert!(!diagnostic.suggestions.is_empty());
 }
 
 #[test]

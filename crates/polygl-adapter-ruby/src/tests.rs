@@ -87,11 +87,9 @@ fn rejects_dynamic_class_features_with_e0203() {
         "class Hidden\n  private\n  def value\n    1\n  end\nend\n",
     ] {
         let diagnostics = lower(source).expect_err("dynamic class features must be rejected");
-        assert!(
-            diagnostics.iter().any(|diagnostic| {
-                diagnostic.code == "E0203" && diagnostic.suggestion.is_some()
-            })
-        );
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "E0203" && !diagnostic.suggestions.is_empty()
+        }));
     }
 }
 
@@ -106,7 +104,7 @@ fn rejects_instance_methods_that_conflict_with_direct_syntax_lowering() {
         let diagnostics = lower(&source).expect_err("syntax-overloading methods must be rejected");
         assert!(
             diagnostics.iter().any(|diagnostic| {
-                diagnostic.code == "E0203" && diagnostic.suggestion.is_some()
+                diagnostic.code == "E0203" && !diagnostic.suggestions.is_empty()
             }),
             "{diagnostics:?}"
         );
@@ -131,7 +129,7 @@ fn every_common_core_rejection_in_the_ruby_corpus_has_a_suggestion() {
         assert!(
             rejections
                 .iter()
-                .all(|diagnostic| diagnostic.suggestion.is_some()),
+                .all(|diagnostic| !diagnostic.suggestions.is_empty()),
             "{diagnostics:?}"
         );
     }
@@ -194,11 +192,9 @@ fn rejects_non_whitelisted_and_escaping_blocks_with_e0202() {
         "def invoke(&callback)\n  callback.call\nend\n",
     ] {
         let diagnostics = lower(source).expect_err("general blocks must be rejected");
-        assert!(
-            diagnostics.iter().any(|diagnostic| {
-                diagnostic.code == "E0202" && diagnostic.suggestion.is_some()
-            })
-        );
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "E0202" && !diagnostic.suggestions.is_empty()
+        }));
     }
 }
 
@@ -253,7 +249,7 @@ end
     assert!(diagnostics.iter().any(|diagnostic| {
         diagnostic.code == "E0200"
             && diagnostic.message.contains("constant is not declared")
-            && diagnostic.suggestion.is_some()
+            && !diagnostic.suggestions.is_empty()
     }));
 }
 
@@ -422,8 +418,8 @@ end
     assert!(diagnostic.message.contains("not declared"));
     assert!(
         diagnostic
-            .suggestion
-            .as_ref()
+            .suggestions
+            .first()
             .is_some_and(|suggestion| suggestion.message.contains("before entering"))
     );
 }
@@ -599,8 +595,8 @@ fn rejects_define_method_with_a_suggestion() {
         .expect("Common Core diagnostic");
     assert!(
         diagnostic
-            .suggestion
-            .as_ref()
+            .suggestions
+            .first()
             .is_some_and(|suggestion| suggestion.message.contains("regular `def"))
     );
 }

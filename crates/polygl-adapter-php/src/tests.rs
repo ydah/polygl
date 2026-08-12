@@ -134,7 +134,7 @@ fn rejects_php_truthiness_and_loose_equality() {
     assert!(
         diagnostics
             .iter()
-            .any(|diagnostic| { diagnostic.code == "E0301" && diagnostic.suggestion.is_some() })
+            .any(|diagnostic| { diagnostic.code == "E0301" && !diagnostic.suggestions.is_empty() })
     );
 
     let equality = lower("<?php function setup() { if (1 == 1) {} }")
@@ -142,8 +142,8 @@ fn rejects_php_truthiness_and_loose_equality() {
     assert!(equality.iter().any(|diagnostic| {
         diagnostic.code == "E0302"
             && diagnostic
-                .suggestion
-                .as_ref()
+                .suggestions
+                .first()
                 .and_then(|suggestion| suggestion.replacement.as_deref())
                 == Some("===")
     }));
@@ -201,11 +201,9 @@ fn reports_malformed_and_unmatched_annotations() {
         "<?php /** @pgl $x: mystery */ function setup() { $x = 1; }",
     ] {
         let diagnostics = lower(source).expect_err("invalid annotations must fail");
-        assert!(
-            diagnostics.iter().any(|diagnostic| {
-                diagnostic.code == "E0314" && diagnostic.suggestion.is_some()
-            })
-        );
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "E0314" && !diagnostic.suggestions.is_empty()
+        }));
     }
 }
 
@@ -254,7 +252,7 @@ fn php_specific_diagnostics_cover_ten_or_more_cases() {
         assert!(diagnostics.iter().any(|diagnostic| {
             diagnostic.code == "E0301"
                 && !diagnostic.primary_span.is_empty()
-                && diagnostic.suggestion.is_some()
+                && !diagnostic.suggestions.is_empty()
         }));
     }
 
@@ -276,7 +274,7 @@ fn php_specific_diagnostics_cover_ten_or_more_cases() {
         assert!(
             diagnostics
                 .iter()
-                .any(|diagnostic| diagnostic.suggestion.is_some()),
+                .any(|diagnostic| !diagnostic.suggestions.is_empty()),
             "{source}"
         );
     }
@@ -359,7 +357,7 @@ fn rejects_unstable_for_bounds_and_constructor_self_reads() {
         assert!(diagnostics.iter().any(|diagnostic| {
             diagnostic.code == code
                 && !diagnostic.primary_span.is_empty()
-                && diagnostic.suggestion.is_some()
+                && !diagnostic.suggestions.is_empty()
         }));
     }
 }
@@ -382,8 +380,8 @@ fn native_hint_annotations_are_consumed_and_conflicts_are_precise() {
         diagnostic.code == "E0303"
             && !diagnostic.primary_span.is_empty()
             && diagnostic
-                .suggestion
-                .as_ref()
+                .suggestions
+                .first()
                 .is_some_and(|suggestion| suggestion.replacement.as_deref() == Some(""))
     }));
 }
@@ -398,7 +396,7 @@ fn closure_and_class_feature_diagnostics_use_specific_codes() {
         assert!(diagnostics.iter().any(|diagnostic| {
             diagnostic.code == "E0202"
                 && !diagnostic.primary_span.is_empty()
-                && diagnostic.suggestion.is_some()
+                && !diagnostic.suggestions.is_empty()
         }));
     }
     for source in [
@@ -410,7 +408,7 @@ fn closure_and_class_feature_diagnostics_use_specific_codes() {
         assert!(diagnostics.iter().any(|diagnostic| {
             diagnostic.code == "E0203"
                 && !diagnostic.primary_span.is_empty()
-                && diagnostic.suggestion.is_some()
+                && !diagnostic.suggestions.is_empty()
         }));
     }
 }
@@ -424,8 +422,8 @@ fn loose_inequality_suggestions_are_machine_applicable() {
             diagnostic.code == "E0302"
                 && !diagnostic.primary_span.is_empty()
                 && diagnostic
-                    .suggestion
-                    .as_ref()
+                    .suggestions
+                    .first()
                     .and_then(|suggestion| suggestion.replacement.as_deref())
                     == Some(replacement)
         }));
