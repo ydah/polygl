@@ -1,0 +1,93 @@
+[
+  {
+    "id": "background",
+    "layers": ["l1-render", "l2-hir-snapshot"],
+    "languages": ["ruby", "php", "perl"],
+    "required_features": ["core-v1", "tier1-v1"],
+    "browser": true
+  },
+  {
+    "id": "circle",
+    "layers": ["l1-render", "l2-hir-snapshot"],
+    "languages": ["ruby", "php", "perl"],
+    "required_features": ["core-v1", "tier1-v1"],
+    "browser": true
+  },
+  {
+    "id": "rectangle",
+    "layers": ["l1-render", "l2-hir-snapshot", "l3-neutral-hir"],
+    "languages": ["ruby", "php", "perl"],
+    "required_features": ["core-v1", "tier1-v1"],
+    "browser": true
+  },
+  {
+    "id": "seeded-random",
+    "layers": ["l1-render", "l2-hir-snapshot"],
+    "languages": ["ruby", "php", "perl"],
+    "required_features": ["core-v1", "tier1-v1"],
+    "browser": true
+  },
+  {
+    "id": "triangle",
+    "layers": ["l1-render", "l2-hir-snapshot", "l3-neutral-hir"],
+    "languages": ["ruby", "php", "perl"],
+    "required_features": ["core-v1", "tier1-v1"],
+    "browser": true
+  },
+  {
+    "id": "lit-cubes",
+    "layers": ["l1-render"],
+    "languages": ["ruby", "php", "perl"],
+    "required_features": ["core-v1", "tier2-v1"],
+    "browser": true
+  },
+  {
+    "id": "plasma",
+    "layers": ["gpu"],
+    "languages": ["ruby", "php", "perl"],
+    "required_features": ["core-v1", "shaders-v1"],
+    "browser": true
+  },
+  {
+    "id": "gpu-string",
+    "layers": ["gpu"],
+    "languages": ["ruby", "php", "perl"],
+    "required_features": ["core-v1", "shaders-v1"],
+    "expected_diagnostic": "E0402",
+    "browser": false
+  },
+  {
+    "id": "gpu-host-call",
+    "layers": ["gpu"],
+    "languages": ["ruby", "php", "perl"],
+    "required_features": ["core-v1", "shaders-v1"],
+    "expected_diagnostic": "E0404",
+    "browser": false
+  },
+  {
+    "id": "collections",
+    "layers": ["l2-hir-snapshot"],
+    "languages": ["ruby", "php", "perl"],
+    "required_features": ["core-v1", "arrays-v1", "maps-v1"],
+    "browser": false
+  },
+  {
+    "id": "classes",
+    "layers": ["l2-hir-snapshot"],
+    "languages": ["ruby", "php", "perl"],
+    "required_features": ["core-v1", "classes-v1"],
+    "browser": false
+  },
+  {
+    "id": "ruby-sugar",
+    "layers": ["l2-hir-snapshot"],
+    "languages": ["ruby"],
+    "required_features": [
+      "core-v1",
+      "times-block-sugar-v1",
+      "each-block-sugar-v1",
+      "truthiness-sugar-v1"
+    ],
+    "browser": false
+  }
+]

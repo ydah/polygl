@@ -6,28 +6,14 @@ use polygl_adapter_perl::PerlAdapter;
 use polygl_adapter_php::PhpAdapter;
 use polygl_adapter_ruby::RubyAdapter;
 use polygl_core::BuiltinTable;
-use polygl_hir::{Module, dump};
+use polygl_hir::dump;
 use polygl_span::{Diagnostics, SourceFile, SourceId};
 
 use crate::{
-    ConformanceError, L1BaselineStore, L2SnapshotStore, L3SnapshotStore, NeutralProgram,
-    compare_neutral_hir,
+    ConformanceCase, ConformanceError, ConformanceLanguage, ConformanceLayer, L1BaselineStore,
+    L2SnapshotStore, L3SnapshotStore, NeutralProgram, compare_neutral_hir, load_manifest,
 };
 
-const M1_CASES: &[&str] = &[
-    "background",
-    "circle",
-    "rectangle",
-    "seeded-random",
-    "triangle",
-];
-const M5_CASES: &[&str] = &["lit-cubes"];
-const NEUTRAL_CASES: &[&str] = &["rectangle", "triangle"];
-const GPU_CASES: &[(&str, Option<&str>)] = &[
-    ("plasma", None),
-    ("gpu-string", Some("E0402")),
-    ("gpu-host-call", Some("E0404")),
-];
 const BASELINE_RENDERER: &str = "swiftshader";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,125 +25,108 @@ pub struct ConformanceReport {
 }
 
 pub fn verify_smoke(root: &Path) -> Result<ConformanceReport, ConformanceError> {
+    let manifest = load_manifest(root)?;
     let l1 = L1BaselineStore::new(root);
     let l2 = L2SnapshotStore::new(root);
     let l3 = L3SnapshotStore::new(root);
+    let mut report = ConformanceReport {
+        l1_cases: 0,
+        l2_cases: 0,
+        l3_cases: 0,
+        gpu_cases: 0,
+    };
 
-    for case in M1_CASES {
-        let ruby = compile_ruby(root, case)?;
-        let php = compile_php(root, case)?;
-        let perl = compile_perl(root, case)?;
-        l1.load(case, BASELINE_RENDERER)?;
-        l2.verify("ruby", case, &dump(&ruby))?;
-        l2.verify("php", case, &dump(&php))?;
-        l2.verify("perl", case, &dump(&perl))?;
-        if NEUTRAL_CASES.contains(case) {
-            compare_neutral_hir(
-                case,
-                &[
-                    NeutralProgram {
-                        language: "ruby",
-                        module: &ruby,
-                    },
-                    NeutralProgram {
-                        language: "php",
-                        module: &php,
-                    },
-                    NeutralProgram {
-                        language: "perl",
-                        module: &perl,
-                    },
-                ],
-            )?;
-            l3.verify(case, &ruby)?;
+    for case in &manifest {
+        validate_capabilities(case)?;
+        if case.layers.contains(&ConformanceLayer::Gpu) {
+            for language in &case.languages {
+                let typed = compile_typed(root, case, *language)?;
+                verify_gpu_program(
+                    &case.id,
+                    language.id(),
+                    typed,
+                    case.expected_diagnostic.as_deref(),
+                )?;
+            }
+            report.gpu_cases += 1;
+            continue;
+        }
+
+        let mut programs = Vec::with_capacity(case.languages.len());
+        for language in &case.languages {
+            let module = compile_typed(root, case, *language)?.into_hir();
+            if case.layers.contains(&ConformanceLayer::L2HirSnapshot) {
+                l2.verify(language.id(), &case.id, &dump(&module))?;
+                report.l2_cases += 1;
+            }
+            programs.push((*language, module));
+        }
+        if case.layers.contains(&ConformanceLayer::L1Render) {
+            l1.load(&case.id, BASELINE_RENDERER)?;
+            report.l1_cases += 1;
+        }
+        if case.layers.contains(&ConformanceLayer::L3NeutralHir) {
+            let neutral = programs
+                .iter()
+                .map(|(language, module)| NeutralProgram {
+                    language: language.id(),
+                    module,
+                })
+                .collect::<Vec<_>>();
+            compare_neutral_hir(&case.id, &neutral)?;
+            l3.verify(&case.id, &programs[0].1)?;
+            report.l3_cases += 1;
         }
     }
-    for case in M5_CASES {
-        compile_ruby(root, case)?;
-        compile_php(root, case)?;
-        compile_perl(root, case)?;
-        l1.load(case, BASELINE_RENDERER)?;
+
+    Ok(report)
+}
+
+fn validate_capabilities(case: &ConformanceCase) -> Result<(), ConformanceError> {
+    for language in &case.languages {
+        let capabilities = adapter(*language).capabilities();
+        if let Some(feature) = case
+            .required_features
+            .iter()
+            .find(|feature| !capabilities.contains(feature))
+        {
+            return Err(ConformanceError::InvalidManifest(format!(
+                "case `{}` requires `{}` from {}, but its adapter does not advertise it",
+                case.id,
+                feature.as_str(),
+                language.id()
+            )));
+        }
     }
-    for (case, expected_error) in GPU_CASES {
-        verify_gpu_case(root, case, *expected_error)?;
+    Ok(())
+}
+
+fn adapter(language: ConformanceLanguage) -> &'static dyn LanguageAdapter {
+    match language {
+        ConformanceLanguage::Ruby => &RubyAdapter,
+        ConformanceLanguage::Php => &PhpAdapter,
+        ConformanceLanguage::Perl => &PerlAdapter,
     }
-
-    Ok(ConformanceReport {
-        l1_cases: M1_CASES.len() + M5_CASES.len(),
-        l2_cases: M1_CASES.len() * 3,
-        l3_cases: NEUTRAL_CASES.len(),
-        gpu_cases: GPU_CASES.len(),
-    })
-}
-
-fn compile_ruby(root: &Path, case: &str) -> Result<Module, ConformanceError> {
-    compile_typed(root, case, "main.rb", &RubyAdapter).map(polygl_types::TypedModule::into_hir)
-}
-
-fn compile_php(root: &Path, case: &str) -> Result<Module, ConformanceError> {
-    compile_typed(root, case, "main.php", &PhpAdapter).map(polygl_types::TypedModule::into_hir)
-}
-
-fn compile_perl(root: &Path, case: &str) -> Result<Module, ConformanceError> {
-    compile_typed(root, case, "main.pl", &PerlAdapter).map(polygl_types::TypedModule::into_hir)
-}
-
-fn compile_ruby_typed(
-    root: &Path,
-    case: &str,
-) -> Result<polygl_types::TypedModule, ConformanceError> {
-    compile_typed(root, case, "main.rb", &RubyAdapter)
-}
-
-fn compile_php_typed(
-    root: &Path,
-    case: &str,
-) -> Result<polygl_types::TypedModule, ConformanceError> {
-    compile_typed(root, case, "main.php", &PhpAdapter)
-}
-
-fn compile_perl_typed(
-    root: &Path,
-    case: &str,
-) -> Result<polygl_types::TypedModule, ConformanceError> {
-    compile_typed(root, case, "main.pl", &PerlAdapter)
 }
 
 fn compile_typed(
     root: &Path,
-    case: &str,
-    file: &str,
-    adapter: &dyn LanguageAdapter,
+    case: &ConformanceCase,
+    language: ConformanceLanguage,
 ) -> Result<polygl_types::TypedModule, ConformanceError> {
-    let path = root.join("cases").join(case).join(file);
+    let path = root.join("cases").join(&case.id).join(language.file());
     let bytes = fs::read(&path)?;
     let source = SourceFile::from_bytes(SourceId::new(0), path.display().to_string(), bytes)
         .map_err(|error| ConformanceError::Compile {
-            case: case.to_owned(),
+            case: case.id.clone(),
             message: error.to_string(),
         })?;
     let mut context = LowerCtx::new(&BuiltinTable);
-    let hir = adapter
+    let hir = adapter(language)
         .lower(&source, &mut context)
-        .map_err(|diagnostics| compile_diagnostics(case, &diagnostics, &source))?;
+        .map_err(|diagnostics| compile_diagnostics(&case.id, &diagnostics, &source))?;
     polygl_types::analyze(&hir)
-        .map_err(|diagnostics| compile_diagnostics(case, &diagnostics, &source))
-}
-
-fn verify_gpu_case(
-    root: &Path,
-    case: &str,
-    expected_error: Option<&str>,
-) -> Result<(), ConformanceError> {
-    let programs = [
-        ("ruby", compile_ruby_typed(root, case)?),
-        ("php", compile_php_typed(root, case)?),
-        ("perl", compile_perl_typed(root, case)?),
-    ];
-    for (language, typed) in programs {
-        verify_gpu_program(case, language, typed, expected_error)?;
-    }
-    Ok(())
+        .map_err(|diagnostics| compile_diagnostics(&case.id, &diagnostics, &source))
 }
 
 fn verify_gpu_program(
@@ -241,73 +210,38 @@ mod tests {
     use polygl_hir::dump;
     use polygl_span::{SourceFile, SourceId};
 
-    use crate::{NeutralProgram, compare_neutral_hir};
-
-    use super::{
-        GPU_CASES, M1_CASES, M5_CASES, NEUTRAL_CASES, compile_perl, compile_php, compile_ruby,
-    };
+    use crate::{ConformanceLayer, load_manifest};
 
     #[test]
-    fn case_inventory_has_six_render_and_two_neutral_cases() {
-        assert_eq!(M1_CASES.len(), 5);
-        assert_eq!(M5_CASES.len(), 1);
-        assert_eq!(NEUTRAL_CASES.len(), 2);
-        assert!(NEUTRAL_CASES.iter().all(|case| M1_CASES.contains(case)));
-        assert_eq!(GPU_CASES.len(), 3);
+    fn manifest_drives_every_smoke_case_and_feature() {
         let root = conformance_root();
-        for case in M1_CASES.iter().chain(M5_CASES.iter()) {
-            assert!(root.join("cases").join(case).join("main.php").is_file());
-            assert!(root.join("cases").join(case).join("main.pl").is_file());
-        }
-    }
-
-    #[test]
-    fn l3_rejects_duplicate_language_entries() {
-        let root = conformance_root();
-        let module = compile_ruby(&root, "triangle").unwrap();
-        assert!(
-            compare_neutral_hir(
-                "triangle",
-                &[
-                    NeutralProgram {
-                        language: "ruby",
-                        module: &module,
-                    },
-                    NeutralProgram {
-                        language: "ruby",
-                        module: &module,
-                    },
-                ],
-            )
-            .is_err()
+        let cases = load_manifest(&root).unwrap();
+        assert_eq!(
+            cases
+                .iter()
+                .filter(|case| case.layers.contains(&ConformanceLayer::L1Render))
+                .count(),
+            6
         );
-    }
-
-    #[test]
-    fn neutral_cases_compare_all_languages_before_snapshot_verification() {
-        let root = conformance_root();
-        for case in NEUTRAL_CASES {
-            let ruby = compile_ruby(&root, case).unwrap();
-            let php = compile_php(&root, case).unwrap();
-            let perl = compile_perl(&root, case).unwrap();
-            compare_neutral_hir(
-                case,
-                &[
-                    NeutralProgram {
-                        language: "ruby",
-                        module: &ruby,
-                    },
-                    NeutralProgram {
-                        language: "php",
-                        module: &php,
-                    },
-                    NeutralProgram {
-                        language: "perl",
-                        module: &perl,
-                    },
-                ],
-            )
-            .unwrap();
+        assert_eq!(
+            cases
+                .iter()
+                .filter(|case| case.layers.contains(&ConformanceLayer::L3NeutralHir))
+                .count(),
+            2
+        );
+        for case in cases {
+            for language in case.languages {
+                assert!(
+                    root.join("cases")
+                        .join(&case.id)
+                        .join(language.file())
+                        .is_file(),
+                    "missing {}/{}",
+                    case.id,
+                    language.file()
+                );
+            }
         }
     }
 

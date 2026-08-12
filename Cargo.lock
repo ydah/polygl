@@ -765,6 +765,8 @@ dependencies = [
  "polygl-lir",
  "polygl-span",
  "polygl-types",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

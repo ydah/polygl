@@ -1,0 +1,21 @@
+module
+{
+  fn __pgl_10_Point::new__2_5_float_5_float(x: float, y: float) -> Point [auto]
+  {
+    return Point { x: x, y: y };
+  }
+  fn __pgl_10_Point#move__2_12_struct_Point_5_float(self: Point, dx: float) -> void [auto]
+  {
+    self.x = (self.x + dx);
+  }
+  struct Point
+  {
+    field x: float;
+    field y: float;
+  }
+  entry setup() [host]
+  {
+    let point: Point = __pgl_10_Point::new__2_5_float_5_float(1.0, 2.0);
+    __pgl_10_Point#move__2_12_struct_Point_5_float(point, 3.0);
+  }
+}

@@ -5,6 +5,7 @@ use std::io;
 #[derive(Debug)]
 pub enum ConformanceError {
     Io(io::Error),
+    InvalidManifest(String),
     InvalidName(String),
     InvalidFrame(String),
     FrameMismatch {
@@ -28,6 +29,9 @@ impl fmt::Display for ConformanceError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(error) => error.fmt(formatter),
+            Self::InvalidManifest(message) => {
+                write!(formatter, "invalid conformance manifest: {message}")
+            }
             Self::InvalidName(name) => write!(formatter, "invalid conformance name `{name}`"),
             Self::InvalidFrame(message) => write!(formatter, "invalid frame: {message}"),
             Self::FrameMismatch {

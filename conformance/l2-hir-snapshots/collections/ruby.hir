@@ -1,0 +1,11 @@
+module
+{
+  entry setup() [host]
+  {
+    let values: int[] = [1, 2, 3];
+    let labels: Map<str, int> = {"__proto__": 4, "日本語": 5};
+    values[0] = values[1];
+    labels["__proto__"] = labels["日本語"];
+    builtin#10(values[0], labels["__proto__"], values[2], labels["日本語"]);
+  }
+}

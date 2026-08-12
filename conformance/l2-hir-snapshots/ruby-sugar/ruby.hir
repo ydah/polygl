@@ -1,0 +1,27 @@
+module
+{
+  entry setup() [host]
+  {
+    let total: float = 0;
+    let values: int[] = [1, 2];
+    let __pgl_each_values_0: int[] = values;
+    for __pgl_each_index_1 in 0..array_length(__pgl_each_values_0)
+    {
+      let value: int = __pgl_each_values_0[__pgl_each_index_1];
+      total = (total + value);
+    }
+    for index in 0..2
+    {
+      total = (total + index);
+    }
+    if (not falsy?(false))
+    {
+      total = (total + 100);
+    }
+    else
+    {
+      total = (total + 1);
+    }
+    builtin#10(total, 0, 1, 1);
+  }
+}

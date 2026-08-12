@@ -3,9 +3,12 @@
 
 # Conformance runner
 
-PolyGL evaluates adapters in three independent layers. A `ConformanceCase`
-declares its layer and required `FeatureTag`s; the runner selects it only when
-an adapter advertises every required capability.
+PolyGL evaluates adapters in three independent layers plus GPU ABI checks.
+`conformance/cases.json` is the single case inventory for the Rust smoke runner
+and browser suite. Each entry declares its layers, languages, versioned
+`FeatureTag`s, expected diagnostic, and browser requirement. The manifest is
+rejected when a language lacks a required capability, a diagnostic is not
+registered, a case id is duplicated, or any advertised feature has no case.
 
 ## L1: behavioral rendering
 
@@ -41,6 +44,7 @@ and L2, not L3.
 
 ## Feature tags
 
-`polygl-adapter-api::FeatureTag` is a closed capability vocabulary. Core/Tier1,
-arrays, maps, classes, block sugars, truthiness sugar, and shaders have separate
-tags. Adding a tag requires cases and adapter documentation.
+`polygl-adapter-api::FeatureTag` is a closed, versioned capability vocabulary.
+Core/Tier1, arrays, maps, classes, block sugars, truthiness sugar, and shaders
+have separate v1 tags. Adding or versioning a tag requires at least one
+manifest case and adapter documentation.

@@ -5,39 +5,38 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const RENDER_CASES = [
-  "background",
-  "circle",
-  "lit-cubes",
-  "rectangle",
-  "seeded-random",
-  "triangle",
-];
-const BUILD_CASES = [...RENDER_CASES, "plasma"];
-const LANGUAGES = [
-  ["ruby", "main.rb"],
-  ["php", "main.php"],
-  ["perl", "main.pl"],
-];
 const workspaceRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../..",
 );
 const conformanceRoot = path.join(workspaceRoot, "conformance");
 const executable = path.join(workspaceRoot, "target", "debug", "polygl");
+const manifest = JSON.parse(
+  await readFile(path.join(conformanceRoot, "cases.json"), "utf8"),
+);
+const browserCases = manifest.filter((item) => item.browser);
+const renderCases = browserCases.filter((item) =>
+  item.layers.includes("l1-render"),
+);
+const languageFiles = {
+  ruby: "main.rb",
+  php: "main.php",
+  perl: "main.pl",
+};
 
 let buildRoot;
 
 test.beforeAll(async () => {
   run("cargo", ["build", "--quiet", "-p", "polygl-cli"]);
   buildRoot = await mkdtemp(path.join(tmpdir(), "polygl-conformance-"));
-  for (const name of BUILD_CASES) {
-    for (const [language, file] of LANGUAGES) {
+  for (const item of browserCases) {
+    for (const language of item.languages) {
+      const file = languageFiles[language];
       run(executable, [
         "build",
-        path.join(conformanceRoot, "cases", name, file),
+        path.join(conformanceRoot, "cases", item.id, file),
         "-o",
-        path.join(buildRoot, name, language),
+        path.join(buildRoot, item.id, language),
         "--release",
       ]);
     }
@@ -50,8 +49,9 @@ test.afterAll(async () => {
   }
 });
 
-for (const name of RENDER_CASES) {
-  for (const [language] of LANGUAGES) {
+for (const item of renderCases) {
+  for (const language of item.languages) {
+    const name = item.id;
     test(`${name} in ${language} matches the SwiftShader framebuffer`, async ({
       page,
     }) => {
@@ -122,7 +122,8 @@ for (const name of RENDER_CASES) {
   }
 }
 
-for (const [language] of LANGUAGES) {
+const plasma = browserCases.find((item) => item.id === "plasma");
+for (const language of plasma.languages) {
   test(`plasma shader in ${language} compiles and resolves its material`, async ({
     page,
   }) => {

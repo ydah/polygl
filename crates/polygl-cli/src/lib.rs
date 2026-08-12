@@ -1060,9 +1060,8 @@ end
         .unwrap();
         let javascript = fs::read_to_string(output.join("app.js")).unwrap();
         assert!(
-            javascript.contains(
-                r#"__pglRuntime.structFromEntries([["x", x], ["y", __pglFunction_"#
-            )
+            javascript
+                .contains(r#"__pglRuntime.structFromEntries([["x", x], ["y", __pglFunction_"#)
         );
         assert!(javascript.contains("[\"x\"] ="));
         assert!(javascript.contains("__pglRuntime.circle"));
