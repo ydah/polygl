@@ -1,0 +1,38 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      rust:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /runtime
+    schedule:
+      interval: weekly
+    groups:
+      runtime:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /conformance/browser
+    schedule:
+      interval: weekly
+    groups:
+      browser-conformance:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /spikes/webgl-stability
+    schedule:
+      interval: weekly
+    groups:
+      webgl-stability:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

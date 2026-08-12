@@ -1,0 +1,60 @@
+name: Dependency security
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-policy:
+    name: Rust advisory, license, source, and duplicate policy
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Select pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Install pinned cargo-deny
+        run: cargo install --locked --version 0.20.2 cargo-deny
+
+      - name: Check dependency policy
+        run: cargo deny --locked check advisories bans licenses sources
+
+  osv:
+    name: Rust and npm OSV scan
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install checksum-verified OSV-Scanner 2.5.0
+        shell: bash
+        run: |
+          curl --fail --location --silent --show-error \
+            --output osv-scanner \
+            https://github.com/google/osv-scanner/releases/download/v2.5.0/osv-scanner_linux_amd64
+          echo "edcfc41d257db36148f065055655fe3fcfc434b0b423ea67468a84c207524e0c  osv-scanner" \
+            | sha256sum --check --strict
+          chmod 0755 osv-scanner
+
+      - name: Scan every committed Rust and npm lockfile
+        run: >-
+          ./osv-scanner scan source
+          --config osv-scanner.toml
+          --lockfile Cargo.lock
+          --lockfile runtime/pnpm-lock.yaml
+          --lockfile conformance/browser/pnpm-lock.yaml
+          --lockfile spikes/webgl-stability/pnpm-lock.yaml
+          --lockfile spikes/ruby-prism/Cargo.lock
+          --lockfile spikes/type-inference/Cargo.lock
+          --lockfile spikes/php-parser/Cargo.lock
+          --lockfile spikes/perl-parser/Cargo.lock

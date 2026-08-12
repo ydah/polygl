@@ -1,0 +1,4 @@
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0436"
+ignoreUntil = 2027-02-12
+reason = "paste is used transitively by pinned mago-syntax during compilation, is absent from shipped binaries, and has no reported vulnerability beyond being unmaintained; re-evaluate before expiry or a Mago upgrade"

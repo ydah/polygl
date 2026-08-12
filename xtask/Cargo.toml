@@ -9,11 +9,11 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-polygl-conformance = { path = "../conformance/runner" }
-polygl-backend-js = { path = "../crates/polygl-backend-js" }
-polygl-backend-glsl = { path = "../crates/polygl-backend-glsl" }
-polygl-core = { path = "../crates/polygl-core" }
-polygl-span = { path = "../crates/polygl-span" }
+polygl-conformance = { path = "../conformance/runner", version = "=0.1.0" }
+polygl-backend-js = { path = "../crates/polygl-backend-js", version = "=0.1.0" }
+polygl-backend-glsl = { path = "../crates/polygl-backend-glsl", version = "=0.1.0" }
+polygl-core = { path = "../crates/polygl-core", version = "=0.1.0" }
+polygl-span = { path = "../crates/polygl-span", version = "=0.1.0" }
 serde_json = "=1.0.151"
 
 [lints]
