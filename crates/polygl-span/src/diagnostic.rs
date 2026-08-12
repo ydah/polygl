@@ -186,6 +186,14 @@ impl Diagnostic {
     }
 
     pub fn render(&self, source: &SourceFile) -> Result<String, RenderError> {
+        self.render_with_color(source, false)
+    }
+
+    pub fn render_with_color(
+        &self,
+        source: &SourceFile,
+        color: bool,
+    ) -> Result<String, RenderError> {
         self.primary_span.validate_for(source)?;
         for label in &self.labels {
             label.span.validate_for(source)?;
@@ -207,7 +215,7 @@ impl Diagnostic {
             .with_message(&self.message)
             .with_config(
                 Config::default()
-                    .with_color(false)
+                    .with_color(color)
                     .with_index_type(IndexType::Byte),
             )
             .with_label(

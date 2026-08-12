@@ -11,16 +11,18 @@ use polygl_adapter_api::{ADAPTER_API_VERSION, LanguageAdapter};
 use polygl_backend_glsl::{GlslArtifacts, SHADER_ABI_VERSION, UniformSource};
 use polygl_backend_js::{BuildMode, RUNTIME_ABI_VERSION, SourceMapMode};
 use polygl_core::{
-    AdapterRegistry, BUILTIN_SCHEMA_VERSION, CompileError, CompileOptions, Compiler,
+    AdapterRegistry, BUILTIN_SCHEMA_VERSION, CompileBudget, CompileError, CompileOptions, Compiler,
 };
 use polygl_hir::HIR_SCHEMA_VERSION;
 use polygl_lir::LIR_SCHEMA_VERSION;
 use polygl_span::{Diagnostics, SourceFile, SourceId};
 
 mod artifact;
+mod diagnostic_output;
 mod serve;
 
 use artifact::{ArtifactFile, prepare_assets, publish};
+use diagnostic_output::DiagnosticFormat;
 
 const RUNTIME_BUNDLE: &[u8] = include_bytes!("../assets/runtime.js");
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -58,12 +60,41 @@ const INDEX_HTML: &str = r#"<!doctype html>
 #[derive(Debug)]
 pub struct CliError {
     message: String,
+    kind: CliErrorKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CliErrorKind {
+    Other,
+    Usage,
+    Parse,
+    Compile,
+    Io,
+    Internal,
 }
 
 impl CliError {
     fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            kind: CliErrorKind::Other,
+        }
+    }
+
+    fn with_kind(mut self, kind: CliErrorKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    #[must_use]
+    pub const fn exit_code(&self) -> u8 {
+        match self.kind {
+            CliErrorKind::Other => 1,
+            CliErrorKind::Usage => 2,
+            CliErrorKind::Parse => 3,
+            CliErrorKind::Compile => 4,
+            CliErrorKind::Io => 5,
+            CliErrorKind::Internal => 70,
         }
     }
 }
@@ -85,6 +116,7 @@ enum Command {
     },
     Check {
         source: PathBuf,
+        diagnostic_options: DiagnosticOptions,
     },
     Serve {
         source: PathBuf,
@@ -94,13 +126,93 @@ enum Command {
     DumpHir {
         source: PathBuf,
     },
-    Languages,
+    Explain {
+        code: polygl_span::DiagnosticCode,
+        format: DiagnosticFormat,
+    },
+    Languages {
+        json: bool,
+    },
     NewAdapter {
         language: String,
         output: PathBuf,
     },
     Version,
     Help,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct DiagnosticOptions {
+    format: DiagnosticFormat,
+    color: ColorChoice,
+    color_supported: bool,
+    warning_policy: WarningPolicy,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum ColorChoice {
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+impl DiagnosticOptions {
+    const fn color_enabled(&self) -> bool {
+        match self.color {
+            ColorChoice::Auto => self.color_supported,
+            ColorChoice::Always => true,
+            ColorChoice::Never => false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct WarningPolicy {
+    deny_warnings: bool,
+    max_warnings: Option<usize>,
+    allowed: Vec<WarningSelector>,
+    denied: Vec<WarningSelector>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WarningSelector(String);
+
+impl WarningSelector {
+    fn parse(value: &str) -> Result<Self, CliError> {
+        let is_exact = value.len() == 5
+            && value.starts_with('W')
+            && value[1..].bytes().all(|byte| byte.is_ascii_digit())
+            && polygl_span::DiagnosticCode::parse(value)
+                .is_some_and(|code| code.metadata().severity == polygl_span::Severity::Warning);
+        let is_family = value.len() == 5
+            && value.starts_with('W')
+            && value[1..3].bytes().all(|byte| byte.is_ascii_digit())
+            && value.ends_with("xx");
+        if !is_exact && !is_family {
+            return Err(CliError::new(format!(
+                "warning selector `{value}` must be a registered warning code or a family such as W04xx"
+            )));
+        }
+        Ok(Self(if is_family {
+            value[..3].to_owned()
+        } else {
+            value.to_owned()
+        }))
+    }
+
+    fn matches(&self, code: polygl_span::DiagnosticCode) -> bool {
+        code.as_str().starts_with(&self.0)
+    }
+}
+
+impl WarningPolicy {
+    fn is_denied(&self, code: polygl_span::DiagnosticCode) -> bool {
+        if self.allowed.iter().any(|selector| selector.matches(code)) {
+            return false;
+        }
+        self.deny_warnings || self.denied.iter().any(|selector| selector.matches(code))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,6 +244,7 @@ impl BuildOptions {
             mode: self.mode,
             source_map: self.source_map,
             sources_content: self.sources_content,
+            budget: CompileBudget::standard(),
         }
     }
 }
@@ -140,20 +253,34 @@ pub fn run(
     args: impl IntoIterator<Item = OsString>,
     output: &mut dyn Write,
 ) -> Result<(), CliError> {
-    match parse_args(args)? {
+    run_with_color_support(args, output, false)
+}
+
+pub fn run_with_color_support(
+    args: impl IntoIterator<Item = OsString>,
+    output: &mut dyn Write,
+    color_supported: bool,
+) -> Result<(), CliError> {
+    match parse_args(args).map_err(|error| error.with_kind(CliErrorKind::Usage))? {
         Command::Build {
             source,
             output: destination,
             options,
         } => build(&source, &destination, options, output).map(|_| ()),
-        Command::Check { source } => {
+        Command::Check {
+            source,
+            mut diagnostic_options,
+        } => {
+            diagnostic_options.color_supported = color_supported;
             let source_file = load_source(&source)?;
             let compiler = compiler();
             let adapter = adapter_for_source(compiler.adapters(), &source)?;
             let compiled = compiler
                 .compile(&source_file, adapter.id(), BuildOptions::check().compiler())
-                .map_err(|error| compilation_error(error, &source_file))?;
-            write_diagnostics(&compiled.warnings, &source_file, output)?;
+                .map_err(|error| {
+                    compilation_error_with_options(error, &source_file, &diagnostic_options)
+                })?;
+            write_diagnostics(&compiled.warnings, &source_file, diagnostic_options, output)?;
             Ok(())
         }
         Command::Serve {
@@ -170,10 +297,11 @@ pub fn run(
                 .map_err(|error| compilation_error(error, &source_file))?
                 .typed;
             output
-                .write_all(polygl_hir::dump(typed.as_hir()).as_bytes())
+                .write_all(polygl_hir::dump(typed.module().as_hir()).as_bytes())
                 .map_err(|error| CliError::new(format!("failed to write HIR dump: {error}")))
         }
-        Command::Languages => write_languages(output),
+        Command::Explain { code, format } => write_explanation(code, format, output),
+        Command::Languages { json } => write_languages(json, output),
         Command::NewAdapter {
             language,
             output: destination,
@@ -194,12 +322,10 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Command, CliEr
     match command.to_str() {
         Some("build") => parse_build(args),
         Some("serve") => parse_serve(args),
-        Some("check") => parse_single_source(args, |source| Command::Check { source }),
+        Some("check") => parse_check(args),
         Some("dump-hir") => parse_single_source(args, |source| Command::DumpHir { source }),
-        Some("languages") => {
-            ensure_empty(args)?;
-            Ok(Command::Languages)
-        }
+        Some("explain") => parse_explain(args),
+        Some("languages") => parse_languages(args),
         Some("new-adapter") => parse_new_adapter(args),
         Some("--version" | "-V") => {
             ensure_empty(args)?;
@@ -215,6 +341,153 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Command, CliEr
         ))),
         None => Err(CliError::new("command name is not valid UTF-8")),
     }
+}
+
+fn parse_check(mut args: impl Iterator<Item = OsString>) -> Result<Command, CliError> {
+    let source = required_path(args.next(), "check requires a source file")?;
+    let diagnostic_options = parse_diagnostic_options(args)?;
+    Ok(Command::Check {
+        source,
+        diagnostic_options,
+    })
+}
+
+fn parse_diagnostic_options(
+    mut args: impl Iterator<Item = OsString>,
+) -> Result<DiagnosticOptions, CliError> {
+    let mut options = DiagnosticOptions::default();
+    let mut selected_format = false;
+    let mut selected_color = false;
+    while let Some(argument) = args.next() {
+        match argument.to_str() {
+            Some("--diagnostic-format") if !selected_format => {
+                let value = args.next().ok_or_else(|| {
+                    CliError::new("diagnostic format requires human, json, sarif, or lsp")
+                })?;
+                options.format = parse_diagnostic_format(&value)?;
+                selected_format = true;
+            }
+            Some("--diagnostic-format") => {
+                return Err(CliError::new(
+                    "diagnostic format may only be specified once",
+                ));
+            }
+            Some("--color") if !selected_color => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| CliError::new("color requires auto, always, or never"))?;
+                options.color = match value.to_str() {
+                    Some("auto") => ColorChoice::Auto,
+                    Some("always") => ColorChoice::Always,
+                    Some("never") => ColorChoice::Never,
+                    Some(other) => {
+                        return Err(CliError::new(format!(
+                            "unknown color mode `{other}`; expected auto, always, or never"
+                        )));
+                    }
+                    None => return Err(CliError::new("color mode is not valid UTF-8")),
+                };
+                selected_color = true;
+            }
+            Some("--color") => {
+                return Err(CliError::new("color mode may only be specified once"));
+            }
+            Some("--deny-warnings") if !options.warning_policy.deny_warnings => {
+                options.warning_policy.deny_warnings = true;
+            }
+            Some("--deny-warnings") => {
+                return Err(CliError::new("deny warnings may only be specified once"));
+            }
+            Some("--max-warnings") if options.warning_policy.max_warnings.is_none() => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| CliError::new("max warnings requires a non-negative number"))?;
+                let value = value
+                    .to_str()
+                    .ok_or_else(|| CliError::new("max warnings is not valid UTF-8"))?;
+                options.warning_policy.max_warnings = Some(value.parse().map_err(|_| {
+                    CliError::new(format!(
+                        "max warnings `{value}` is not a non-negative number"
+                    ))
+                })?);
+            }
+            Some("--max-warnings") => {
+                return Err(CliError::new("max warnings may only be specified once"));
+            }
+            Some("--allow" | "--deny") => {
+                let deny = argument == "--deny";
+                let value = args
+                    .next()
+                    .ok_or_else(|| CliError::new("warning control requires a warning selector"))?;
+                let value = value
+                    .to_str()
+                    .ok_or_else(|| CliError::new("warning selector is not valid UTF-8"))?;
+                let selector = WarningSelector::parse(value)?;
+                if deny {
+                    options.warning_policy.denied.push(selector);
+                } else {
+                    options.warning_policy.allowed.push(selector);
+                }
+            }
+            Some(other) => return Err(CliError::new(format!("unknown check option `{other}`"))),
+            None => return Err(CliError::new("check option is not valid UTF-8")),
+        }
+    }
+    Ok(options)
+}
+
+fn parse_diagnostic_format(value: &OsString) -> Result<DiagnosticFormat, CliError> {
+    match value.to_str() {
+        Some("human") => Ok(DiagnosticFormat::Human),
+        Some("json") => Ok(DiagnosticFormat::Json),
+        Some("sarif") => Ok(DiagnosticFormat::Sarif),
+        Some("lsp") => Ok(DiagnosticFormat::Lsp),
+        Some(other) => Err(CliError::new(format!(
+            "unknown diagnostic format `{other}`; expected human, json, sarif, or lsp"
+        ))),
+        None => Err(CliError::new("diagnostic format is not valid UTF-8")),
+    }
+}
+
+fn parse_explain(mut args: impl Iterator<Item = OsString>) -> Result<Command, CliError> {
+    let code = args
+        .next()
+        .ok_or_else(|| CliError::new("explain requires a diagnostic code"))?
+        .into_string()
+        .map_err(|_| CliError::new("diagnostic code is not valid UTF-8"))?;
+    let code = polygl_span::DiagnosticCode::parse(&code)
+        .ok_or_else(|| CliError::new(format!("unknown diagnostic code `{code}`")))?;
+    let mut format = DiagnosticFormat::Human;
+    if let Some(argument) = args.next() {
+        if argument != "--diagnostic-format" {
+            return Err(CliError::new(format!(
+                "unknown explain option `{}`",
+                argument.to_string_lossy()
+            )));
+        }
+        format = parse_diagnostic_format(
+            &args
+                .next()
+                .ok_or_else(|| CliError::new("diagnostic format requires a value"))?,
+        )?;
+    }
+    ensure_empty(args)?;
+    Ok(Command::Explain { code, format })
+}
+
+fn parse_languages(mut args: impl Iterator<Item = OsString>) -> Result<Command, CliError> {
+    let json = match args.next() {
+        None => false,
+        Some(argument) if argument == "--json" => true,
+        Some(argument) => {
+            return Err(CliError::new(format!(
+                "unknown languages option `{}`",
+                argument.to_string_lossy()
+            )));
+        }
+    };
+    ensure_empty(args)?;
+    Ok(Command::Languages { json })
 }
 
 fn parse_new_adapter(mut args: impl Iterator<Item = OsString>) -> Result<Command, CliError> {
@@ -391,7 +664,12 @@ fn build(
         .compile(&source, adapter.id(), options.compiler())
         .map_err(|error| compilation_error(error, &source))?;
     let assets = prepare_assets(source_path, &compiled.assets)?;
-    write_diagnostics(&compiled.warnings, &source, messages)?;
+    write_diagnostics(
+        &compiled.warnings,
+        &source,
+        DiagnosticOptions::default(),
+        messages,
+    )?;
 
     let shader_module = render_shader_module(&compiled.shaders, &source, options.mode)?;
     let mut files = vec![
@@ -514,6 +792,7 @@ fn load_source(source_path: &Path) -> Result<SourceFile, CliError> {
             "failed to read source {}: {error}",
             source_path.display()
         ))
+        .with_kind(CliErrorKind::Io)
     })?;
     let source_name = normalized_source_name(source_path)?;
     SourceFile::from_bytes(SourceId::new(0), source_name, bytes)
@@ -667,27 +946,110 @@ fn normalized_source_name(source_path: &Path) -> Result<String, CliError> {
 }
 
 fn compilation_error(error: CompileError, source: &SourceFile) -> CliError {
-    CliError::new(error.render(source))
+    let kind = compile_error_kind(&error);
+    CliError::new(error.render(source)).with_kind(kind)
+}
+
+fn compilation_error_with_options(
+    error: CompileError,
+    source: &SourceFile,
+    options: &DiagnosticOptions,
+) -> CliError {
+    let Some(diagnostics) = error.diagnostics() else {
+        let kind = compile_error_kind(&error);
+        return CliError::new(error.to_string()).with_kind(kind);
+    };
+    match diagnostic_output::render(diagnostics, source, options.format, options.color_enabled()) {
+        Ok(rendered) => CliError::new(rendered).with_kind(compile_error_kind(&error)),
+        Err(render_error) => CliError::new(format!(
+            "failed to render compilation diagnostics: {render_error}"
+        ))
+        .with_kind(CliErrorKind::Internal),
+    }
+}
+
+fn compile_error_kind(error: &CompileError) -> CliErrorKind {
+    if error.diagnostics().is_some_and(|diagnostics| {
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == polygl_span::DiagnosticCode::E0100)
+    }) {
+        return CliErrorKind::Parse;
+    }
+    match error {
+        CompileError::Frontend(_) | CompileError::Split(_) => CliErrorKind::Compile,
+        CompileError::Configuration(_) | CompileError::UnsupportedLanguage(_) => {
+            CliErrorKind::Usage
+        }
+        CompileError::JavaScript(_)
+        | CompileError::Glsl(_)
+        | CompileError::InvalidDiagnostics { .. } => CliErrorKind::Internal,
+    }
 }
 
 fn write_diagnostics(
     diagnostics: &Diagnostics,
     source: &SourceFile,
+    options: DiagnosticOptions,
     output: &mut dyn Write,
 ) -> Result<(), CliError> {
     if diagnostics.is_empty() {
         return Ok(());
     }
-    let rendered = diagnostics
-        .render(source)
-        .map_err(|error| CliError::new(format!("failed to render diagnostics: {error}")))?;
+    let rendered =
+        diagnostic_output::render(diagnostics, source, options.format, options.color_enabled())
+            .map_err(|error| CliError::new(format!("failed to render diagnostics: {error}")))?;
     output
         .write_all(rendered.as_bytes())
-        .map_err(|error| CliError::new(format!("failed to write diagnostics: {error}")))
+        .map_err(|error| CliError::new(format!("failed to write diagnostics: {error}")))?;
+    let warning_count = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == polygl_span::Severity::Warning)
+        .count();
+    let denied_count = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.severity == polygl_span::Severity::Warning
+                && options.warning_policy.is_denied(diagnostic.code)
+        })
+        .count();
+    if denied_count > 0 {
+        return Err(CliError::new(format!(
+            "compilation produced {denied_count} denied warning(s)"
+        ))
+        .with_kind(CliErrorKind::Compile));
+    }
+    if let Some(maximum) = options.warning_policy.max_warnings
+        && warning_count > maximum
+    {
+        return Err(CliError::new(format!(
+            "compilation produced {warning_count} warning(s), exceeding --max-warnings {maximum}"
+        ))
+        .with_kind(CliErrorKind::Compile));
+    }
+    Ok(())
 }
 
-fn write_languages(output: &mut dyn Write) -> Result<(), CliError> {
+fn write_languages(json: bool, output: &mut dyn Write) -> Result<(), CliError> {
     let compiler = compiler();
+    if json {
+        let languages = compiler
+            .adapters()
+            .iter()
+            .map(|adapter| {
+                serde_json::json!({
+                    "id": adapter.id(),
+                    "extensions": adapter.file_extensions(),
+                    "features": adapter.capabilities().iter().map(|feature| feature.as_str()).collect::<Vec<_>>(),
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::to_writer_pretty(&mut *output, &languages)
+            .map_err(|error| CliError::new(format!("failed to write languages JSON: {error}")))?;
+        writeln!(output)
+            .map_err(|error| CliError::new(format!("failed to write languages JSON: {error}")))?;
+        return Ok(());
+    }
     for adapter in compiler.adapters().iter() {
         writeln!(
             output,
@@ -703,6 +1065,37 @@ fn write_languages(output: &mut dyn Write) -> Result<(), CliError> {
         .map_err(|error| CliError::new(format!("failed to write language list: {error}")))?;
     }
     Ok(())
+}
+
+fn write_explanation(
+    code: polygl_span::DiagnosticCode,
+    format: DiagnosticFormat,
+    output: &mut dyn Write,
+) -> Result<(), CliError> {
+    let metadata = code.metadata();
+    if format == DiagnosticFormat::Human {
+        return writeln!(
+            output,
+            "{code}: {}\n\n{}\n\nproducer: {}\nfixability: {:?}\nintroduced: {}",
+            metadata.title,
+            metadata.description,
+            metadata.producer,
+            metadata.fixability,
+            metadata.introduced,
+        )
+        .map_err(|error| CliError::new(format!("failed to write explanation: {error}")));
+    }
+    let value = serde_json::json!({
+        "code": code.as_str(),
+        "title": metadata.title,
+        "description": metadata.description,
+        "producer": metadata.producer,
+        "fixability": format!("{:?}", metadata.fixability),
+        "introduced": metadata.introduced,
+    });
+    serde_json::to_writer_pretty(&mut *output, &value)
+        .map_err(|error| CliError::new(format!("failed to write explanation: {error}")))?;
+    writeln!(output).map_err(|error| CliError::new(format!("failed to write explanation: {error}")))
 }
 
 fn new_adapter(language: &str, destination: &Path, output: &mut dyn Write) -> Result<(), CliError> {
@@ -763,9 +1156,10 @@ fn usage() -> String {
 usage:
   polygl build <source.rb|source.php|source.pl> [-o <directory>] [--debug | --release] [--source-map <none|external|inline>] [--sources-content]
   polygl serve <source.rb|source.php|source.pl> [--port <port>] [--watch]
-  polygl check <source.rb|source.php|source.pl>
+  polygl check <source.rb|source.php|source.pl> [--diagnostic-format <human|json|sarif|lsp>] [--deny-warnings] [--allow <Wcode|WxxFamily>] [--deny <Wcode|WxxFamily>] [--max-warnings <count>]
   polygl dump-hir <source.rb|source.php|source.pl>
-  polygl languages
+  polygl explain <diagnostic-code> [--diagnostic-format <human|json>]
+  polygl languages [--json]
   polygl new-adapter <language> [-o <directory>]
   polygl --version
 "
@@ -778,7 +1172,10 @@ mod tests {
     use std::fs;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{BuildMode, BuildOptions, Command, SourceMapMode, VERSION, parse_args, run};
+    use super::{
+        BuildMode, BuildOptions, CliError, CliErrorKind, Command, SourceMapMode, VERSION,
+        parse_args, run,
+    };
 
     static NEXT_TEMPORARY: AtomicUsize = AtomicUsize::new(0);
 
@@ -863,6 +1260,60 @@ mod tests {
     }
 
     #[test]
+    fn classifies_usage_parse_compile_io_and_internal_failures() {
+        assert_eq!(
+            run(arguments(["unknown"]), &mut Vec::new())
+                .unwrap_err()
+                .exit_code(),
+            2
+        );
+        assert_eq!(
+            run(
+                arguments(["check", "definitely-missing.rb"]),
+                &mut Vec::new()
+            )
+            .unwrap_err()
+            .exit_code(),
+            5
+        );
+
+        let temporary = temporary_directory();
+        let invalid_syntax = temporary.join("syntax.rb");
+        fs::write(&invalid_syntax, "def").unwrap();
+        assert_eq!(
+            run(
+                arguments(["check", invalid_syntax.to_str().unwrap()]),
+                &mut Vec::new(),
+            )
+            .unwrap_err()
+            .exit_code(),
+            3
+        );
+        let invalid_type = temporary.join("type.rb");
+        fs::write(
+            &invalid_type,
+            "def setup\n  value = 1\n  value = \"text\"\nend\n",
+        )
+        .unwrap();
+        assert_eq!(
+            run(
+                arguments(["check", invalid_type.to_str().unwrap()]),
+                &mut Vec::new(),
+            )
+            .unwrap_err()
+            .exit_code(),
+            4
+        );
+        assert_eq!(
+            CliError::new("internal")
+                .with_kind(CliErrorKind::Internal)
+                .exit_code(),
+            70
+        );
+        fs::remove_dir_all(temporary).unwrap();
+    }
+
+    #[test]
     fn lists_languages_and_scaffolds_an_adapter_without_overwriting() {
         let mut languages = Vec::new();
         run(arguments(["languages"]), &mut languages).unwrap();
@@ -870,6 +1321,11 @@ mod tests {
             String::from_utf8(languages).unwrap(),
             "ruby\t.rb\nphp\t.php\nperl\t.pl\n"
         );
+        let mut languages_json = Vec::new();
+        run(arguments(["languages", "--json"]), &mut languages_json).unwrap();
+        let languages: serde_json::Value = serde_json::from_slice(&languages_json).unwrap();
+        assert_eq!(languages[0]["id"], "ruby");
+        assert_eq!(languages[0]["extensions"][0], "rb");
 
         let temporary = temporary_directory();
         let adapter = temporary.join("polygl-adapter-toy");
@@ -1367,6 +1823,48 @@ sub setup {
         assert!(error.contains("invalid.rb"));
         assert!(error.contains("regular `def name` declaration"));
 
+        let json_error = run(
+            arguments([
+                "check",
+                invalid.to_str().unwrap(),
+                "--diagnostic-format",
+                "json",
+            ]),
+            &mut Vec::new(),
+        )
+        .unwrap_err()
+        .to_string();
+        let json: serde_json::Value = serde_json::from_str(&json_error).unwrap();
+        assert_eq!(json["diagnostics"][0]["code"], "E0200");
+        assert_eq!(
+            json["diagnostics"][0]["fixes"][0]["applicability"],
+            "maybe-incorrect"
+        );
+
+        let colored = run(
+            arguments(["check", invalid.to_str().unwrap(), "--color", "always"]),
+            &mut Vec::new(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(colored.contains("\u{1b}["));
+        assert!(!json_error.contains("\u{1b}["));
+
+        let sarif_error = run(
+            arguments([
+                "check",
+                invalid.to_str().unwrap(),
+                "--diagnostic-format",
+                "sarif",
+            ]),
+            &mut Vec::new(),
+        )
+        .unwrap_err()
+        .to_string();
+        let sarif: serde_json::Value = serde_json::from_str(&sarif_error).unwrap();
+        assert_eq!(sarif["version"], "2.1.0");
+        assert_eq!(sarif["runs"][0]["results"][0]["ruleId"], "E0200");
+
         let missing_shader = temporary.join("missing_shader.rb");
         fs::write(
             &missing_shader,
@@ -1407,6 +1905,37 @@ sub setup {
         )
         .unwrap();
         assert!(String::from_utf8(warnings).unwrap().contains("W0401"));
+        let denied = run(
+            arguments(["check", warning.to_str().unwrap(), "--deny", "W04xx"]),
+            &mut Vec::new(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(denied.contains("1 denied warning"));
+        run(
+            arguments([
+                "check",
+                warning.to_str().unwrap(),
+                "--deny-warnings",
+                "--allow",
+                "W0401",
+            ]),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let too_many = run(
+            arguments(["check", warning.to_str().unwrap(), "--max-warnings", "0"]),
+            &mut Vec::new(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(too_many.contains("exceeding --max-warnings 0"));
+
+        let mut explanation = Vec::new();
+        run(arguments(["explain", "E0406"]), &mut explanation).unwrap();
+        let explanation = String::from_utf8(explanation).unwrap();
+        assert!(explanation.contains("unsafe GPU integer divisor"));
+        assert!(explanation.contains("provably nonzero"));
         fs::remove_dir_all(temporary).unwrap();
     }
 

@@ -72,10 +72,18 @@ impl Diagnostics {
     }
 
     pub fn render(&self, source: &SourceFile) -> Result<String, RenderError> {
+        self.render_with_color(source, false)
+    }
+
+    pub fn render_with_color(
+        &self,
+        source: &SourceFile,
+        color: bool,
+    ) -> Result<String, RenderError> {
         let rendered = self
             .entries
             .iter()
-            .map(|diagnostic| diagnostic.render(source))
+            .map(|diagnostic| diagnostic.render_with_color(source, color))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rendered.join("\n"))
     }
