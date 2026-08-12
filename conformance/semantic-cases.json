@@ -1,0 +1,104 @@
+[
+  {
+    "id": "ruby-numeric-evaluation",
+    "language": "ruby",
+    "source": "semantic-cases/ruby/numeric-evaluation.rb",
+    "outcome": {
+      "status": "events",
+      "value": [
+        ["background", -2147483648, 2147483647, 0],
+        ["background", -3, -3, 2],
+        ["background", 2, -2, -1],
+        ["background", 1, 0, 0],
+        ["background", 2, 0, 0],
+        ["background", 3, 0, 0],
+        ["background", "NaN", "+Infinity", "-Infinity"],
+        ["background", "-0", -3, -2]
+      ]
+    }
+  },
+  {
+    "id": "php-numeric-evaluation",
+    "language": "php",
+    "source": "semantic-cases/php/numeric-evaluation.php",
+    "outcome": {
+      "status": "events",
+      "value": [
+        ["background", -2147483648, 2147483647, 0],
+        ["background", -2.3333333333333335, -2.3333333333333335, 2.3333333333333335],
+        ["background", -1, 1, -1],
+        ["background", 1, 0, 0],
+        ["background", 2, 0, 0],
+        ["background", 3, 0, 0],
+        ["background", "NaN", "+Infinity", "-Infinity"],
+        ["background", "-0", -3, -2]
+      ]
+    }
+  },
+  {
+    "id": "perl-numeric-evaluation",
+    "language": "perl",
+    "source": "semantic-cases/perl/numeric-evaluation.pl",
+    "outcome": {
+      "status": "events",
+      "value": [
+        ["background", -2147483648, 2147483647, 0],
+        ["background", -2.3333333333333335, -2.3333333333333335, 2.3333333333333335],
+        ["background", -1, 1, -1],
+        ["background", 1, 0, 0],
+        ["background", 2, 0, 0],
+        ["background", 3, 0, 0],
+        ["background", "NaN", "+Infinity", "-Infinity"],
+        ["background", "-0", -3, -2]
+      ]
+    }
+  },
+  {
+    "id": "ruby-collections-loops",
+    "language": "ruby",
+    "source": "semantic-cases/ruby/collections-loops.rb",
+    "outcome": {
+      "status": "events",
+      "value": [["background", 9, 2, 17], ["background", 3, 4, 5]]
+    }
+  },
+  {
+    "id": "php-collections-loops",
+    "language": "php",
+    "source": "semantic-cases/php/collections-loops.php",
+    "outcome": {
+      "status": "events",
+      "value": [["background", 9, 2, 17], ["background", 3, 4, 5]]
+    }
+  },
+  {
+    "id": "perl-collections-loops",
+    "language": "perl",
+    "source": "semantic-cases/perl/collections-loops.pl",
+    "outcome": {
+      "status": "events",
+      "value": [["background", 9, 2, 17], ["background", 3, 4, 5]]
+    }
+  },
+  {
+    "id": "ruby-array-bounds",
+    "language": "ruby",
+    "source": "semantic-cases/ruby/array-bounds.rb",
+    "debug": true,
+    "outcome": { "status": "execution-error", "contains": "out of bounds" }
+  },
+  {
+    "id": "php-array-bounds",
+    "language": "php",
+    "source": "semantic-cases/php/array-bounds.php",
+    "debug": true,
+    "outcome": { "status": "execution-error", "contains": "out of bounds" }
+  },
+  {
+    "id": "perl-array-bounds",
+    "language": "perl",
+    "source": "semantic-cases/perl/array-bounds.pl",
+    "debug": true,
+    "outcome": { "status": "execution-error", "contains": "out of bounds" }
+  }
+]

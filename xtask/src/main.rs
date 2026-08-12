@@ -160,6 +160,7 @@ fn check_conformance_layout() -> io::Result<()> {
     }
     polygl_conformance::verify_smoke(&root).map_err(io::Error::other)?;
     polygl_conformance::verify_adapter_corpus(&root).map_err(io::Error::other)?;
+    polygl_conformance::verify_host_semantics(&root).map_err(io::Error::other)?;
     Ok(())
 }
 

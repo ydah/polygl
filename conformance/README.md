@@ -22,6 +22,15 @@ runner validates all primary, label, and suggestion spans against the original
 source, requires multiple E0100 diagnostics for independent syntax failures,
 and confirms that NFC and NFD source identifiers remain distinct.
 
+`semantic-cases.json` is the executable Host semantics inventory. Each fixture
+is compiled in Rust, imported by a fresh Node process, and run against a small
+observable implementation of the canonical runtime operations. Exact event or
+error expectations cover i32 wrapping, floating-point special values, source
+division and remainder rules, left-to-right and short-circuit evaluation,
+array aliasing and bounds, map keys, structured loops, and debug checks. This
+layer intentionally does not reuse a source-language interpreter as its oracle:
+Common Core HIR semantics are normative after adapter lowering.
+
 `pnpm --dir conformance/browser test` rebuilds every L1 case in Ruby, PHP, and Perl
 with the CLI and compares both real WebGL2 framebuffers against the same bytes
 under pinned Chromium + SwiftShader. It

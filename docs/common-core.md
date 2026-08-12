@@ -121,7 +121,7 @@ Adapters must make the following differences explicit while lowering:
 |---|---|---|---|
 | Integer operands to `/` | `DivInt`; quotient rounds toward negative infinity | `DivFloat` | `DivFloat` |
 | A `/` operand is `float` | `DivFloat` | `DivFloat` | `DivFloat` |
-| `%` remainder direction | `RemFloor` (sign follows divisor) | `RemTrunc` (sign follows dividend) | `RemFloor` (sign follows divisor) |
+| `%` remainder direction | `RemFloor` (sign follows divisor) | `RemTrunc` (sign follows dividend) | `RemTrunc` (sign follows dividend) |
 | Non-`bool` condition | Expand to “not nil and not false” | E0301 plus an explicit-comparison suggestion | E0301 plus an explicit-comparison suggestion |
 | String concatenation | `+` when both operands are `str` | `.` | `.` |
 | Absence value | `nil` → `Option<T>` | `null` → `Option<T>` | `undef` → `Option<T>` |
