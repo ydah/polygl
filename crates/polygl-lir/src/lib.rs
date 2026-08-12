@@ -5,11 +5,13 @@ pub const LIR_SCHEMA_VERSION: u32 = 1;
 
 mod domain;
 mod expr;
+mod graph;
 mod lower;
 mod module;
 mod optimize;
 mod split;
 mod stmt;
+mod symbol;
 
 pub use expr::{
     BinaryOp, CallTarget, EffectSet, Expr, ExprKind, FieldInit, Literal, MapEntry, UnaryOp,
@@ -20,6 +22,7 @@ pub use module::{
 };
 pub use split::{AssetReference, SplitProgram, split};
 pub use stmt::{Block, Place, PlaceKind, Range, Statement, StatementKind};
+pub use symbol::SymbolId;
 
 #[cfg(test)]
 mod tests;
