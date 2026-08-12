@@ -4,6 +4,7 @@ use std::hash::{Hash, Hasher};
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, RwLock};
@@ -58,9 +59,11 @@ const DEV_CLIENT: &str = r##"<script>
   if (initial !== null) {
     showError(initial.textContent);
   }
+  let retry = 0;
   const connect = () => {
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
     const socket = new WebSocket(`${protocol}//${location.host}/__polygl_ws`);
+    socket.addEventListener("open", () => { retry = 0; });
     socket.addEventListener("message", (event) => {
       const message = JSON.parse(event.data);
       if (message.type === "reload") {
@@ -69,7 +72,11 @@ const DEV_CLIENT: &str = r##"<script>
         showError(message.message);
       }
     });
-    socket.addEventListener("close", () => setTimeout(connect, 300));
+    socket.addEventListener("close", () => {
+      const base = Math.min(10_000, 250 * (2 ** Math.min(retry, 6)));
+      retry += 1;
+      setTimeout(connect, base + Math.random() * base * 0.25);
+    });
   };
   connect();
 })();
@@ -143,6 +150,7 @@ pub(crate) fn serve(
     source: &Path,
     watch: bool,
     port: u16,
+    open: bool,
     messages: &mut dyn Write,
 ) -> Result<(), CliError> {
     // Capture before compiling. If the file changes during compilation, the
@@ -169,6 +177,9 @@ pub(crate) fn serve(
         .map_err(|error| CliError::new(format!("failed to read server address: {error}")))?;
     writeln!(messages, "serving http://{actual_address}")
         .map_err(|error| CliError::new(format!("failed to write server address: {error}")))?;
+    if open {
+        open_browser(&format!("http://{actual_address}"))?;
+    }
     if initial_error.is_some() {
         writeln!(messages, "waiting for a successful rebuild")
             .map_err(|error| CliError::new(format!("failed to write server status: {error}")))?;
@@ -254,6 +265,18 @@ pub(crate) fn serve(
     }
 }
 
+fn open_browser(url: &str) -> Result<(), CliError> {
+    #[cfg(target_os = "macos")]
+    let child = Command::new("open").arg(url).spawn();
+    #[cfg(target_os = "windows")]
+    let child = Command::new("cmd").args(["/C", "start", "", url]).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let child = Command::new("xdg-open").arg(url).spawn();
+    child
+        .map(|_| ())
+        .map_err(|error| CliError::new(format!("failed to open development server: {error}")))
+}
+
 fn accept_pending(listener: &TcpListener, state: &Arc<ServerState>) -> Result<(), CliError> {
     loop {
         match listener.accept() {
@@ -318,7 +341,7 @@ fn handle_connection(mut stream: TcpStream, state: &Arc<ServerState>) -> io::Res
             b"bad request",
         );
     };
-    if method != "GET" {
+    if !matches!(method, "GET" | "HEAD") {
         return respond(
             &mut stream,
             405,
@@ -326,18 +349,42 @@ fn handle_connection(mut stream: TcpStream, state: &Arc<ServerState>) -> io::Res
             b"method not allowed",
         );
     }
+    let head = method == "HEAD";
     if !valid_http_host(&request, state.port) {
-        return respond(
+        return respond_for_method(
             &mut stream,
             403,
             "text/plain; charset=utf-8",
             b"invalid host",
+            head,
         );
     }
     if target == "/__polygl_ws" {
+        if method != "GET" {
+            return respond_for_method(
+                &mut stream,
+                405,
+                "text/plain; charset=utf-8",
+                b"method not allowed",
+                head,
+            );
+        }
         return upgrade_websocket(stream, &request, state);
     }
-    serve_static(&mut stream, &state.active, &state.error, target)
+    serve_static(
+        &mut stream,
+        &state.active,
+        &state.error,
+        target,
+        head,
+        request_header(&request, "if-none-match"),
+    )
+}
+
+fn request_header<'request>(request: &'request [u8], name: &str) -> Option<&'request str> {
+    std::str::from_utf8(request)
+        .ok()
+        .and_then(|request| header_value(request, name))
 }
 
 fn read_request(stream: &mut impl Read) -> io::Result<Vec<u8>> {
@@ -586,9 +633,11 @@ fn serve_static(
     active: &ActiveGeneration,
     current_error: &CurrentError,
     target: &str,
+    head: bool,
+    if_none_match: Option<&str>,
 ) -> io::Result<()> {
     let Some(relative) = safe_relative_path(target) else {
-        return respond(stream, 403, "text/plain; charset=utf-8", b"forbidden");
+        return respond_for_method(stream, 403, "text/plain; charset=utf-8", b"forbidden", head);
     };
     let generation = active
         .read()
@@ -606,11 +655,17 @@ fn serve_static(
             "<!doctype html><html><head><meta charset=\"utf-8\"><title>PolyGL build error</title></head><body></body></html>".to_owned()
         };
         let html = decorate_index(html, error.as_deref());
-        return respond(stream, 200, "text/html; charset=utf-8", html.as_bytes());
+        return respond_static(
+            stream,
+            "text/html; charset=utf-8",
+            html.as_bytes(),
+            head,
+            if_none_match,
+        );
     }
 
     let Some(generation) = generation else {
-        return respond(stream, 404, "text/plain; charset=utf-8", b"not found");
+        return respond_for_method(stream, 404, "text/plain; charset=utf-8", b"not found", head);
     };
     let requested = generation.root.join(relative);
     let requested = if requested.is_dir() {
@@ -622,11 +677,23 @@ fn serve_static(
     let canonical = match requested.canonicalize() {
         Ok(path) if path.starts_with(&canonical_root) => path,
         _ => {
-            return respond(stream, 404, "text/plain; charset=utf-8", b"not found");
+            return respond_for_method(
+                stream,
+                404,
+                "text/plain; charset=utf-8",
+                b"not found",
+                head,
+            );
         }
     };
     let contents = fs::read(&canonical)?;
-    respond(stream, 200, content_type(&canonical), &contents)
+    respond_static(
+        stream,
+        content_type(&canonical),
+        &contents,
+        head,
+        if_none_match,
+    )
 }
 
 fn safe_relative_path(target: &str) -> Option<PathBuf> {
@@ -680,8 +747,19 @@ const fn hex_value(byte: u8) -> Option<u8> {
 }
 
 fn respond(stream: &mut TcpStream, status: u16, content_type: &str, body: &[u8]) -> io::Result<()> {
+    respond_for_method(stream, status, content_type, body, false)
+}
+
+fn respond_for_method(
+    stream: &mut TcpStream,
+    status: u16,
+    content_type: &str,
+    body: &[u8],
+    head: bool,
+) -> io::Result<()> {
     let reason = match status {
         200 => "OK",
+        304 => "Not Modified",
         400 => "Bad Request",
         403 => "Forbidden",
         404 => "Not Found",
@@ -698,7 +776,50 @@ fn respond(stream: &mut TcpStream, status: u16, content_type: &str, body: &[u8])
          Connection: close\r\n\r\n",
         body.len()
     )?;
-    stream.write_all(body)
+    if !head {
+        stream.write_all(body)?;
+    }
+    Ok(())
+}
+
+fn respond_static(
+    stream: &mut TcpStream,
+    content_type: &str,
+    body: &[u8],
+    head: bool,
+    if_none_match: Option<&str>,
+) -> io::Result<()> {
+    let etag = static_etag(body);
+    let not_modified = if_none_match.is_some_and(|value| etag_matches(value, &etag));
+    let (status, reason, length) = if not_modified {
+        (304, "Not Modified", 0)
+    } else {
+        (200, "OK", body.len())
+    };
+    write!(
+        stream,
+        "HTTP/1.1 {status} {reason}\r\n\
+         Content-Length: {length}\r\n\
+         Content-Type: {content_type}\r\n\
+         ETag: {etag}\r\n\
+         Cache-Control: no-store\r\n\
+         Connection: close\r\n\r\n",
+    )?;
+    if !head && !not_modified {
+        stream.write_all(body)?;
+    }
+    Ok(())
+}
+
+fn static_etag(body: &[u8]) -> String {
+    format!("\"{}\"", blake3::hash(body).to_hex())
+}
+
+fn etag_matches(value: &str, current: &str) -> bool {
+    value.split(',').any(|candidate| {
+        let candidate = candidate.trim();
+        candidate == "*" || candidate.strip_prefix("W/").unwrap_or(candidate) == current
+    })
 }
 
 fn content_type(path: &Path) -> &'static str {
@@ -706,8 +827,18 @@ fn content_type(path: &Path) -> &'static str {
         Some("html") => "text/html; charset=utf-8",
         Some("js") => "text/javascript; charset=utf-8",
         Some("map" | "json") => "application/json",
+        Some("css") => "text/css; charset=utf-8",
+        Some("txt") => "text/plain; charset=utf-8",
+        Some("svg") => "image/svg+xml",
         Some("png") => "image/png",
         Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("ico") => "image/x-icon",
+        Some("wasm") => "application/wasm",
+        Some("mp3") => "audio/mpeg",
+        Some("ogg") => "audio/ogg",
+        Some("wav") => "audio/wav",
         _ => "application/octet-stream",
     }
 }
@@ -944,17 +1075,18 @@ mod tests {
     use std::fs;
     use std::io::{Cursor, Read, Write};
     use std::net::{Shutdown, TcpListener, TcpStream};
+    use std::path::Path;
     use std::sync::atomic::AtomicUsize;
     use std::sync::{Arc, Mutex, RwLock};
     use std::thread;
     use std::time::{Duration, Instant};
 
     use super::{
-        CLIENT_START, ConnectionPermit, ERROR_START, Generation, MAX_HTTP_CONNECTIONS,
-        MAX_REQUEST_BYTES, ServerState, broadcast, decorate_index, handle_connection,
-        read_client_frame, read_request, safe_relative_path, same_origin, serve,
-        start_broadcast_worker, valid_http_host, valid_websocket_key, websocket_accept,
-        websocket_frame,
+        CLIENT_START, ConnectionPermit, DEV_CLIENT, ERROR_START, Generation, MAX_HTTP_CONNECTIONS,
+        MAX_REQUEST_BYTES, ServerState, broadcast, content_type, decorate_index, etag_matches,
+        handle_connection, read_client_frame, read_request, safe_relative_path, same_origin, serve,
+        start_broadcast_worker, static_etag, valid_http_host, valid_websocket_key,
+        websocket_accept, websocket_frame,
     };
 
     #[test]
@@ -1011,6 +1143,29 @@ mod tests {
         oversized[end - 4..].copy_from_slice(b"\r\n\r\n");
         let error = read_request(&mut Cursor::new(oversized)).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn matches_strong_weak_and_list_etags_without_accepting_stale_values() {
+        let current = static_etag(b"current generation");
+        assert!(etag_matches(&current, &current));
+        assert!(etag_matches(&format!("W/{current}"), &current));
+        assert!(etag_matches(&format!("\"stale\", {current}"), &current));
+        assert!(etag_matches("*", &current));
+        assert!(!etag_matches("\"stale\"", &current));
+    }
+
+    #[test]
+    fn serves_declared_web_asset_mime_types_and_bounded_reconnects() {
+        assert_eq!(
+            content_type(Path::new("style.css")),
+            "text/css; charset=utf-8"
+        );
+        assert_eq!(content_type(Path::new("icon.svg")), "image/svg+xml");
+        assert_eq!(content_type(Path::new("module.wasm")), "application/wasm");
+        assert!(DEV_CLIENT.contains("Math.min(10_000"));
+        assert!(DEV_CLIENT.contains("Math.random()"));
+        assert!(DEV_CLIENT.contains("retry = 0"));
     }
 
     #[test]
@@ -1099,8 +1254,25 @@ mod tests {
         let response = round_trip(&state, "GET / HTTP/1.1\r\nHost: 127.0.0.1:4173\r\n\r\n");
         assert!(response.starts_with("HTTP/1.1 200 OK"));
         assert!(response.contains("Cache-Control: no-store"));
+        let etag = response
+            .lines()
+            .find_map(|line| line.strip_prefix("ETag: "))
+            .unwrap()
+            .to_owned();
         assert!(response.contains(CLIENT_START));
         assert!(response.contains("ready"));
+
+        let head = round_trip(&state, "HEAD / HTTP/1.1\r\nHost: 127.0.0.1:4173\r\n\r\n");
+        assert!(head.starts_with("HTTP/1.1 200 OK"));
+        assert!(head.contains(&format!("ETag: {etag}")));
+        assert!(!head.contains("ready"));
+
+        let cached = round_trip(
+            &state,
+            format!("GET / HTTP/1.1\r\nHost: 127.0.0.1:4173\r\nIf-None-Match: {etag}\r\n\r\n"),
+        );
+        assert!(cached.starts_with("HTTP/1.1 304 Not Modified"));
+        assert!(!cached.contains("ready"));
 
         let rebound = round_trip(&state, "GET / HTTP/1.1\r\nHost: example.test\r\n\r\n");
         assert!(rebound.starts_with("HTTP/1.1 403 Forbidden"));
@@ -1185,14 +1357,15 @@ mod tests {
         fs::create_dir(&root).unwrap();
         let source = root.join("main.rb");
         fs::write(&source, "def setup\n").unwrap();
-        let error = serve(&source, false, 0, &mut Vec::new()).unwrap_err();
+        let error = serve(&source, false, 0, false, &mut Vec::new()).unwrap_err();
         assert!(error.to_string().contains("E0100"));
         fs::remove_dir_all(root).unwrap();
     }
 
-    fn round_trip(state: &Arc<ServerState>, request: &'static str) -> String {
+    fn round_trip(state: &Arc<ServerState>, request: impl Into<String>) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
+        let request = request.into();
         let client = thread::spawn(move || {
             let mut stream = TcpStream::connect(address).unwrap();
             stream.write_all(request.as_bytes()).unwrap();

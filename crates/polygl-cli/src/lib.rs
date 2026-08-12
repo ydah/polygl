@@ -122,6 +122,7 @@ enum Command {
         source: PathBuf,
         watch: bool,
         port: u16,
+        open: bool,
     },
     DumpHir {
         source: PathBuf,
@@ -137,8 +138,20 @@ enum Command {
         language: String,
         output: PathBuf,
     },
+    Completions {
+        shell: CompletionShell,
+    },
+    Man,
     Version,
     Help,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CompletionShell {
+    Bash,
+    Zsh,
+    Fish,
+    PowerShell,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -287,7 +300,8 @@ pub fn run_with_color_support(
             source,
             watch,
             port,
-        } => serve::serve(&source, watch, port, output),
+            open,
+        } => serve::serve(&source, watch, port, open, output),
         Command::DumpHir { source } => {
             let source_file = load_source(&source)?;
             let compiler = compiler();
@@ -306,6 +320,8 @@ pub fn run_with_color_support(
             language,
             output: destination,
         } => new_adapter(&language, &destination, output),
+        Command::Completions { shell } => write_completions(shell, output),
+        Command::Man => write_man_page(output),
         Command::Version => writeln!(output, "polygl {VERSION}")
             .map_err(|error| CliError::new(format!("failed to write version: {error}"))),
         Command::Help => output
@@ -327,6 +343,11 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Command, CliEr
         Some("explain") => parse_explain(args),
         Some("languages") => parse_languages(args),
         Some("new-adapter") => parse_new_adapter(args),
+        Some("completions") => parse_completions(args),
+        Some("man") => {
+            ensure_empty(args)?;
+            Ok(Command::Man)
+        }
         Some("--version" | "-V") => {
             ensure_empty(args)?;
             Ok(Command::Version)
@@ -522,10 +543,13 @@ fn parse_serve(mut args: impl Iterator<Item = OsString>) -> Result<Command, CliE
     let source = required_path(args.next(), "serve requires a source file")?;
     let mut watch = false;
     let mut port = 4173;
+    let mut open = false;
     while let Some(argument) = args.next() {
         match argument.to_str() {
             Some("--watch") if !watch => watch = true,
             Some("--watch") => return Err(CliError::new("watch may only be specified once")),
+            Some("--open") if !open => open = true,
+            Some("--open") => return Err(CliError::new("open may only be specified once")),
             Some("--port") => {
                 let value = args
                     .next()
@@ -545,7 +569,25 @@ fn parse_serve(mut args: impl Iterator<Item = OsString>) -> Result<Command, CliE
         source,
         watch,
         port,
+        open,
     })
+}
+
+fn parse_completions(mut args: impl Iterator<Item = OsString>) -> Result<Command, CliError> {
+    let shell = match args.next().as_deref().and_then(|value| value.to_str()) {
+        Some("bash") => CompletionShell::Bash,
+        Some("zsh") => CompletionShell::Zsh,
+        Some("fish") => CompletionShell::Fish,
+        Some("powershell") => CompletionShell::PowerShell,
+        Some(other) => {
+            return Err(CliError::new(format!(
+                "unknown completion shell `{other}`; expected bash, zsh, fish, or powershell"
+            )));
+        }
+        None => return Err(CliError::new("completions requires a shell name")),
+    };
+    ensure_empty(args)?;
+    Ok(Command::Completions { shell })
 }
 
 fn parse_build(mut args: impl Iterator<Item = OsString>) -> Result<Command, CliError> {
@@ -1098,6 +1140,69 @@ fn write_explanation(
     writeln!(output).map_err(|error| CliError::new(format!("failed to write explanation: {error}")))
 }
 
+fn write_completions(shell: CompletionShell, output: &mut dyn Write) -> Result<(), CliError> {
+    const COMMANDS: &str =
+        "build serve check dump-hir explain languages new-adapter completions man help";
+    let script = match shell {
+        CompletionShell::Bash => format!(
+            "_polygl() {{ local cur; cur=\"${{COMP_WORDS[COMP_CWORD]}}\"; if [[ $COMP_CWORD -eq 1 ]]; then COMPREPLY=( $(compgen -W \"{COMMANDS}\" -- \"$cur\") ); fi; }}\ncomplete -F _polygl polygl\n"
+        ),
+        CompletionShell::Zsh => format!(
+            "#compdef polygl\n_arguments '1:command:({})' '*::argument:->args'\n",
+            COMMANDS
+        ),
+        CompletionShell::Fish => {
+            COMMANDS
+                .split_whitespace()
+                .map(|command| {
+                    format!("complete -c polygl -f -n '__fish_use_subcommand' -a '{command}'")
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n"
+        }
+        CompletionShell::PowerShell => format!(
+            "Register-ArgumentCompleter -Native -CommandName polygl -ScriptBlock {{ param($wordToComplete, $commandAst, $cursorPosition) '{COMMANDS}'.Split(' ') | Where-Object {{ $_ -like \"$wordToComplete*\" }} }}\n"
+        ),
+    };
+    output
+        .write_all(script.as_bytes())
+        .map_err(|error| CliError::new(format!("failed to write completions: {error}")))
+}
+
+fn write_man_page(output: &mut dyn Write) -> Result<(), CliError> {
+    let page = format!(
+        r#".TH POLYGL 1 "" "PolyGL {VERSION}" "User Commands"
+.SH NAME
+polygl \- compile Common Core sketches for the browser
+.SH SYNOPSIS
+.B polygl
+COMMAND [OPTIONS]
+.SH COMMANDS
+.TP
+.B build
+Compile and package a browser artifact directory.
+.TP
+.B serve
+Run the loopback development server; --watch rebuilds and --open launches a browser.
+.TP
+.B check
+Type-check without writing artifacts; supports human, JSON, SARIF, and LSP diagnostics.
+.TP
+.B explain
+Describe a registered diagnostic code.
+.TP
+.B languages
+List bundled language adapters.
+.SH SEE ALSO
+PolyGL documentation at https://ydah.github.io/polygl/
+"#
+    );
+    output
+        .write_all(page.as_bytes())
+        .map_err(|error| CliError::new(format!("failed to write manual page: {error}")))
+}
+
 fn new_adapter(language: &str, destination: &Path, output: &mut dyn Write) -> Result<(), CliError> {
     if destination.exists() {
         return Err(CliError::new(format!(
@@ -1155,12 +1260,14 @@ fn usage() -> String {
     "\
 usage:
   polygl build <source.rb|source.php|source.pl> [-o <directory>] [--debug | --release] [--source-map <none|external|inline>] [--sources-content]
-  polygl serve <source.rb|source.php|source.pl> [--port <port>] [--watch]
+  polygl serve <source.rb|source.php|source.pl> [--port <port>] [--watch] [--open]
   polygl check <source.rb|source.php|source.pl> [--diagnostic-format <human|json|sarif|lsp>] [--deny-warnings] [--allow <Wcode|WxxFamily>] [--deny <Wcode|WxxFamily>] [--max-warnings <count>]
   polygl dump-hir <source.rb|source.php|source.pl>
   polygl explain <diagnostic-code> [--diagnostic-format <human|json>]
   polygl languages [--json]
   polygl new-adapter <language> [-o <directory>]
+  polygl completions <bash|zsh|fish|powershell>
+  polygl man
   polygl --version
 "
     .to_owned()
@@ -1249,6 +1356,7 @@ mod tests {
                 source: "main.rb".into(),
                 watch: true,
                 port: 8080,
+                open: false,
             }
         );
         assert!(
@@ -1257,6 +1365,34 @@ mod tests {
                 .to_string()
                 .contains("between 0 and 65535")
         );
+        assert!(matches!(
+            parse_args(arguments(["serve", "main.rb", "--open"])).unwrap(),
+            Command::Serve { open: true, .. }
+        ));
+    }
+
+    #[test]
+    fn generates_shell_completions_and_a_manual_page() {
+        for shell in ["bash", "zsh", "fish", "powershell"] {
+            let mut output = Vec::new();
+            run(arguments(["completions", shell]), &mut output).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains("polygl"), "{shell}: {output}");
+            assert!(output.contains("build"), "{shell}: {output}");
+            assert!(output.contains("check"), "{shell}: {output}");
+        }
+        assert!(
+            run(arguments(["completions", "unknown"]), &mut Vec::new())
+                .unwrap_err()
+                .to_string()
+                .contains("unknown completion shell")
+        );
+        let mut page = Vec::new();
+        run(arguments(["man"]), &mut page).unwrap();
+        let page = String::from_utf8(page).unwrap();
+        assert!(page.starts_with(".TH POLYGL 1"));
+        assert!(page.contains(".SH COMMANDS"));
+        assert!(page.contains("--watch"));
     }
 
     #[test]
