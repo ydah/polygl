@@ -279,7 +279,7 @@ export function validateProgramSource(value) {
         : validateProgram(value);
 }
 export function validateProgram(value) {
-    const properties = dataProperties(value, "program");
+    const properties = dataProperties(value, "program", isModuleNamespaceTag);
     const setup = optionalFunction(properties, "setup");
     const frame = optionalFunction(properties, "frame");
     const onEvent = optionalFunction(properties, "on_event");
@@ -425,7 +425,7 @@ function validateAutomaticUniform(name, glslName, type, source, location) {
         throw runtimeError(`reserved automatic uniform \`${name}\` cannot be user-provided`, location);
     }
 }
-function dataProperties(value, path) {
+function dataProperties(value, path, allowedSymbol) {
     if (!isObject(value)) {
         invalid(path, "a plain object");
     }
@@ -435,16 +435,30 @@ function dataProperties(value, path) {
     }
     const properties = new Map();
     for (const key of Reflect.ownKeys(value)) {
-        if (typeof key !== "string") {
-            throw new TypeError(`${path} must not contain symbol properties`);
-        }
         const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (typeof key !== "string") {
+            if (descriptor === undefined ||
+                allowedSymbol?.(key, descriptor, prototype, value) !== true) {
+                throw new TypeError(`${path} must not contain symbol properties`);
+            }
+            continue;
+        }
         if (descriptor === undefined || !("value" in descriptor)) {
             throw new TypeError(`${path}.${key} must be a data property`);
         }
         properties.set(key, descriptor.value);
     }
     return properties;
+}
+function isModuleNamespaceTag(key, descriptor, prototype, object) {
+    return prototype === null &&
+        !Object.isExtensible(object) &&
+        key === Symbol.toStringTag &&
+        "value" in descriptor &&
+        descriptor.value === "Module" &&
+        descriptor.writable === false &&
+        descriptor.enumerable === false &&
+        descriptor.configurable === false;
 }
 function denseArray(value, path) {
     if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
@@ -1508,7 +1522,7 @@ export class WebGL2ShaderRegistry {
 function validateProgramReflection(gl, program, artifact) {
     for (const binding of artifact.attributes) {
         const actualLocation = gl.getAttribLocation(program, binding.glslName);
-        if (actualLocation !== binding.location) {
+        if (actualLocation >= 0 && actualLocation !== binding.location) {
             throw runtimeError(`shader \`${artifact.name}\` attribute \`${binding.name}\` declares location ${binding.location}, but the linked program reports ${actualLocation}`, artifact.vertexLocation);
         }
     }

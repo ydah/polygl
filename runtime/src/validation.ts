@@ -36,6 +36,12 @@ const VALIDATED_AUTOMATIC_UNIFORM_TYPES: Readonly<
   });
 
 type DataProperties = ReadonlyMap<string, unknown>;
+type AllowedSymbol = (
+  key: symbol,
+  descriptor: PropertyDescriptor,
+  prototype: object | null,
+  object: object,
+) => boolean;
 
 export function validateRuntimeOptions(value: unknown): RuntimeOptions {
   const properties = dataProperties(value, "runtime options");
@@ -104,7 +110,11 @@ export function validateProgramSource(value: unknown): PolyglProgramSource {
 }
 
 export function validateProgram(value: unknown): PolyglProgram {
-  const properties = dataProperties(value, "program");
+  const properties = dataProperties(
+    value,
+    "program",
+    isModuleNamespaceTag,
+  );
   const setup = optionalFunction<PolyglProgram["setup"]>(properties, "setup");
   const frame = optionalFunction<PolyglProgram["frame"]>(properties, "frame");
   const onEvent = optionalFunction<PolyglProgram["on_event"]>(
@@ -338,7 +348,11 @@ function validateAutomaticUniform(
   }
 }
 
-function dataProperties(value: unknown, path: string): DataProperties {
+function dataProperties(
+  value: unknown,
+  path: string,
+  allowedSymbol?: AllowedSymbol,
+): DataProperties {
   if (!isObject(value)) {
     invalid(path, "a plain object");
   }
@@ -348,16 +362,38 @@ function dataProperties(value: unknown, path: string): DataProperties {
   }
   const properties = new Map<string, unknown>();
   for (const key of Reflect.ownKeys(value)) {
-    if (typeof key !== "string") {
-      throw new TypeError(`${path} must not contain symbol properties`);
-    }
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (typeof key !== "string") {
+      if (
+        descriptor === undefined ||
+        allowedSymbol?.(key, descriptor, prototype, value) !== true
+      ) {
+        throw new TypeError(`${path} must not contain symbol properties`);
+      }
+      continue;
+    }
     if (descriptor === undefined || !("value" in descriptor)) {
       throw new TypeError(`${path}.${key} must be a data property`);
     }
     properties.set(key, descriptor.value);
   }
   return properties;
+}
+
+function isModuleNamespaceTag(
+  key: symbol,
+  descriptor: PropertyDescriptor,
+  prototype: object | null,
+  object: object,
+): boolean {
+  return prototype === null &&
+    !Object.isExtensible(object) &&
+    key === Symbol.toStringTag &&
+    "value" in descriptor &&
+    descriptor.value === "Module" &&
+    descriptor.writable === false &&
+    descriptor.enumerable === false &&
+    descriptor.configurable === false;
 }
 
 function denseArray(value: unknown, path: string): readonly unknown[] {

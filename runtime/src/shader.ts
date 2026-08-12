@@ -466,7 +466,7 @@ function validateProgramReflection(
 ): void {
   for (const binding of artifact.attributes) {
     const actualLocation = gl.getAttribLocation(program, binding.glslName);
-    if (actualLocation !== binding.location) {
+    if (actualLocation >= 0 && actualLocation !== binding.location) {
       throw runtimeError(
         `shader \`${artifact.name}\` attribute \`${binding.name}\` declares location ${binding.location}, but the linked program reports ${actualLocation}`,
         artifact.vertexLocation,

@@ -153,6 +153,28 @@ test("validates direct programs and program factory results", async () => {
     start(Object.create({ setup() {} })),
     /program must not use a custom prototype/,
   );
+  const forgedModule = {};
+  Object.defineProperty(forgedModule, Symbol.toStringTag, {
+    value: "Module",
+    writable: false,
+    enumerable: false,
+    configurable: false,
+  });
+  await assert.rejects(
+    start(forgedModule),
+    /program must not contain symbol properties/,
+  );
+  const extensibleNullModule = Object.create(null);
+  Object.defineProperty(extensibleNullModule, Symbol.toStringTag, {
+    value: "Module",
+    writable: false,
+    enumerable: false,
+    configurable: false,
+  });
+  await assert.rejects(
+    start(extensibleNullModule),
+    /program must not contain symbol properties/,
+  );
 
   for (const result of [undefined, { frame: 1 }, { __polyglRuntimeAbi: 1.5 }]) {
     const { context } = fakeWebGl2();
@@ -165,6 +187,30 @@ test("validates direct programs and program factory results", async () => {
       /program|runtime boundary\.frame/,
     );
   }
+});
+
+test("accepts a generated program loaded as an ES module namespace", async () => {
+  const marker = "__polyglModuleNamespaceSetup";
+  delete globalThis[marker];
+  const moduleSource = [
+    `export const __polyglRuntimeAbi = ${runtimeAbi};`,
+    `export function setup() { globalThis.${marker} = true; }`,
+    'export const unrelatedExport = "ignored";',
+  ].join("\n");
+  const moduleUrl = `data:text/javascript,${encodeURIComponent(moduleSource)}`;
+  const namespace = await import(moduleUrl);
+  assert.equal(namespace[Symbol.toStringTag], "Module");
+
+  const { context } = fakeWebGl2();
+  const handle = await start(() => import(moduleUrl), {
+    canvas: fakeCanvas(),
+    context,
+    requireRuntimeAbi: true,
+    onError() {},
+  });
+  assert.equal(globalThis[marker], true);
+  handle.stop();
+  delete globalThis[marker];
 });
 
 test("rejects malformed and ambiguous shader metadata before linking", async () => {
@@ -297,6 +343,20 @@ test("checks shader metadata against linked program reflection", async () => {
     }),
     /declares location 0.*reports 2/,
   );
+
+  const optimizedAttribute = fakeWebGl2({
+    attributeLocations: { a_position: [0, -1] },
+  });
+  const optimizedHandle = await start({}, {
+    canvas: fakeCanvas(),
+    context: optimizedAttribute.context,
+    shaderBundle: shaderBundle([{
+      name: "optimized_attribute",
+      attributes: [position],
+    }]),
+    onError() {},
+  });
+  optimizedHandle.stop();
 
   const wrongAttributeType = fakeWebGl2({
     activeAttributes: [{ name: "a_position", size: 1, type: 0x8b50 }],
@@ -1534,6 +1594,7 @@ function fakeWebGl2(options = {}) {
   const deletedBuffers = [];
   const deletedTextures = [];
   let shaderChecks = 0;
+  const attributeLocationCalls = new Map();
   const activeAttributes = options.activeAttributes ?? [];
   const activeUniforms = options.activeUniforms ?? [];
   const context = {
@@ -1626,8 +1687,14 @@ function fakeWebGl2(options = {}) {
       return activeUniforms[index] ?? null;
     },
     getAttribLocation(_program, name) {
-      if (options.attributeLocations?.[name] !== undefined) {
-        return options.attributeLocations[name];
+      const configured = options.attributeLocations?.[name];
+      if (Array.isArray(configured)) {
+        const call = attributeLocationCalls.get(name) ?? 0;
+        attributeLocationCalls.set(name, call + 1);
+        return configured[Math.min(call, configured.length - 1)];
+      }
+      if (configured !== undefined) {
+        return configured;
       }
       return name === "a_position" ? 0 : 1;
     },
