@@ -51,6 +51,9 @@ export const runtimeOps = Object.freeze({
   texture_load: "textureLoad",
   shader_set: "shaderSet",
   sample: "sampleTexture",
+  node_remove: "nodeRemove",
+  mesh_dispose: "meshDispose",
+  texture_dispose: "textureDispose",
 } as const);
 export type BuiltinName = keyof typeof runtimeOps;
 export type RuntimeOp = (typeof runtimeOps)[BuiltinName];
@@ -97,4 +100,7 @@ export const runtimeSignatures = Object.freeze({
   texture_load: { domain: "host", params: [{ name: "path", type: "str" }], result: "Texture" },
   shader_set: { domain: "host", params: [{ name: "node", type: "Node" }, { name: "name", type: "str" }, { name: "value", type: "ShaderValue" }], result: "void" },
   sample: { domain: "gpu", params: [{ name: "texture", type: "Texture" }, { name: "uv", type: "vec2" }], result: "vec4" },
+  node_remove: { domain: "host", params: [{ name: "node", type: "Node" }], result: "void" },
+  mesh_dispose: { domain: "host", params: [{ name: "mesh", type: "Mesh" }], result: "void" },
+  texture_dispose: { domain: "host", params: [{ name: "texture", type: "Texture" }], result: "void" },
 } as const);

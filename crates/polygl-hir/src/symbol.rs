@@ -79,8 +79,11 @@ impl BuiltinId {
     pub const TEXTURE_LOAD: Self = Self(38);
     pub const SHADER_SET: Self = Self(39);
     pub const SAMPLE: Self = Self(40);
+    pub const NODE_REMOVE: Self = Self(41);
+    pub const MESH_DISPOSE: Self = Self(42);
+    pub const TEXTURE_DISPOSE: Self = Self(43);
 
-    pub const ALL: [Self; 41] = [
+    pub const ALL: [Self; 44] = [
         Self::FLOOR,
         Self::ROUND,
         Self::TRUNC,
@@ -122,6 +125,9 @@ impl BuiltinId {
         Self::TEXTURE_LOAD,
         Self::SHADER_SET,
         Self::SAMPLE,
+        Self::NODE_REMOVE,
+        Self::MESH_DISPOSE,
+        Self::TEXTURE_DISPOSE,
     ];
 
     #[must_use]

@@ -250,7 +250,7 @@ fn emits_es2020_runtime_calls_wrapping_ints_and_source_map_v3() {
     assert!(
         artifacts
             .javascript
-            .contains("export const __polyglRuntimeAbi = 1;")
+            .contains("export const __polyglRuntimeAbi = 2;")
     );
     assert!(artifacts.javascript.contains("let before_shadow = x;"));
     assert!(artifacts.javascript.contains("let dollar_parameter = x$1;"));

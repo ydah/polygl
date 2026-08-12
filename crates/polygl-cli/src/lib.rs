@@ -979,9 +979,9 @@ end
         assert_eq!(debug_manifest["compiler"]["version"], VERSION);
         assert_eq!(debug_manifest["adapter"]["id"], "ruby");
         assert_eq!(debug_manifest["adapter"]["apiVersion"], 1);
-        assert_eq!(debug_manifest["runtimeAbi"], 1);
+        assert_eq!(debug_manifest["runtimeAbi"], 2);
         assert_eq!(debug_manifest["schemas"]["hir"], 1);
-        assert_eq!(debug_manifest["schemas"]["builtins"], 1);
+        assert_eq!(debug_manifest["schemas"]["builtins"], 2);
         assert_eq!(debug_manifest["source"]["path"], "triangle.rb");
         assert_eq!(debug_manifest["options"]["mode"], "debug");
         assert_eq!(debug_manifest["options"]["sourceMap"], "external");

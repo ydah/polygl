@@ -55,24 +55,32 @@ export type SceneShaderValue =
   | TextureHandle;
 export type RuntimeImageLoader = (url: string) => Promise<TexImageSource>;
 
-interface MeshResource extends MeshHandle {
+interface MeshResource {
+  readonly handle: MeshHandle;
   readonly vertexBuffer: WebGLBuffer;
   readonly indexBuffer: WebGLBuffer;
   readonly indexCount: number;
+  references: number;
 }
 
-interface SceneNode extends NodeHandle {
+interface SceneNode {
+  readonly handle: NodeHandle;
   readonly mesh: MeshResource;
   readonly material: MaterialHandle;
   position: Vec3;
   rotation: Vec3;
   scale: Vec3;
   readonly uniforms: Map<string, ShaderUniformValue>;
+  readonly textureUniforms: Map<string, SceneTexture>;
 }
 
-interface SceneTexture extends TextureHandle {
+interface SceneTexture {
+  readonly handle: TextureHandle;
+  readonly path: string;
   readonly texture: WebGLTexture;
   loaded: boolean;
+  disposed: boolean;
+  references: number;
 }
 
 interface CameraState {
@@ -106,6 +114,9 @@ export class WebGL2SceneRenderer {
   private readonly meshes = new Set<MeshResource>();
   private readonly nodes = new Set<SceneNode>();
   private readonly textures = new Map<string, SceneTexture>();
+  private readonly meshHandles = new WeakMap<MeshHandle, MeshResource>();
+  private readonly nodeHandles = new WeakMap<NodeHandle, SceneNode>();
+  private readonly textureHandles = new WeakMap<TextureHandle, SceneTexture>();
   private readonly pendingSetupAssets = new Set<Promise<void>>();
   private shaderRegistry: WebGL2ShaderRegistry;
   private basicProgram: BasicProgram | undefined;
@@ -166,11 +177,16 @@ export class WebGL2SceneRenderer {
     color: NumericSequence,
   ): BasicMaterial {
     const safeColor = fixedVector(color, 4, "basic material color");
-    const material = {
+    const material = brand({
       kind: "basic" as const,
-      color: safeColor as unknown as readonly [number, number, number, number],
-    };
-    return brand(material, this.owner) as BasicMaterial;
+      color: Object.freeze([...safeColor]) as unknown as readonly [
+        number,
+        number,
+        number,
+        number,
+      ],
+    }, this.owner);
+    return Object.freeze(material) as BasicMaterial;
   }
 
   public nodeAdd(mesh: MeshHandle, material: MaterialHandle): NodeHandle {
@@ -180,20 +196,44 @@ export class WebGL2SceneRenderer {
     } else if (!this.shaderRegistry.owns(material)) {
       throw new Error("shader material belongs to another runtime session");
     }
-    const node = brand(
-      {
-        kind: "node" as const,
-        mesh: resource,
-        material,
-        position: [0, 0, 0] as Vec3,
-        rotation: [0, 0, 0] as Vec3,
-        scale: [1, 1, 1] as Vec3,
-        uniforms: new Map<string, ShaderUniformValue>(),
-      },
-      this.owner,
-    ) as SceneNode;
+    const handle = opaqueHandle("node", this.owner) as NodeHandle;
+    const node: SceneNode = {
+      handle,
+      mesh: resource,
+      material,
+      position: [0, 0, 0],
+      rotation: [0, 0, 0],
+      scale: [1, 1, 1],
+      uniforms: new Map(),
+      textureUniforms: new Map(),
+    };
     this.nodes.add(node);
-    return node;
+    this.nodeHandles.set(handle, node);
+    resource.references += 1;
+    return handle;
+  }
+
+  public nodeRemove(node: NodeHandle): void {
+    const resource = this.requireNode(node);
+    this.nodes.delete(resource);
+    resource.mesh.references -= 1;
+    for (const texture of resource.textureUniforms.values()) {
+      texture.references -= 1;
+    }
+    resource.textureUniforms.clear();
+    resource.uniforms.clear();
+  }
+
+  public meshDispose(mesh: MeshHandle): void {
+    const resource = this.requireMesh(mesh);
+    if (resource.references > 0) {
+      throw new Error(
+        `mesh is still referenced by ${resource.references} scene node(s)`,
+      );
+    }
+    this.meshes.delete(resource);
+    this.gl.deleteBuffer(resource.vertexBuffer);
+    this.gl.deleteBuffer(resource.indexBuffer);
   }
 
   public nodeSetPosition(node: NodeHandle, x: number, y: number, z: number): void {
@@ -271,7 +311,7 @@ export class WebGL2SceneRenderer {
     const safePath = validateAssetPath(path);
     const cached = this.textures.get(safePath);
     if (cached !== undefined) {
-      return cached;
+      return cached.handle;
     }
     const texture = this.gl.createTexture();
     if (texture === null) {
@@ -309,23 +349,47 @@ export class WebGL2SceneRenderer {
       this.gl.UNSIGNED_BYTE,
       new Uint8Array([255, 255, 255, 255]),
     );
+    let resource: SceneTexture;
     const handle = brand(
       {
         kind: "texture" as const,
         path: safePath,
-        loaded: false,
-        texture,
+        get loaded(): boolean {
+          return resource.loaded;
+        },
       },
       this.owner,
-    ) as SceneTexture;
-    this.textures.set(safePath, handle);
-    const load = this.loadTexture(handle);
+    ) as TextureHandle;
+    Object.freeze(handle);
+    resource = {
+      handle,
+      path: safePath,
+      texture,
+      loaded: false,
+      disposed: false,
+      references: 0,
+    };
+    this.textures.set(safePath, resource);
+    this.textureHandles.set(handle, resource);
+    const load = this.loadTexture(resource);
     if (this.startupPhase) {
       this.pendingSetupAssets.add(load);
     } else {
       void load.catch(this.onAsyncError);
     }
     return handle;
+  }
+
+  public textureDispose(texture: TextureHandle): void {
+    const resource = this.requireTexture(texture);
+    if (resource.references > 0) {
+      throw new Error(
+        `texture is still referenced by ${resource.references} scene node uniform(s)`,
+      );
+    }
+    resource.disposed = true;
+    this.textures.delete(resource.path);
+    this.gl.deleteTexture(resource.texture);
   }
 
   public shaderSet(
@@ -338,19 +402,30 @@ export class WebGL2SceneRenderer {
       throw new Error("shader_set requires a node with a shader material");
     }
     let uploadValue: ShaderUniformValue;
+    let textureResource: SceneTexture | undefined;
     if (isTextureHandle(value)) {
-      uploadValue = this.requireTexture(value).texture;
+      textureResource = this.requireTexture(value);
+      uploadValue = textureResource.texture;
     } else {
       uploadValue = value;
     }
-    sceneNode.uniforms.set(
+    const normalized = this.shaderRegistry.nodeUniform(
+      sceneNode.material,
       uniformName,
-      this.shaderRegistry.nodeUniform(
-        sceneNode.material,
-        uniformName,
-        uploadValue,
-      ),
+      uploadValue,
     );
+    const previousTexture = sceneNode.textureUniforms.get(uniformName);
+    if (previousTexture !== textureResource) {
+      if (previousTexture !== undefined) {
+        previousTexture.references -= 1;
+        sceneNode.textureUniforms.delete(uniformName);
+      }
+      if (textureResource !== undefined) {
+        textureResource.references += 1;
+        sceneNode.textureUniforms.set(uniformName, textureResource);
+      }
+    }
+    sceneNode.uniforms.set(uniformName, normalized);
   }
 
   public async awaitSetupAssets(): Promise<void> {
@@ -420,6 +495,7 @@ export class WebGL2SceneRenderer {
       this.gl.deleteBuffer(mesh.indexBuffer);
     }
     for (const texture of this.textures.values()) {
+      texture.disposed = true;
       this.gl.deleteTexture(texture.texture);
     }
     if (this.basicProgram !== undefined) {
@@ -447,17 +523,17 @@ export class WebGL2SceneRenderer {
       data.indices,
       this.gl.STATIC_DRAW,
     );
-    const mesh = brand(
-      {
-        kind: "mesh" as const,
-        vertexBuffer,
-        indexBuffer,
-        indexCount: data.indices.length,
-      },
-      this.owner,
-    ) as MeshResource;
+    const handle = opaqueHandle("mesh", this.owner) as MeshHandle;
+    const mesh: MeshResource = {
+      handle,
+      vertexBuffer,
+      indexBuffer,
+      indexCount: data.indices.length,
+      references: 0,
+    };
     this.meshes.add(mesh);
-    return mesh;
+    this.meshHandles.set(handle, mesh);
+    return handle;
   }
 
   private bindMesh(
@@ -542,11 +618,22 @@ export class WebGL2SceneRenderer {
     try {
       image = await this.imageLoader(url);
     } catch (error) {
+      if (
+        this.disposed ||
+        handle.disposed ||
+        this.textures.get(handle.path) !== handle
+      ) {
+        return;
+      }
       throw new Error(
         `failed to load texture \`${handle.path}\`: ${errorMessage(error)}`,
       );
     }
-    if (this.disposed) {
+    if (
+      this.disposed ||
+      handle.disposed ||
+      this.textures.get(handle.path) !== handle
+    ) {
       return;
     }
     this.gl.bindTexture(this.gl.TEXTURE_2D, handle.texture);
@@ -563,8 +650,8 @@ export class WebGL2SceneRenderer {
 
   private requireMesh(mesh: MeshHandle): MeshResource {
     this.requireOwned(mesh, "mesh");
-    const resource = mesh as MeshResource;
-    if (!this.meshes.has(resource)) {
+    const resource = this.meshHandles.get(mesh);
+    if (resource === undefined || !this.meshes.has(resource)) {
       throw new Error("mesh handle is no longer valid");
     }
     return resource;
@@ -572,8 +659,8 @@ export class WebGL2SceneRenderer {
 
   private requireNode(node: NodeHandle): SceneNode {
     this.requireOwned(node, "node");
-    const sceneNode = node as SceneNode;
-    if (!this.nodes.has(sceneNode)) {
+    const sceneNode = this.nodeHandles.get(node);
+    if (sceneNode === undefined || !this.nodes.has(sceneNode)) {
       throw new Error("node handle is no longer valid");
     }
     return sceneNode;
@@ -581,8 +668,12 @@ export class WebGL2SceneRenderer {
 
   private requireTexture(texture: TextureHandle): SceneTexture {
     this.requireOwned(texture, "texture");
-    const resource = texture as SceneTexture;
-    if (this.textures.get(resource.path) !== resource) {
+    const resource = this.textureHandles.get(texture);
+    if (
+      resource === undefined ||
+      resource.disposed ||
+      this.textures.get(resource.path) !== resource
+    ) {
       throw new Error("texture handle is no longer valid");
     }
     return resource;
@@ -746,6 +837,10 @@ function requiredUniform(
 function brand<T extends object>(value: T, owner: object): T {
   Object.defineProperty(value, sceneOwnerBrand, { value: owner });
   return value;
+}
+
+function opaqueHandle(kind: "mesh" | "node", owner: object): object {
+  return Object.freeze(brand({ kind }, owner));
 }
 
 function fixedVector(

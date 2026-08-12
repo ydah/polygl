@@ -38,6 +38,11 @@ export interface PolyglProgram {
 export type PolyglProgramLoader = () => Promise<PolyglProgram>;
 export type PolyglProgramSource = PolyglProgram | PolyglProgramLoader;
 
+export interface RuntimeResizeObserver {
+  observe(target: Element): void;
+  disconnect(): void;
+}
+
 export interface RuntimeOptions {
   readonly canvas?: HTMLCanvasElement;
   readonly context?: WebGL2RenderingContext;
@@ -49,6 +54,12 @@ export interface RuntimeOptions {
   readonly imageLoader?: RuntimeImageLoader;
   readonly onError?: (reason: unknown) => void;
   readonly requireRuntimeAbi?: boolean;
+  readonly maxDeltaSeconds?: number;
+  readonly autoResize?: boolean;
+  readonly devicePixelRatio?: number;
+  readonly createResizeObserver?: (
+    callback: () => void,
+  ) => RuntimeResizeObserver;
 }
 
 export interface RuntimeHandle {
@@ -69,8 +80,14 @@ export class RuntimeSession implements RuntimeHandle {
   private readonly requestFrame: (callback: FrameRequestCallback) => number;
   private readonly cancelFrame: (handle: number) => void;
   private readonly onError: (reason: unknown) => void;
+  private readonly maxDeltaSeconds: number;
+  private readonly autoResize: boolean;
+  private readonly configuredDevicePixelRatio: number | undefined;
   private animationHandle: number | undefined;
+  private renderHandle: number | undefined;
   private previousTimestamp: number | undefined;
+  private resizeObserver: RuntimeResizeObserver | undefined;
+  private contextLost = false;
   private stopped = false;
   private onStop: () => void = () => {};
   private shaderRegistry: WebGL2ShaderRegistry;
@@ -81,6 +98,14 @@ export class RuntimeSession implements RuntimeHandle {
     public readonly canvas: HTMLCanvasElement,
     options: RuntimeOptions,
   ) {
+    this.maxDeltaSeconds = positiveFinite(
+      options.maxDeltaSeconds ?? 0.1,
+      "maxDeltaSeconds",
+    );
+    this.configuredDevicePixelRatio = options.devicePixelRatio === undefined
+      ? undefined
+      : positiveFinite(options.devicePixelRatio, "devicePixelRatio");
+    this.autoResize = options.autoResize ?? false;
     this.documentObject = options.document ?? globalThis.document;
     this.windowObject = this.documentObject?.defaultView ?? undefined;
     this.renderer = new WebGL2BatchRenderer(
@@ -101,16 +126,23 @@ export class RuntimeSession implements RuntimeHandle {
     this.initialShaderBundle = options.shaderBundle;
     this.requireRuntimeAbi = options.requireRuntimeAbi ?? false;
     this.randomSource = new SeededRandom(options.seed);
-    this.requestFrame =
-      options.requestAnimationFrame ??
-      ((callback) => globalThis.requestAnimationFrame(callback));
-    this.cancelFrame =
-      options.cancelAnimationFrame ??
-      ((handle) => globalThis.cancelAnimationFrame(handle));
+    const frameScheduler = resolveFrameScheduler(options);
+    this.requestFrame = frameScheduler.request;
+    this.cancelFrame = frameScheduler.cancel;
     this.onError =
       options.onError ??
       ((reason) => showRuntimeError(reason, this.documentObject));
     this.installInputListeners();
+    this.installContextListeners();
+    if (this.autoResize) {
+      try {
+        this.installResizeObserver(options.createResizeObserver);
+        this.syncDisplaySize();
+      } catch (error) {
+        this.stop();
+        throw error;
+      }
+    }
   }
 
   public async run(source: PolyglProgramSource): Promise<void> {
@@ -137,8 +169,10 @@ export class RuntimeSession implements RuntimeHandle {
       if (this.stopped) {
         return;
       }
-      this.render();
-      if (program.frame !== undefined) {
+      if (!this.contextLost) {
+        this.render();
+      }
+      if (program.frame !== undefined && !this.contextLost) {
         this.animationHandle = this.requestFrame(this.tick);
       }
     } catch (error) {
@@ -156,10 +190,21 @@ export class RuntimeSession implements RuntimeHandle {
       this.cancelFrame(this.animationHandle);
       this.animationHandle = undefined;
     }
+    if (this.renderHandle !== undefined) {
+      this.cancelFrame(this.renderHandle);
+      this.renderHandle = undefined;
+    }
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = undefined;
     this.canvas.removeEventListener("pointermove", this.handlePointerMove);
     this.canvas.removeEventListener("pointerdown", this.handlePointerDown);
     this.canvas.removeEventListener("pointerup", this.handlePointerUp);
     this.canvas.removeEventListener("pointercancel", this.handlePointerCancel);
+    this.canvas.removeEventListener("webglcontextlost", this.handleContextLost);
+    this.canvas.removeEventListener(
+      "webglcontextrestored",
+      this.handleContextRestored,
+    );
     this.documentObject?.removeEventListener("keydown", this.handleKeyDown);
     this.documentObject?.removeEventListener("keyup", this.handleKeyUp);
     this.windowObject?.removeEventListener("blur", this.handleBlur);
@@ -221,6 +266,14 @@ export class RuntimeSession implements RuntimeHandle {
     return this.scene.nodeAdd(mesh, material);
   }
 
+  public nodeRemove(node: NodeHandle): void {
+    this.scene.nodeRemove(node);
+  }
+
+  public meshDispose(mesh: MeshHandle): void {
+    this.scene.meshDispose(mesh);
+  }
+
   public nodeSetPosition(
     node: NodeHandle,
     x: number,
@@ -275,6 +328,10 @@ export class RuntimeSession implements RuntimeHandle {
     return this.scene.textureLoad(path);
   }
 
+  public textureDispose(texture: TextureHandle): void {
+    this.scene.textureDispose(texture);
+  }
+
   public shaderSet(
     node: NodeHandle,
     name: string,
@@ -291,8 +348,12 @@ export class RuntimeSession implements RuntimeHandle {
     }
     const previous = this.previousTimestamp;
     this.previousTimestamp = timestamp;
-    const dt =
-      previous === undefined ? 0 : Math.max(0, (timestamp - previous) / 1000);
+    const dt = previous === undefined
+      ? 0
+      : Math.min(
+        this.maxDeltaSeconds,
+        Math.max(0, (timestamp - previous) / 1000),
+      );
     this.elapsedSeconds += dt;
     try {
       this.program?.frame?.(dt);
@@ -314,6 +375,27 @@ export class RuntimeSession implements RuntimeHandle {
     this.documentObject?.addEventListener("keydown", this.handleKeyDown);
     this.documentObject?.addEventListener("keyup", this.handleKeyUp);
     this.windowObject?.addEventListener("blur", this.handleBlur);
+  }
+
+  private installContextListeners(): void {
+    this.canvas.addEventListener("webglcontextlost", this.handleContextLost);
+    this.canvas.addEventListener(
+      "webglcontextrestored",
+      this.handleContextRestored,
+    );
+  }
+
+  private installResizeObserver(
+    createObserver: RuntimeOptions["createResizeObserver"],
+  ): void {
+    const factory = createObserver ?? defaultResizeObserverFactory();
+    if (factory === undefined) {
+      throw new Error(
+        "autoResize requires ResizeObserver support or createResizeObserver",
+      );
+    }
+    this.resizeObserver = factory(this.handleResize);
+    this.resizeObserver.observe(this.canvas);
   }
 
   private readonly handlePointerMove = (event: PointerEvent): void => {
@@ -392,16 +474,97 @@ export class RuntimeSession implements RuntimeHandle {
     this.pressedKeys.clear();
   };
 
+  private readonly handleResize = (): void => {
+    if (this.stopped || this.contextLost) {
+      return;
+    }
+    try {
+      if (this.syncDisplaySize()) {
+        this.scheduleRender();
+      }
+    } catch (error) {
+      this.fail(error);
+    }
+  };
+
+  private readonly handleContextLost = (event: Event): void => {
+    event.preventDefault();
+    if (this.stopped || this.contextLost) {
+      return;
+    }
+    this.contextLost = true;
+    if (this.animationHandle !== undefined) {
+      this.cancelFrame(this.animationHandle);
+      this.animationHandle = undefined;
+    }
+    if (this.renderHandle !== undefined) {
+      this.cancelFrame(this.renderHandle);
+      this.renderHandle = undefined;
+    }
+    this.onError(
+      new Error("WebGL context was lost; rendering is suspended"),
+    );
+  };
+
+  private readonly handleContextRestored = (): void => {
+    if (this.stopped || !this.contextLost) {
+      return;
+    }
+    this.fail(
+      new Error(
+        "WebGL context was restored, but GPU resources must be recreated; restart the runtime session",
+      ),
+    );
+  };
+
   private dispatchEvent(event: RuntimeEvent): void {
     try {
       this.program?.on_event?.(event);
       if (this.stopped) {
         return;
       }
-      this.render();
+      this.scheduleRender();
     } catch (error) {
       this.fail(error);
     }
+  }
+
+  private scheduleRender(): void {
+    if (
+      this.stopped ||
+      this.contextLost ||
+      this.program?.frame !== undefined ||
+      this.renderHandle !== undefined
+    ) {
+      return;
+    }
+    this.renderHandle = this.requestFrame(() => {
+      this.renderHandle = undefined;
+      if (this.stopped || this.contextLost) {
+        return;
+      }
+      try {
+        this.render();
+      } catch (error) {
+        this.fail(error);
+      }
+    });
+  }
+
+  private syncDisplaySize(): boolean {
+    const bounds = this.canvas.getBoundingClientRect();
+    if (bounds.width <= 0 || bounds.height <= 0) {
+      return false;
+    }
+    const ratio = this.configuredDevicePixelRatio ??
+      this.windowObject?.devicePixelRatio ?? 1;
+    const width = Math.max(1, Math.round(bounds.width * ratio));
+    const height = Math.max(1, Math.round(bounds.height * ratio));
+    if (this.canvas.width === width && this.canvas.height === height) {
+      return false;
+    }
+    this.renderer.resize(width, height);
+    return true;
   }
 
   private updateShaderUniforms(): void {
@@ -435,4 +598,51 @@ export class RuntimeSession implements RuntimeHandle {
     this.stop();
     this.onError(reason);
   }
+}
+
+interface FrameScheduler {
+  readonly request: (callback: FrameRequestCallback) => number;
+  readonly cancel: (handle: number) => void;
+}
+
+function resolveFrameScheduler(options: RuntimeOptions): FrameScheduler {
+  if (options.requestAnimationFrame !== undefined) {
+    return {
+      request: options.requestAnimationFrame,
+      cancel: options.cancelAnimationFrame ?? defaultFrameCanceller(),
+    };
+  }
+  if (typeof globalThis.requestAnimationFrame === "function") {
+    return {
+      request: (callback) => globalThis.requestAnimationFrame(callback),
+      cancel: options.cancelAnimationFrame ?? defaultFrameCanceller(),
+    };
+  }
+  return {
+    request: (callback) => globalThis.setTimeout(
+      () => callback(globalThis.performance.now()),
+      16,
+    ),
+    cancel: (handle) => globalThis.clearTimeout(handle),
+  };
+}
+
+function defaultFrameCanceller(): (handle: number) => void {
+  return typeof globalThis.cancelAnimationFrame === "function"
+    ? (handle) => globalThis.cancelAnimationFrame(handle)
+    : () => {};
+}
+
+function defaultResizeObserverFactory(): RuntimeOptions["createResizeObserver"] {
+  if (typeof globalThis.ResizeObserver !== "function") {
+    return undefined;
+  }
+  return (callback) => new globalThis.ResizeObserver(() => callback());
+}
+
+function positiveFinite(value: number, name: string): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new RangeError(`${name} must be a finite number greater than zero`);
+  }
+  return value;
 }

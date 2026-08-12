@@ -9,7 +9,7 @@ pub use backend::{Artifacts, Backend, BuildMode, JavaScriptBackend, SourceMapMod
 pub use error::EmitError;
 
 /// Compatibility version shared by generated programs and the browser runtime.
-pub const RUNTIME_ABI_VERSION: u32 = 1;
+pub const RUNTIME_ABI_VERSION: u32 = 2;
 
 #[cfg(test)]
 mod tests;

@@ -189,7 +189,7 @@ mod tests {
         let docs = render_api_docs();
         let abi = render_runtime_abi();
         assert!(abi.contains("runtimeVersion = \"0.1.0\""));
-        assert!(abi.contains("runtimeAbi = 1"));
+        assert!(abi.contains("runtimeAbi = 2"));
         assert!(typescript.contains("time: { domain: \"both\""));
         assert!(typescript.contains("material_shader: \"materialShader\""));
         assert!(typescript.contains("mesh_box: \"meshBox\""));

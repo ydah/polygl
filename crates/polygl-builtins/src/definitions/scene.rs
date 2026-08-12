@@ -67,6 +67,26 @@ pub(super) const NODE_ADD: Builtin = builtin(
     "nodeAdd",
 );
 
+pub(super) const NODE_REMOVE: Builtin = builtin(
+    BuiltinId::NODE_REMOVE,
+    "node_remove",
+    BuiltinTier::Tier2,
+    &[req("node", NODE)],
+    V,
+    Domain::Host,
+    "nodeRemove",
+);
+
+pub(super) const MESH_DISPOSE: Builtin = builtin(
+    BuiltinId::MESH_DISPOSE,
+    "mesh_dispose",
+    BuiltinTier::Tier2,
+    &[req("mesh", MESH)],
+    V,
+    Domain::Host,
+    "meshDispose",
+);
+
 pub(super) const NODE_SET_POS: Builtin = builtin(
     BuiltinId::NODE_SET_POS,
     "node_set_pos",
@@ -142,6 +162,16 @@ pub(super) const TEXTURE_LOAD: Builtin = builtin(
     TEXTURE,
     Domain::Host,
     "textureLoad",
+);
+
+pub(super) const TEXTURE_DISPOSE: Builtin = builtin(
+    BuiltinId::TEXTURE_DISPOSE,
+    "texture_dispose",
+    BuiltinTier::Tier2,
+    &[req("texture", TEXTURE)],
+    V,
+    Domain::Host,
+    "textureDispose",
 );
 
 pub(super) const SHADER_SET: Builtin = builtin(

@@ -69,6 +69,9 @@ fn registry_is_valid_and_contains_every_tier_one_function() {
             "texture_load",
             "shader_set",
             "sample",
+            "node_remove",
+            "mesh_dispose",
+            "texture_dispose",
         ]
     );
 }
@@ -112,8 +115,11 @@ fn public_parameter_names_match_the_design_contract() {
     assert_eq!(names("material_shader"), ["name"]);
     assert_eq!(names("mesh_from"), ["vertices", "indices"]);
     assert_eq!(names("node_add"), ["mesh", "material"]);
+    assert_eq!(names("node_remove"), ["node"]);
+    assert_eq!(names("mesh_dispose"), ["mesh"]);
     assert_eq!(names("camera_look_at"), ["eye", "target", "up"]);
     assert_eq!(names("shader_set"), ["node", "name", "value"]);
+    assert_eq!(names("texture_dispose"), ["texture"]);
 }
 
 #[test]

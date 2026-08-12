@@ -17,8 +17,10 @@ application module is evaluated, so module-level handle creation can resolve
 shader names. The loader form also makes the runtime active before module-level
 constants are evaluated. `start` invokes `setup` once, waits for it to finish,
 and then calls `frame(dt)` from `requestAnimationFrame`. The first `dt` is zero
-and later values are elapsed seconds. A second start is rejected while loading
-or setup is still in progress.
+and later values are elapsed seconds, capped at 0.1 seconds by default so a
+backgrounded tab cannot advance a simulation by an unbounded step. Callers may
+set a different positive `maxDeltaSeconds`. A second start is rejected while
+loading or setup is still in progress.
 
 The Tier 1 renderer batches `rect`, `circle`, `triangle`, and screen-space
 one-pixel `line` geometry as colored triangles in one dynamic vertex buffer.
@@ -49,7 +51,16 @@ Random values come from a session-local seeded generator. Supplying the same
 normalized into drawing-buffer coordinates for `mouseX` and `mouseY`; keyboard
 state is exposed through `keyDown`. Pointer move/down/up and key down/up events
 invoke the optional `on_event` entrypoint with the built-in
-`Event { kind, x, y, key }` value.
+`Event { kind, x, y, key }` value. Event-driven redraws are coalesced into one
+animation frame; programs that define `frame` redraw on their existing loop.
+
+`autoResize: true` observes the canvas's CSS box and sizes its drawing buffer
+using `devicePixelRatio`; it is opt-in so an explicit `size` call remains the
+default contract. Tests and non-browser hosts can inject `devicePixelRatio`
+and `createResizeObserver`. A WebGL context loss cancels pending frames and
+reports that rendering is suspended. Restoration stops the session with a
+restart-required error because WebGL invalidates every buffer, texture, and
+program and silently continuing with stale handles would be incorrect.
 
 `shaders.js` contains data-only GLSL and reflection metadata. At startup the
 shader registry compiles and links every pair, resolves reflected uniform
@@ -76,6 +87,13 @@ first made by `frame` keep the white texture and do not pause the loop; the same
 handle begins sampling the decoded image after its asynchronous upload. Setup
 load failures reject `start`, while later failures stop the running session and
 use the normal error overlay.
+
+Scene handles are frozen opaque facades; GPU objects and mutable node state are
+kept in session-private weak maps. `node_remove` releases a node's mesh and
+texture references. `mesh_dispose` and `texture_dispose` delete individual GPU
+resources, reject resources that are still referenced, and permanently
+invalidate their handles. Disposing a pending texture also prevents a late
+image decode from uploading into a deleted WebGL texture.
 
 GPU split warnings such as W0401 and W0402 are rendered by both `check` and
 `build`; successful compilation no longer discards non-fatal diagnostics.

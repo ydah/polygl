@@ -52,6 +52,9 @@ runtime seed, while GPU code must use deterministic shader inputs instead.
 | Tier 2 | `texture_load(path: str)` | `Texture` | Host | `textureLoad` |
 | Tier 2 | `shader_set(node: Node, name: str, value: ShaderValue)` | `void` | Host | `shaderSet` |
 | Tier 2 | `sample(texture: Texture, uv: vec2)` | `vec4` | GPU | `sampleTexture` |
+| Tier 2 | `node_remove(node: Node)` | `void` | Host | `nodeRemove` |
+| Tier 2 | `mesh_dispose(mesh: Mesh)` | `void` | Host | `meshDispose` |
+| Tier 2 | `texture_dispose(texture: Texture)` | `void` | Host | `textureDispose` |
 
 `time()` maps to the automatic `u_time` uniform in GPU code. All other
 Tier 1 drawing, input, matrix, and canvas operations are Host-only.

@@ -1,7 +1,7 @@
 //! Canonical builtin metadata shared by compiler analysis and orchestration.
 
 /// Compatibility version of builtin names, signatures, and runtime operations.
-pub const BUILTIN_SCHEMA_VERSION: u32 = 1;
+pub const BUILTIN_SCHEMA_VERSION: u32 = 2;
 
 mod builtin;
 mod definitions;

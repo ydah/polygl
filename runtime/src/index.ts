@@ -51,6 +51,7 @@ export type {
   RuntimeEvent,
   RuntimeHandle,
   RuntimeOptions,
+  RuntimeResizeObserver,
 } from "./session.js";
 
 import { runtimeError } from "./errors.js";
@@ -258,6 +259,14 @@ export function nodeAdd(
   return session().nodeAdd(mesh, material);
 }
 
+export function nodeRemove(node: NodeHandle): void {
+  session().nodeRemove(node);
+}
+
+export function meshDispose(mesh: MeshHandle): void {
+  session().meshDispose(mesh);
+}
+
 export function nodeSetPos(
   node: NodeHandle,
   x: number,
@@ -310,6 +319,10 @@ export function lightDirectional(
 
 export function textureLoad(path: string): TextureHandle {
   return session().textureLoad(path);
+}
+
+export function textureDispose(texture: TextureHandle): void {
+  session().textureDispose(texture);
 }
 
 export function shaderSet(

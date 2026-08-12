@@ -23,6 +23,7 @@ const {
   materialBasic,
   materialShader,
   meshBox,
+  meshDispose,
   meshFrom,
   meshPlane,
   meshSphere,
@@ -30,6 +31,7 @@ const {
   mouseY,
   noStroke,
   nodeAdd,
+  nodeRemove,
   nodeSetPos,
   nodeSetRot,
   nodeSetScale,
@@ -51,6 +53,7 @@ const {
   structFromEntries,
   text,
   textureLoad,
+  textureDispose,
   time,
   translate,
   triangle,
@@ -63,7 +66,7 @@ test("exports generated runtime metadata", () => {
   assert.equal(runtimeOps.time, "time");
   assert.equal(runtimeOps.material_shader, "materialShader");
   assert.equal(runtimeVersion, "0.1.0");
-  assert.equal(runtimeAbi, 1);
+  assert.equal(runtimeAbi, 2);
 });
 
 test("rejects generated programs with a missing or mismatched runtime ABI", async () => {
@@ -71,10 +74,10 @@ test("rejects generated programs with a missing or mismatched runtime ABI", asyn
   const canvas = fakeCanvas();
   const options = { canvas, context, onError() {}, requireRuntimeAbi: true };
 
-  await assert.rejects(start(async () => ({}), options), /ABI missing.*ABI 1/);
+  await assert.rejects(start(async () => ({}), options), /ABI missing.*ABI 2/);
   await assert.rejects(
-    start(async () => ({ __polyglRuntimeAbi: 2 }), options),
-    /ABI 2.*ABI 1/,
+    start(async () => ({ __polyglRuntimeAbi: 1 }), options),
+    /ABI 1.*ABI 2/,
   );
 });
 
@@ -220,6 +223,127 @@ test("runs setup and frames while batching shape vertices", async () => {
   assert.deepEqual(cancelled, [3]);
   assert.equal(canvas.listeners.size, 0);
   assert.throws(() => fill(1, 1, 1), /has not been started/);
+});
+
+test("caps long frame gaps and coalesces event-driven renders", async () => {
+  const animation = fakeWebGl2();
+  const animationFrames = [];
+  const deltas = [];
+  const animationHandle = await start(
+    { frame(dt) { deltas.push(dt); } },
+    {
+      canvas: fakeCanvas(),
+      context: animation.context,
+      maxDeltaSeconds: 0.05,
+      requestAnimationFrame(callback) {
+        animationFrames.push(callback);
+        return animationFrames.length;
+      },
+      cancelAnimationFrame() {},
+      onError() {},
+    },
+  );
+  animationFrames[0](1_000);
+  animationFrames[1](6_000);
+  assert.deepEqual(deltas, [0, 0.05]);
+  assert.equal(time(), 0.05);
+  animationHandle.stop();
+
+  const events = fakeWebGl2();
+  const eventCanvas = fakeCanvas();
+  const eventFrames = [];
+  const eventHandle = await start(
+    { on_event() {} },
+    {
+      canvas: eventCanvas,
+      context: events.context,
+      requestAnimationFrame(callback) {
+        eventFrames.push(callback);
+        return eventFrames.length;
+      },
+      cancelAnimationFrame() {},
+      onError() {},
+    },
+  );
+  for (let index = 0; index < 20; index += 1) {
+    eventCanvas.listeners.get("pointermove")({ clientX: index, clientY: 1 });
+  }
+  assert.equal(eventFrames.length, 1);
+  eventFrames[0](1_000);
+  eventCanvas.listeners.get("pointermove")({ clientX: 20, clientY: 1 });
+  assert.equal(eventFrames.length, 2);
+  eventHandle.stop();
+});
+
+test("tracks display size and handles WebGL context loss deterministically", async () => {
+  const resized = fakeWebGl2();
+  const resizeCanvas = fakeCanvas();
+  const resizeFrames = [];
+  let resizeCallback;
+  let observed;
+  let disconnected = false;
+  const resizeHandle = await start(
+    {},
+    {
+      canvas: resizeCanvas,
+      context: resized.context,
+      autoResize: true,
+      devicePixelRatio: 2,
+      createResizeObserver(callback) {
+        resizeCallback = callback;
+        return {
+          observe(target) { observed = target; },
+          disconnect() { disconnected = true; },
+        };
+      },
+      requestAnimationFrame(callback) {
+        resizeFrames.push(callback);
+        return resizeFrames.length;
+      },
+      cancelAnimationFrame() {},
+      onError() {},
+    },
+  );
+  assert.equal(observed, resizeCanvas);
+  assert.equal(resizeCanvas.width, 128);
+  assert.equal(resizeCanvas.height, 128);
+  resizeCanvas.cssWidth = 100;
+  resizeCanvas.cssHeight = 50;
+  resizeCallback();
+  assert.equal(resizeCanvas.width, 200);
+  assert.equal(resizeCanvas.height, 100);
+  assert.equal(resizeFrames.length, 1);
+  resizeHandle.stop();
+  assert.equal(disconnected, true);
+
+  const lost = fakeWebGl2();
+  const lostCanvas = fakeCanvas();
+  const lostFrames = [];
+  const cancelled = [];
+  const failures = [];
+  await start(
+    { frame() {} },
+    {
+      canvas: lostCanvas,
+      context: lost.context,
+      requestAnimationFrame(callback) {
+        lostFrames.push(callback);
+        return lostFrames.length;
+      },
+      cancelAnimationFrame(handle) { cancelled.push(handle); },
+      onError(reason) { failures.push(String(reason)); },
+    },
+  );
+  let prevented = false;
+  lostCanvas.listeners.get("webglcontextlost")({
+    preventDefault() { prevented = true; },
+  });
+  assert.equal(prevented, true);
+  assert.deepEqual(cancelled, [1]);
+  assert.match(failures[0], /rendering is suspended/);
+  lostCanvas.listeners.get("webglcontextrestored")({});
+  assert.match(failures[1], /restart the runtime session/);
+  assert.equal(lostCanvas.listeners.size, 0);
 });
 
 test("applies strokes and transforms while dispatching input events", async () => {
@@ -663,6 +787,85 @@ test("uploads custom shader uniforms independently for each node", async () => {
   handle.stop();
 });
 
+test("keeps GPU resources alive while referenced and invalidates disposed handles", async () => {
+  const gl = fakeWebGl2();
+  let mesh;
+  let node;
+  let texture;
+  const handle = await start(
+    {
+      setup() {
+        mesh = meshBox(1, 1, 1);
+        texture = textureLoad("assets/albedo.png");
+        node = nodeAdd(mesh, materialShader("textured"));
+        shaderSet(node, "albedo", texture);
+      },
+    },
+    {
+      canvas: fakeCanvas(),
+      context: gl.context,
+      shaderBundle: shaderBundle([{
+        name: "textured",
+        uniforms: [{
+          name: "albedo",
+          glslName: "pgl_u_albedo",
+          type: "texture",
+          source: "user",
+        }],
+      }]),
+      imageLoader: async () => ({ width: 2, height: 2 }),
+      onError() {},
+    },
+  );
+
+  assert.equal(Object.isFrozen(mesh), true);
+  assert.equal(Object.isFrozen(node), true);
+  assert.equal(Object.isFrozen(texture), true);
+  assert.throws(() => { mesh.kind = "forged"; }, TypeError);
+  assert.throws(() => meshDispose(mesh), /referenced by 1 scene node/);
+  assert.throws(() => textureDispose(texture), /referenced by 1 scene node uniform/);
+  nodeRemove(node);
+  assert.throws(() => nodeSetPos(node, 0, 0, 0), /no longer valid/);
+  meshDispose(mesh);
+  textureDispose(texture);
+  assert.throws(() => meshDispose(mesh), /no longer valid/);
+  assert.throws(() => textureDispose(texture), /no longer valid/);
+  assert.equal(gl.deletedBuffers.length, 2);
+  assert.equal(gl.deletedTextures.length, 1);
+  handle.stop();
+  assert.equal(gl.deletedBuffers.length, 3);
+  assert.equal(gl.deletedTextures.length, 1);
+});
+
+test("cancels a pending texture upload when its handle is disposed", async () => {
+  const gl = fakeWebGl2();
+  let rejectImage;
+  let texture;
+  const started = start(
+    {
+      setup() {
+        texture = textureLoad("assets/transient.png");
+        textureDispose(texture);
+      },
+    },
+    {
+      canvas: fakeCanvas(),
+      context: gl.context,
+      imageLoader() {
+        return new Promise((_resolve, reject) => { rejectImage = reject; });
+      },
+      onError() {},
+    },
+  );
+  await Promise.resolve();
+  rejectImage(new Error("late network failure"));
+  const handle = await started;
+  assert.equal(texture.loaded, false);
+  assert.equal(gl.textureUploads.length, 1);
+  assert.equal(gl.deletedTextures.length, 1);
+  handle.stop();
+});
+
 test("waits for setup textures and uses a white placeholder during frames", async () => {
   const setupGl = fakeWebGl2();
   const setupDocument = fakeDocument();
@@ -888,6 +1091,8 @@ function fakeCanvas() {
   return {
     width: 64,
     height: 64,
+    cssWidth: 64,
+    cssHeight: 64,
     captured,
     listeners,
     addEventListener(name, listener) {
@@ -899,7 +1104,12 @@ function fakeCanvas() {
       }
     },
     getBoundingClientRect() {
-      return { left: 0, top: 0, width: this.width, height: this.height };
+      return {
+        left: 0,
+        top: 0,
+        width: this.cssWidth,
+        height: this.cssHeight,
+      };
     },
     hasPointerCapture(pointerId) {
       return captured.has(pointerId);
@@ -1025,6 +1235,8 @@ function fakeWebGl2(options = {}) {
   const uniform3fvValues = [];
   const uniformMatrix4Values = [];
   const deletedShaders = [];
+  const deletedBuffers = [];
+  const deletedTextures = [];
   let shaderChecks = 0;
   const context = {
     ARRAY_BUFFER: 0x8892,
@@ -1081,12 +1293,12 @@ function fakeWebGl2(options = {}) {
     createShader() {
       return {};
     },
-    deleteBuffer() {},
+    deleteBuffer(buffer) { deletedBuffers.push(buffer); },
     deleteProgram() {},
     deleteShader(shader) {
       deletedShaders.push(shader);
     },
-    deleteTexture() {},
+    deleteTexture(texture) { deletedTextures.push(texture); },
     depthFunc() {},
     disable() {},
     drawArrays(_mode, _first, count) {
@@ -1161,5 +1373,7 @@ function fakeWebGl2(options = {}) {
     uniform3fvValues,
     uniformMatrix4Values,
     deletedShaders,
+    deletedBuffers,
+    deletedTextures,
   };
 }

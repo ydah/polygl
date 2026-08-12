@@ -85,6 +85,9 @@ pub(crate) static BUILTINS: &[Builtin] = &[
     scene::TEXTURE_LOAD,
     scene::SHADER_SET,
     scene::SAMPLE,
+    scene::NODE_REMOVE,
+    scene::MESH_DISPOSE,
+    scene::TEXTURE_DISPOSE,
 ];
 
 pub(crate) static BUILTIN_STRUCTS: &[crate::BuiltinStruct] = &[structures::EVENT];
