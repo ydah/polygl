@@ -632,16 +632,19 @@ fn serve_static(
 fn safe_relative_path(target: &str) -> Option<PathBuf> {
     let target = target.strip_prefix('/')?;
     let decoded = percent_decode(target)?;
+    if decoded.contains('\\') {
+        return None;
+    }
     let target = if decoded.is_empty() {
         "index.html"
     } else {
         decoded.as_str()
     };
     let path = Path::new(target);
-    if path.components().all(|component| {
-        matches!(component, Component::Normal(_))
-            && !component.as_os_str().to_string_lossy().contains('\\')
-    }) {
+    if path
+        .components()
+        .all(|component| matches!(component, Component::Normal(_)))
+    {
         Some(path.to_path_buf())
     } else {
         None
