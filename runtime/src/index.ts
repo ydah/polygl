@@ -1,5 +1,5 @@
 export { runtimeOps, runtimeSignatures } from "./generated/ops.js";
-export { runtimeAbi, runtimeVersion } from "./generated/abi.js";
+export { runtimeAbi, runtimeVersion, shaderAbi } from "./generated/abi.js";
 export type {
   BuiltinName,
   RuntimeDomain,
@@ -334,15 +334,30 @@ export function shaderSet(
 }
 
 export function floorToInt(value: number): number {
-  return Math.floor(value) | 0;
+  return saturatingInt(Math.floor(value));
 }
 
 export function roundToInt(value: number): number {
-  return (value < 0 ? Math.ceil(value - 0.5) : Math.floor(value + 0.5)) | 0;
+  return saturatingInt(
+    value < 0 ? Math.ceil(value - 0.5) : Math.floor(value + 0.5),
+  );
 }
 
 export function truncToInt(value: number): number {
-  return Math.trunc(value) | 0;
+  return saturatingInt(Math.trunc(value));
+}
+
+function saturatingInt(value: number): number {
+  if (Number.isNaN(value)) {
+    return 0;
+  }
+  if (value > 2_147_483_647) {
+    return 2_147_483_647;
+  }
+  if (value <= -2_147_483_648) {
+    return -2_147_483_648;
+  }
+  return value === 0 ? 0 : value | 0;
 }
 
 export function checkedIndex<T>(

@@ -55,6 +55,13 @@ end
     assert!(shader.fragment.contains("uniform float u_time;"));
     assert!(shader.fragment.contains("ceil("));
     assert!(shader.fragment.contains("floor("));
+    assert!(
+        shader
+            .fragment
+            .contains("int pgl_float_to_int(float value)")
+    );
+    assert!(shader.fragment.contains("if (isnan(value)) return 0;"));
+    assert!(shader.fragment.contains("pgl_float_to_int("));
     assert!(shader.fragment.contains("out vec4 out_color;"));
     assert!(shader.fragment.contains("out_color = vec4("));
     assert_eq!(shader.attributes[0].name, "position");

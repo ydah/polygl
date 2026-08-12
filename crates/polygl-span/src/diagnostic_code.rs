@@ -42,6 +42,7 @@ pub enum Fixability {
 pub struct DiagnosticMetadata {
     pub severity: Severity,
     pub title: &'static str,
+    pub description: &'static str,
     pub producer: &'static str,
     pub fixability: Fixability,
     pub introduced: &'static str,
@@ -264,9 +265,47 @@ impl DiagnosticCode {
         DiagnosticMetadata {
             severity,
             title,
+            description: self.description(),
             producer,
             fixability,
             introduced: "0.1.0",
+        }
+    }
+
+    #[must_use]
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::E0001 => "Compiler configuration is invalid or internally inconsistent.",
+            Self::E0100 => "The source-language parser could not produce a valid syntax tree.",
+            Self::E0200 => "Source syntax or behavior is outside the Common Core subset.",
+            Self::E0202 => "A block or closure is outside the non-escaping Common Core whitelist.",
+            Self::E0203 => "A class feature is outside the fixed struct-like class subset.",
+            Self::E0300 => "An integer literal is outside the Common Core i32 range.",
+            Self::E0301 => "A condition does not have the required bool type.",
+            Self::E0302 => {
+                "Loose equality is unavailable and must be rewritten as strict equality."
+            }
+            Self::E0303 => "Inferred and required types are incompatible.",
+            Self::E0305 => "A referenced name, type, field, or function is unknown.",
+            Self::E0306 => "A declaration, field set, or argument list has an invalid shape.",
+            Self::E0310 => "A function exceeded the per-function specialization limit.",
+            Self::E0311 => "A reassignment changes a binding type or writes a constant.",
+            Self::E0312 => "A type remains unresolved or would recursively contain itself.",
+            Self::E0313 => "A recursive function specialization cannot be inferred safely.",
+            Self::E0314 => "A source annotation is malformed, misplaced, or unmatched.",
+            Self::E0401 => "A recursive or cyclic dependency is reachable from GPU code.",
+            Self::E0402 => "A value or type has no representation in the GPU subset.",
+            Self::E0403 => "GPU code attempts to use dynamically sized collection storage.",
+            Self::E0404 => "A Host-only declaration or builtin is reachable from GPU code.",
+            Self::E0405 => {
+                "A shader pair, stage, varying, attribute, or material violates the shader ABI."
+            }
+            Self::E0406 => "An integer divisor in GPU code is not provably nonzero.",
+            Self::E0501 => {
+                "A public asset path is dynamic, non-relative, non-portable, or colliding."
+            }
+            Self::W0401 => "Shared float code may differ between Host f64 and GPU f32 execution.",
+            Self::W0402 => "A compiler-visible GPU loop exceeds the portable iteration threshold.",
         }
     }
 
@@ -326,6 +365,7 @@ mod tests {
                 }
             );
             assert!(!code.metadata().title.is_empty());
+            assert!(!code.metadata().description.is_empty());
             assert!(!code.metadata().producer.is_empty());
         }
     }

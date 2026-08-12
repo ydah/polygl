@@ -27,9 +27,10 @@ of two clean executable builds used by CI.
 ## Generated files
 
 `cargo xtask gen-runtime` regenerates the runtime operation table, runtime ABI
-constant, and API reference from the canonical Rust builtin registry. Commit
-all resulting changes, including the embedded runtime bundle after running
-`pnpm --dir runtime build`. Use these read-only gates before submitting:
+and shader ABI constants, API reference, and diagnostic reference from the
+canonical Rust registries. Commit all resulting changes, including the embedded
+runtime bundle after running `pnpm --dir runtime build`. Use these read-only
+gates before submitting:
 
 ```console
 cargo xtask gen-runtime --check

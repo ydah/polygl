@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -12,6 +13,7 @@ use polygl_span::{Diagnostics, SourceFile, SourceId};
 use crate::{
     ConformanceCase, ConformanceError, ConformanceLanguage, ConformanceLayer, L1BaselineStore,
     L2SnapshotStore, L3SnapshotStore, NeutralProgram, compare_neutral_hir, load_manifest,
+    select_cases,
 };
 
 const BASELINE_RENDERER: &str = "swiftshader";
@@ -26,6 +28,7 @@ pub struct ConformanceReport {
 
 pub fn verify_smoke(root: &Path) -> Result<ConformanceReport, ConformanceError> {
     let manifest = load_manifest(root)?;
+    let selected = select_manifest_cases(&manifest)?;
     let l1 = L1BaselineStore::new(root);
     let l2 = L2SnapshotStore::new(root);
     let l3 = L3SnapshotStore::new(root);
@@ -36,8 +39,7 @@ pub fn verify_smoke(root: &Path) -> Result<ConformanceReport, ConformanceError> 
         gpu_cases: 0,
     };
 
-    for case in &manifest {
-        validate_capabilities(case)?;
+    for case in selected {
         if case.layers.contains(&ConformanceLayer::Gpu) {
             for language in &case.languages {
                 let typed = compile_typed(root, case, *language)?;
@@ -80,6 +82,40 @@ pub fn verify_smoke(root: &Path) -> Result<ConformanceReport, ConformanceError> 
     }
 
     Ok(report)
+}
+
+fn select_manifest_cases(
+    manifest: &[ConformanceCase],
+) -> Result<Vec<&ConformanceCase>, ConformanceError> {
+    let mut selected_ids = HashSet::new();
+    for language in ConformanceLanguage::ALL {
+        let capabilities = adapter(language).capabilities();
+        for layer in [
+            ConformanceLayer::L1Render,
+            ConformanceLayer::L2HirSnapshot,
+            ConformanceLayer::L3NeutralHir,
+            ConformanceLayer::Gpu,
+        ] {
+            for case in select_cases(manifest, layer, capabilities) {
+                if case.languages.contains(&language) {
+                    selected_ids.insert(case.id.as_str());
+                }
+            }
+        }
+    }
+    for case in manifest {
+        validate_capabilities(case)?;
+        if !selected_ids.contains(case.id.as_str()) {
+            return Err(ConformanceError::InvalidManifest(format!(
+                "case `{}` is not selected by any declared language capability set",
+                case.id
+            )));
+        }
+    }
+    Ok(manifest
+        .iter()
+        .filter(|case| selected_ids.contains(case.id.as_str()))
+        .collect())
 }
 
 fn validate_capabilities(case: &ConformanceCase) -> Result<(), ConformanceError> {
@@ -202,7 +238,7 @@ fn compile_diagnostics(
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use polygl_adapter_api::{LanguageAdapter, LowerCtx};
+    use polygl_adapter_api::{FeatureTag, LanguageAdapter, LowerCtx};
     use polygl_adapter_perl::PerlAdapter;
     use polygl_adapter_php::PhpAdapter;
     use polygl_adapter_ruby::RubyAdapter;
@@ -210,7 +246,9 @@ mod tests {
     use polygl_hir::dump;
     use polygl_span::{SourceFile, SourceId};
 
-    use crate::{ConformanceLayer, load_manifest};
+    use crate::{ConformanceCase, ConformanceLanguage, ConformanceLayer, load_manifest};
+
+    use super::select_manifest_cases;
 
     #[test]
     fn manifest_drives_every_smoke_case_and_feature() {
@@ -243,6 +281,21 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn runner_rejects_a_language_without_the_required_capability() {
+        let cases = [ConformanceCase {
+            id: "php-truthiness".to_owned(),
+            layers: vec![ConformanceLayer::L2HirSnapshot],
+            languages: vec![ConformanceLanguage::Php],
+            required_features: vec![FeatureTag::TruthinessSugar],
+            expected_diagnostic: None,
+            browser: false,
+        }];
+        let error = select_manifest_cases(&cases).unwrap_err().to_string();
+        assert!(error.contains("truthiness-sugar-v1"));
+        assert!(error.contains("php"));
     }
 
     #[test]

@@ -3,8 +3,9 @@
 
 # Browser runtime
 
-Generated modules export a numeric runtime ABI marker. The embedded runtime
-checks it before setup, shader compilation, or rendering and rejects missing or
+Generated modules export a numeric runtime ABI marker, and generated shader
+bundles carry their own shader ABI marker. The embedded runtime checks both
+before setup, shader compilation, or rendering and rejects missing or
 mismatched markers with both versions in the error. Direct object programs may
 omit the marker for runtime-library use; dynamically loaded compiler output may
 not. The runtime package version and ABI constant are generated from the

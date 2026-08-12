@@ -2,3 +2,4 @@
 
 export const runtimeVersion = "0.1.0" as const;
 export const runtimeAbi = 2 as const;
+export const shaderAbi = 1 as const;

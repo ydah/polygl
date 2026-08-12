@@ -11,7 +11,7 @@ use polygl_adapter_api::{ADAPTER_API_VERSION, LanguageAdapter, LowerCtx};
 use polygl_adapter_perl::PerlAdapter;
 use polygl_adapter_php::PhpAdapter;
 use polygl_adapter_ruby::RubyAdapter;
-use polygl_backend_glsl::{GlslArtifacts, GlslBackend, UniformSource};
+use polygl_backend_glsl::{GlslArtifacts, GlslBackend, SHADER_ABI_VERSION, UniformSource};
 use polygl_backend_js::{BuildMode, JavaScriptBackend, RUNTIME_ABI_VERSION, SourceMapMode};
 use polygl_core::{BUILTIN_SCHEMA_VERSION, BuiltinTable};
 use polygl_hir::HIR_SCHEMA_VERSION;
@@ -471,7 +471,7 @@ fn render_shader_module(
         ));
     }
     Ok(format!(
-        "export const shaderBundle = Object.freeze({{debug:{},shaders:Object.freeze([{}])}});\n",
+        "export const shaderBundle = Object.freeze({{shaderAbi:{SHADER_ABI_VERSION},debug:{},shaders:Object.freeze([{}])}});\n",
         mode == BuildMode::Debug,
         shaders.join(","),
     ))
@@ -607,6 +607,7 @@ fn render_artifact_manifest(
             "sourcesContent": options.sources_content,
         },
         "runtimeAbi": RUNTIME_ABI_VERSION,
+        "shaderAbi": SHADER_ABI_VERSION,
         "schemaVersion": 1,
         "schemas": {
             "builtins": BUILTIN_SCHEMA_VERSION,
@@ -963,6 +964,7 @@ end
         assert!(debug_map.get("sourcesContent").is_none());
         assert!(debug.join("runtime.js").is_file());
         let debug_shaders = fs::read_to_string(debug.join("shaders.js")).unwrap();
+        assert!(debug_shaders.contains("shaderAbi:1"));
         assert!(debug_shaders.contains("debug:true"));
         assert!(debug_shaders.contains("name:\"plasma\""));
         assert!(debug_shaders.contains("name:\"u_time\""));
@@ -980,6 +982,7 @@ end
         assert_eq!(debug_manifest["adapter"]["id"], "ruby");
         assert_eq!(debug_manifest["adapter"]["apiVersion"], 1);
         assert_eq!(debug_manifest["runtimeAbi"], 2);
+        assert_eq!(debug_manifest["shaderAbi"], 1);
         assert_eq!(debug_manifest["schemas"]["hir"], 1);
         assert_eq!(debug_manifest["schemas"]["builtins"], 2);
         assert_eq!(debug_manifest["source"]["path"], "triangle.rb");

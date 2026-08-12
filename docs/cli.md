@@ -25,7 +25,7 @@ polygl --version
 - `polygl-manifest.json`, a reproducible provenance record for the build.
 
 The manifest records compiler and adapter versions, versioned feature tags,
-HIR/builtin/runtime ABI versions, normalized source path and BLAKE3 digest,
+HIR/builtin/runtime/shader ABI versions, normalized source path and BLAKE3 digest,
 effective build options, and a sorted size/digest inventory of every payload
 artifact. It deliberately omits generation time so identical inputs and options
 produce identical bytes. The manifest does not hash itself.

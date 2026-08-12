@@ -11,7 +11,9 @@ repository.workspace = true
 [dependencies]
 polygl-conformance = { path = "../conformance/runner" }
 polygl-backend-js = { path = "../crates/polygl-backend-js" }
+polygl-backend-glsl = { path = "../crates/polygl-backend-glsl" }
 polygl-core = { path = "../crates/polygl-core" }
+polygl-span = { path = "../crates/polygl-span" }
 
 [lints]
 workspace = true

@@ -236,6 +236,12 @@ impl<'module> Emitter<'module> {
              \u{20} if (right == 0) return 0;\n\
              \u{20} if (left == (-2147483647 - 1) && right == -1) return 0;\n\
              \u{20} return left % right;\n\
+             }\n\
+             int pgl_float_to_int(float value) {\n\
+             \u{20} if (isnan(value)) return 0;\n\
+             \u{20} if (value >= 2147483648.0) return 2147483647;\n\
+             \u{20} if (value <= -2147483648.0) return (-2147483647 - 1);\n\
+             \u{20} return int(value);\n\
              }\n\n",
         );
     }
@@ -755,11 +761,11 @@ const fn unary(op: UnaryOp) -> &'static str {
 fn runtime_call(operation: &str, args: &[String]) -> Result<String, EmitError> {
     match (operation, args) {
         ("time", []) => Ok("u_time".to_owned()),
-        ("floorToInt", [value]) => Ok(format!("int(floor({value}))")),
+        ("floorToInt", [value]) => Ok(format!("pgl_float_to_int(floor({value}))")),
         ("roundToInt", [value]) => Ok(format!(
-            "int(({value}) < 0.0 ? ceil(({value}) - 0.5) : floor(({value}) + 0.5))"
+            "pgl_float_to_int(({value}) < 0.0 ? ceil(({value}) - 0.5) : floor(({value}) + 0.5))"
         )),
-        ("truncToInt", [value]) => Ok(format!("int(trunc({value}))")),
+        ("truncToInt", [value]) => Ok(format!("pgl_float_to_int(trunc({value}))")),
         ("sampleTexture", [texture, uv]) => Ok(format!("texture({texture}, {uv})")),
         _ => Err(EmitError::UnsupportedRuntimeOp(operation.to_owned())),
     }

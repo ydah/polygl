@@ -35,8 +35,9 @@ name.
   unless constant propagation proves it nonzero (E0406); backend zero guards
   remain as defense in depth for malformed direct input. Float floor remainder
   uses GLSL `mod`.
-- `time()` lowers to `u_time`; `floor`, `round`, and `trunc` lower to the
-  corresponding GLSL operation followed by an integer conversion.
+- `time()` lowers to `u_time`; `floor`, `round`, and `trunc` lower through a
+  saturating conversion helper so NaN, infinities, out-of-range values, and
+  negative zero follow the Common Core Host/GPU contract.
 - A zero-varying vertex `vec4` result is assigned to `gl_Position`. A varying
   struct result assigns `clip_pos` to `gl_Position` and copies every field,
   including `clip_pos`, to generated `out` variables. The fragment result is

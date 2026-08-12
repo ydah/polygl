@@ -11,6 +11,7 @@ const {
   checkedIndex,
   circle,
   fill,
+  floorToInt,
   formatRuntimeError,
   keyDown,
   line,
@@ -43,6 +44,7 @@ const {
   roundToInt,
   runtimeOps,
   runtimeAbi,
+  shaderAbi,
   runtimeVersion,
   scale,
   setShaderUniform,
@@ -57,6 +59,7 @@ const {
   time,
   translate,
   triangle,
+  truncToInt,
   width,
 } = await import(`data:text/javascript;base64,${runtimeBundle.toString("base64")}`);
 
@@ -67,6 +70,7 @@ test("exports generated runtime metadata", () => {
   assert.equal(runtimeOps.material_shader, "materialShader");
   assert.equal(runtimeVersion, "0.1.0");
   assert.equal(runtimeAbi, 2);
+  assert.equal(shaderAbi, 1);
 });
 
 test("rejects generated programs with a missing or mismatched runtime ABI", async () => {
@@ -81,6 +85,23 @@ test("rejects generated programs with a missing or mismatched runtime ABI", asyn
   );
 });
 
+test("rejects a generated shader bundle with a missing or mismatched ABI", async () => {
+  const program = { __polyglRuntimeAbi: runtimeAbi };
+  for (const required of [undefined, shaderAbi + 1]) {
+    const { context } = fakeWebGl2();
+    await assert.rejects(
+      start(program, {
+        canvas: fakeCanvas(),
+        context,
+        onError() {},
+        requireRuntimeAbi: true,
+        shaderBundle: { debug: false, shaderAbi: required, shaders: [] },
+      }),
+      new RegExp(`shader ABI ${String(required ?? "missing")}.*shader ABI ${shaderAbi}`),
+    );
+  }
+});
+
 test("seeded random sequences are reproducible", () => {
   const first = new SeededRandom(42);
   const second = new SeededRandom(42);
@@ -88,6 +109,20 @@ test("seeded random sequences are reproducible", () => {
     [first.next(), first.next(), first.between(-2, 3)],
     [second.next(), second.next(), second.between(-2, 3)],
   );
+});
+
+test("float-to-int builtins define special values and saturate outside i32", () => {
+  for (const convert of [floorToInt, roundToInt, truncToInt]) {
+    assert.equal(convert(Number.NaN), 0);
+    assert.equal(convert(Number.POSITIVE_INFINITY), 2_147_483_647);
+    assert.equal(convert(Number.NEGATIVE_INFINITY), -2_147_483_648);
+    assert.equal(convert(1e100), 2_147_483_647);
+    assert.equal(convert(-1e100), -2_147_483_648);
+    assert.equal(Object.is(convert(-0), -0), false);
+  }
+  assert.equal(floorToInt(-1.1), -2);
+  assert.equal(roundToInt(-1.5), -2);
+  assert.equal(truncToInt(-1.9), -1);
 });
 
 test("debug checks preserve original source locations", () => {

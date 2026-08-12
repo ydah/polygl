@@ -72,9 +72,16 @@ requires `floor`, `round`, or `trunc`. String/numeric conversion is never
 implicit and must produce an E03xx diagnostic with an explicit-conversion
 suggestion.
 
-Integer operations that may overflow should produce a W03xx warning. A function
-reachable from both host and GPU domains should produce a W04xx precision
-warning when its result can differ because of f64/f32 evaluation.
+Integer overflow follows the wrapping contract above and is not itself a
+warning. W03xx is reserved for future numeric-portability diagnostics that are
+not already defined Common Core behavior. A function reachable from both host
+and GPU domains should produce a W04xx precision warning when its result can
+differ because of f64/f32 evaluation.
+
+`floor`, `round`, and `trunc` convert to i32 with one Host/GPU contract. NaN
+becomes `0`; positive and negative infinity saturate to `INT_MAX` and `INT_MIN`;
+finite results outside i32 saturate to the same bounds; and negative zero
+becomes positive integer zero. `round` resolves half values away from zero.
 
 ## Expressions and statements
 

@@ -1,5 +1,6 @@
 import { runtimeError } from "./errors.js";
 import type { SourceLocation } from "./errors.js";
+import { shaderAbi } from "./generated/abi.js";
 
 export type ShaderValueType =
   | "int"
@@ -38,6 +39,7 @@ export interface ShaderArtifact {
 }
 
 export interface ShaderBundle {
+  readonly shaderAbi?: number;
   readonly debug: boolean;
   readonly shaders: readonly ShaderArtifact[];
 }
@@ -110,7 +112,17 @@ export class WebGL2ShaderRegistry {
   public static fromBundle(
     gl: WebGL2RenderingContext,
     bundle?: ShaderBundle,
+    requireShaderAbi = false,
   ): WebGL2ShaderRegistry {
+    if (
+      bundle !== undefined &&
+      (requireShaderAbi || bundle.shaderAbi !== undefined) &&
+      bundle.shaderAbi !== shaderAbi
+    ) {
+      throw new Error(
+        `generated shader bundle requires shader ABI ${String(bundle.shaderAbi ?? "missing")}; this runtime provides shader ABI ${shaderAbi}`,
+      );
+    }
     return new WebGL2ShaderRegistry(
       gl,
       bundle?.debug ?? false,

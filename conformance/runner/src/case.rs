@@ -172,9 +172,13 @@ fn validate_name(value: &str) -> Result<(), ConformanceError> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use polygl_adapter_api::FeatureTag;
 
-    use super::{ConformanceCase, ConformanceLanguage, ConformanceLayer, select_cases};
+    use super::{
+        ConformanceCase, ConformanceLanguage, ConformanceLayer, load_manifest, select_cases,
+    };
 
     #[test]
     fn selects_only_layer_and_capability_compatible_cases() {
@@ -208,5 +212,23 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["triangle"]
         );
+    }
+
+    #[test]
+    fn manifest_requires_coverage_for_every_feature_tag() {
+        let temporary = tempfile::tempdir().unwrap();
+        fs::write(
+            temporary.path().join("cases.json"),
+            r#"[{
+              "id": "core-only",
+              "layers": ["l2-hir-snapshot"],
+              "languages": ["ruby"],
+              "required_features": ["core-v1"],
+              "browser": false
+            }]"#,
+        )
+        .unwrap();
+        let error = load_manifest(temporary.path()).unwrap_err().to_string();
+        assert!(error.contains("has no conformance case"));
     }
 }

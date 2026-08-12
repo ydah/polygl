@@ -147,7 +147,7 @@ export class RuntimeSession implements RuntimeHandle {
 
   public async run(source: PolyglProgramSource): Promise<void> {
     try {
-      this.replaceShaderBundle(this.initialShaderBundle);
+      this.replaceShaderBundle(this.initialShaderBundle, this.requireRuntimeAbi);
       const program = typeof source === "function" ? await source() : source;
       if (this.stopped) {
         return;
@@ -162,7 +162,10 @@ export class RuntimeSession implements RuntimeHandle {
       }
       this.program = program;
       if (program.__polyglShaderBundle !== undefined) {
-        this.replaceShaderBundle(program.__polyglShaderBundle);
+        this.replaceShaderBundle(
+          program.__polyglShaderBundle,
+          this.requireRuntimeAbi || program.__polyglRuntimeAbi !== undefined,
+        );
       }
       await program.setup?.();
       await this.scene.awaitSetupAssets();
@@ -585,11 +588,15 @@ export class RuntimeSession implements RuntimeHandle {
     this.renderer.flush();
   }
 
-  private replaceShaderBundle(bundle: ShaderBundle | undefined): void {
+  private replaceShaderBundle(
+    bundle: ShaderBundle | undefined,
+    requireShaderAbi = false,
+  ): void {
     this.shaderRegistry.dispose();
     this.shaderRegistry = WebGL2ShaderRegistry.fromBundle(
       this.renderer.context,
       bundle,
+      requireShaderAbi,
     );
     this.scene.replaceShaderRegistry(this.shaderRegistry);
   }
