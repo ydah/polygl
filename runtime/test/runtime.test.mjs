@@ -10,6 +10,7 @@ const {
   background,
   checkedIndex,
   circle,
+  createRuntimeSession,
   fill,
   floorToInt,
   formatRuntimeError,
@@ -699,6 +700,84 @@ test("caps long frame gaps and coalesces event-driven renders", async () => {
   eventHandle.stop();
 });
 
+test("supports context-bound sessions and deterministic fixed timesteps", async () => {
+  const firstGl = fakeWebGl2();
+  const secondGl = fakeWebGl2();
+  const first = createRuntimeSession({
+    canvas: fakeCanvas(),
+    context: firstGl.context,
+    onError() {},
+  });
+  const second = createRuntimeSession({
+    canvas: fakeCanvas(),
+    context: secondGl.context,
+    onError() {},
+  });
+  await Promise.all([
+    first.run({ setup() { first.renderer.rect(0, 0, 1, 1); } }),
+    second.run({ setup() { second.renderer.triangle(0, 0, 1, 0, 0, 1); } }),
+  ]);
+  assert.deepEqual(firstGl.draws, [6]);
+  assert.deepEqual(secondGl.draws, [3]);
+  first.stop();
+  second.stop();
+
+  const fixedGl = fakeWebGl2();
+  const frames = [];
+  const deltas = [];
+  const fixed = await start({ frame(dt) { deltas.push(dt); } }, {
+    canvas: fakeCanvas(),
+    context: fixedGl.context,
+    fixedDeltaSeconds: 0.02,
+    maxCatchUpSteps: 2,
+    requestAnimationFrame(callback) {
+      frames.push(callback);
+      return frames.length;
+    },
+    cancelAnimationFrame() {},
+    onError() {},
+  });
+  frames[0](1_000);
+  frames[1](1_055);
+  assert.deepEqual(deltas, [0.02, 0.02]);
+  assert.equal(time(), 0.04);
+  fixed.stop();
+});
+
+test("pauses animation while the document is hidden", async () => {
+  const gl = fakeWebGl2();
+  const documentObject = fakeDocument();
+  documentObject.hidden = true;
+  const frames = [];
+  const cancelled = [];
+  const handle = await start({ frame() {} }, {
+    canvas: fakeCanvas(),
+    context: gl.context,
+    document: documentObject,
+    visibilityPolicy: "pause",
+    requestAnimationFrame(callback) {
+      frames.push(callback);
+      return frames.length;
+    },
+    cancelAnimationFrame(id) { cancelled.push(id); },
+    onError() {},
+  });
+  assert.equal(handle.state, "paused");
+  assert.equal(frames.length, 0);
+  documentObject.hidden = false;
+  documentObject.listeners.get("visibilitychange")();
+  assert.equal(handle.state, "running");
+  assert.equal(frames.length, 1);
+  frames[0](1_000);
+  assert.equal(frames.length, 2);
+  documentObject.hidden = true;
+  documentObject.listeners.get("visibilitychange")();
+  assert.equal(handle.state, "paused");
+  assert.deepEqual(cancelled, [2]);
+  handle.stop();
+  assert.equal(documentObject.listeners.size, 0);
+});
+
 test("tracks display size and handles WebGL context loss deterministically", async () => {
   const resized = fakeWebGl2();
   const resizeCanvas = fakeCanvas();
@@ -848,7 +927,19 @@ test("applies strokes and transforms while dispatching input events", async () =
     ["pointerdown", "pointerup", "keydown", "keyup"],
   );
   assert.deepEqual(events[0], {
+    altKey: false,
+    button: -1,
+    buttons: 0,
+    code: null,
+    ctrlKey: false,
+    inside: true,
     kind: "pointerdown",
+    metaKey: false,
+    pointerId: 7,
+    pressure: 0,
+    shiftKey: false,
+    wheelX: 0,
+    wheelY: 0,
     x: 32,
     y: 16,
     key: null,
@@ -1512,6 +1603,7 @@ function shaderBundle(shaders) {
 function fakeCanvas() {
   const listeners = new Map();
   const captured = new Set();
+  let focusCount = 0;
   return {
     width: 64,
     height: 64,
@@ -1519,6 +1611,7 @@ function fakeCanvas() {
     cssHeight: 64,
     captured,
     listeners,
+    get focusCount() { return focusCount; },
     addEventListener(name, listener) {
       listeners.set(name, listener);
     },
@@ -1535,6 +1628,7 @@ function fakeCanvas() {
         height: this.cssHeight,
       };
     },
+    focus() { focusCount += 1; },
     hasPointerCapture(pointerId) {
       return captured.has(pointerId);
     },
@@ -1551,6 +1645,7 @@ function fakeDocument() {
   const listeners = new Map();
   const windowListeners = new Map();
   return {
+    hidden: false,
     defaultView: {
       listeners: windowListeners,
       addEventListener(name, listener) {

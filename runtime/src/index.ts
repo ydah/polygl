@@ -52,6 +52,7 @@ export type {
   RuntimeHandle,
   RuntimeOptions,
   RuntimeResizeObserver,
+  RuntimeSessionState,
 } from "./session.js";
 
 import { runtimeError } from "./errors.js";
@@ -109,6 +110,17 @@ export async function start(
   } finally {
     startInProgress = false;
   }
+}
+
+/** Creates an independently owned session without changing the global facade. */
+export function createRuntimeSession(
+  options: RuntimeOptions,
+): RuntimeSession {
+  const validatedOptions = validateRuntimeOptions(options);
+  const canvas = validatedOptions.canvas ?? createCanvas(
+    validatedOptions.document ?? globalThis.document,
+  );
+  return new RuntimeSession(canvas, validatedOptions);
 }
 
 export function size(width: number, height: number): void {

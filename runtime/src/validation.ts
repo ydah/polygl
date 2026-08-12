@@ -76,6 +76,19 @@ export function validateRuntimeOptions(value: unknown): RuntimeOptions {
     properties,
     "maxDeltaSeconds",
   );
+  const fixedDeltaSeconds = optionalPositiveFiniteNumber(
+    properties,
+    "fixedDeltaSeconds",
+  );
+  const maxCatchUpSteps = optionalPositiveSafeInteger(
+    properties,
+    "maxCatchUpSteps",
+  );
+  const visibilityPolicy = optionalStringChoice(
+    properties,
+    "visibilityPolicy",
+    ["continue", "pause"] as const,
+  );
   const autoResize = optionalBoolean(properties, "autoResize");
   const devicePixelRatio = optionalPositiveFiniteNumber(
     properties,
@@ -84,6 +97,11 @@ export function validateRuntimeOptions(value: unknown): RuntimeOptions {
   const createResizeObserver = optionalFunction<
     RuntimeOptions["createResizeObserver"]
   >(properties, "createResizeObserver");
+  const focusOnPointerDown = optionalBoolean(properties, "focusOnPointerDown");
+  const preventDefaultInput = optionalBoolean(
+    properties,
+    "preventDefaultInput",
+  );
 
   return Object.freeze({
     ...(canvas === undefined ? {} : { canvas }),
@@ -97,9 +115,14 @@ export function validateRuntimeOptions(value: unknown): RuntimeOptions {
     ...(onError === undefined ? {} : { onError }),
     ...(requireRuntimeAbi === undefined ? {} : { requireRuntimeAbi }),
     ...(maxDeltaSeconds === undefined ? {} : { maxDeltaSeconds }),
+    ...(fixedDeltaSeconds === undefined ? {} : { fixedDeltaSeconds }),
+    ...(maxCatchUpSteps === undefined ? {} : { maxCatchUpSteps }),
+    ...(visibilityPolicy === undefined ? {} : { visibilityPolicy }),
     ...(autoResize === undefined ? {} : { autoResize }),
     ...(devicePixelRatio === undefined ? {} : { devicePixelRatio }),
     ...(createResizeObserver === undefined ? {} : { createResizeObserver }),
+    ...(focusOnPointerDown === undefined ? {} : { focusOnPointerDown }),
+    ...(preventDefaultInput === undefined ? {} : { preventDefaultInput }),
   } satisfies RuntimeOptions);
 }
 
@@ -538,6 +561,29 @@ function optionalPositiveFiniteNumber(
   const value = optionalFiniteNumber(properties, name);
   if (value !== undefined && value <= 0) {
     invalid(`runtime options.${name}`, "a finite number greater than zero");
+  }
+  return value;
+}
+
+function optionalPositiveSafeInteger(
+  properties: DataProperties,
+  name: string,
+): number | undefined {
+  const value = properties.get(name);
+  if (value === undefined) return undefined;
+  const integer = positiveSafeInteger(value, `runtime options.${name}`);
+  return integer;
+}
+
+function optionalStringChoice<const T extends readonly string[]>(
+  properties: DataProperties,
+  name: string,
+  choices: T,
+): T[number] | undefined {
+  const value = properties.get(name);
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !choices.includes(value)) {
+    invalid(`runtime options.${name}`, choices.map((item) => `"${item}"`).join(" or "));
   }
   return value;
 }
