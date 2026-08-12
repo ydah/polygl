@@ -387,6 +387,163 @@ fn emits_safe_ranges_dynamic_constants_and_flat_integer_varyings() {
     ));
 }
 
+#[test]
+fn emits_every_shader_abi_uniform_and_varying_type() {
+    let span = test_span();
+    let varying_types = [
+        ("clip_pos", Type::Vector(4)),
+        ("integer", Type::Int),
+        ("scalar", Type::Float),
+        ("vector2", Type::Vector(2)),
+        ("vector3", Type::Vector(3)),
+        ("vector4", Type::Vector(4)),
+        ("matrix2", Type::Matrix(2)),
+        ("matrix3", Type::Matrix(3)),
+        ("matrix4", Type::Matrix(4)),
+    ];
+    let varying_type = Type::Struct(Symbol::new("CompleteVaryings"));
+    let fields = varying_types
+        .iter()
+        .map(|(name, ty)| Field {
+            name: (*name).to_owned(),
+            ty: ty.clone(),
+            span,
+        })
+        .collect::<Vec<_>>();
+    let values = varying_types
+        .iter()
+        .map(|(name, ty)| FieldInit {
+            name: (*name).to_owned(),
+            value: Expr::new(
+                ExprKind::Uniform(format!("uniform_{name}")),
+                ty.clone(),
+                span,
+            ),
+            span,
+        })
+        .collect::<Vec<_>>();
+    let vertex = EntryPoint {
+        kind: EntryKind::Vertex("complete".to_owned()),
+        params: Vec::new(),
+        result: varying_type.clone(),
+        body: Block {
+            statements: vec![
+                Statement::new(
+                    StatementKind::Expr(Expr::new(
+                        ExprKind::Uniform("uniform_boolean".to_owned()),
+                        Type::Bool,
+                        span,
+                    )),
+                    span,
+                ),
+                Statement::new(
+                    StatementKind::Expr(Expr::new(
+                        ExprKind::Uniform("uniform_texture".to_owned()),
+                        Type::Opaque(polygl_hir::OpaqueType::Texture),
+                        span,
+                    )),
+                    span,
+                ),
+                Statement::new(
+                    StatementKind::Return(Some(Expr::new(
+                        ExprKind::Struct {
+                            name: "CompleteVaryings".to_owned(),
+                            fields: values,
+                        },
+                        varying_type.clone(),
+                        span,
+                    ))),
+                    span,
+                ),
+            ],
+            span,
+        },
+        domain: Domain::Gpu,
+        span,
+    };
+    let fragment_parameter = Expr::new(
+        ExprKind::Variable("varyings".to_owned()),
+        varying_type.clone(),
+        span,
+    );
+    let fragment = EntryPoint {
+        kind: EntryKind::Fragment("complete".to_owned()),
+        params: vec![Parameter {
+            name: "varyings".to_owned(),
+            ty: varying_type.clone(),
+            span,
+        }],
+        result: Type::Vector(4),
+        body: Block {
+            statements: vec![Statement::new(
+                StatementKind::Return(Some(Expr::new(
+                    ExprKind::Field {
+                        base: Box::new(fragment_parameter),
+                        field: "clip_pos".to_owned(),
+                    },
+                    Type::Vector(4),
+                    span,
+                ))),
+                span,
+            )],
+            span,
+        },
+        domain: Domain::Gpu,
+        span,
+    };
+    let module = Module {
+        functions: Vec::new(),
+        structs: vec![StructDef {
+            name: "CompleteVaryings".to_owned(),
+            fields,
+            span,
+        }],
+        constants: Vec::new(),
+        entries: vec![vertex, fragment],
+        span,
+    };
+    let split = polygl_lir::split(&module).expect("every documented ABI type must validate");
+    let artifacts = GlslBackend::new()
+        .generate(&split.gpu)
+        .expect("every documented ABI type must emit");
+    let shader = &artifacts.shaders[0];
+
+    for (name, ty) in [
+        ("uniform_boolean", Type::Bool),
+        ("uniform_integer", Type::Int),
+        ("uniform_scalar", Type::Float),
+        ("uniform_vector2", Type::Vector(2)),
+        ("uniform_vector3", Type::Vector(3)),
+        ("uniform_vector4", Type::Vector(4)),
+        ("uniform_matrix2", Type::Matrix(2)),
+        ("uniform_matrix3", Type::Matrix(3)),
+        ("uniform_matrix4", Type::Matrix(4)),
+        (
+            "uniform_texture",
+            Type::Opaque(polygl_hir::OpaqueType::Texture),
+        ),
+    ] {
+        assert!(
+            shader
+                .uniforms
+                .iter()
+                .any(|uniform| uniform.name == name && uniform.ty == ty),
+            "missing {name}: {:#?}",
+            shader.uniforms
+        );
+    }
+    for glsl_type in ["float", "vec2", "vec3", "vec4", "mat2", "mat3", "mat4"] {
+        assert!(shader.vertex.contains(&format!("out {glsl_type} v_")));
+        assert!(shader.fragment.contains(&format!("in {glsl_type} v_")));
+    }
+    assert!(shader.vertex.contains("flat out int v_"));
+    assert!(shader.fragment.contains("flat in int v_"));
+    assert!(shader.vertex.contains("uniform bool pgl_u_"));
+    assert!(shader.vertex.contains("uniform sampler2D pgl_u_"));
+    validate_with_glslang(&shader.vertex, "vert");
+    validate_with_glslang(&shader.fragment, "frag");
+}
+
 fn validate_with_glslang(source: &str, stage: &str) {
     if Command::new("glslangValidator")
         .arg("--version")
