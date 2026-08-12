@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use polygl_builtins::{BuiltinTable, Domain as BuiltinDomain};
 use polygl_span::{Diagnostic, DiagnosticCode, Diagnostics, Label, Severity, Suggestion};
@@ -7,6 +7,10 @@ use polygl_types::Type;
 use crate::{
     Block, CallTarget, Constant, Domain, EntryKind, EntryPoint, Expr, ExprKind, Function, Literal,
     Module, Place, PlaceKind, StatementKind,
+};
+use crate::{
+    graph::DependencyGraph,
+    symbol::{SymbolKind, SymbolTable},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -23,7 +27,7 @@ pub struct AssetReference {
     pub span: polygl_span::Span,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Dependency<'module> {
     Function(&'module str),
     Constant(&'module str),
@@ -135,6 +139,7 @@ struct Validator<'module> {
     assets: Vec<AssetReference>,
     validating_structs: HashSet<&'module str>,
     validated_structs: HashSet<&'module str>,
+    current_path: Vec<String>,
 }
 
 impl<'module> Validator<'module> {
@@ -160,11 +165,12 @@ impl<'module> Validator<'module> {
             assets: Vec::new(),
             validating_structs: HashSet::new(),
             validated_structs: HashSet::new(),
+            current_path: Vec::new(),
         }
     }
 
     fn validate_shader_pairs(&mut self) {
-        let mut pairs: HashMap<&str, (Option<&EntryPoint>, Option<&EntryPoint>)> = HashMap::new();
+        let mut pairs: BTreeMap<&str, (Option<&EntryPoint>, Option<&EntryPoint>)> = BTreeMap::new();
         for entry in &self.module.entries {
             let slot = match &entry.kind {
                 EntryKind::Vertex(name) => Some(&mut pairs.entry(name).or_default().0),
@@ -536,32 +542,42 @@ impl<'module> Validator<'module> {
     }
 
     fn validate_host_graph(&mut self) {
+        let paths = self.shortest_dependency_paths(Domain::Host);
         for entry in self
             .module
             .entries
             .iter()
             .filter(|entry| entry.domain == Domain::Host)
         {
+            self.current_path = vec![entry_path_name(entry)];
             self.inspect_host_block(&entry.body);
         }
-        let function_bodies = self
+        let functions = self
             .module
             .functions
             .iter()
             .filter(|function| self.host_functions.contains(function.name.as_str()))
-            .map(|function| function.body.clone())
+            .map(|function| (function.name.as_str(), function.body.clone()))
             .collect::<Vec<_>>();
-        for body in &function_bodies {
+        for (name, body) in &functions {
+            self.current_path = paths
+                .get(&Dependency::Function(name))
+                .cloned()
+                .unwrap_or_else(|| vec![(*name).to_owned()]);
             self.inspect_host_block(body);
         }
-        let constant_values = self
+        let constants = self
             .module
             .constants
             .iter()
             .filter(|constant| self.host_constants.contains(constant.name.as_str()))
-            .map(|constant| constant.value.clone())
+            .map(|constant| (constant.name.as_str(), constant.value.clone()))
             .collect::<Vec<_>>();
-        for value in &constant_values {
+        for (name, value) in &constants {
+            self.current_path = paths
+                .get(&Dependency::Constant(name))
+                .cloned()
+                .unwrap_or_else(|| vec![(*name).to_owned()]);
             self.inspect_host_expr(value);
         }
     }
@@ -620,11 +636,12 @@ impl<'module> Validator<'module> {
     fn inspect_host_expr(&mut self, expression: &Expr) {
         match &expression.kind {
             ExprKind::Literal(_) | ExprKind::Variable(_) => {}
-            ExprKind::Uniform(name) => self.error(
+            ExprKind::Uniform(name) => self.error_with_dependency_path(
                 "E0404",
                 format!("GPU uniform `{name}` is used by Host code"),
                 expression.span,
                 "keep shader uniforms inside shader entries",
+                format!("uniform {name}"),
             ),
             ExprKind::Constant(name) => {
                 if self
@@ -632,11 +649,12 @@ impl<'module> Validator<'module> {
                     .get(name.as_str())
                     .is_some_and(|constant| constant.domain == Domain::Gpu)
                 {
-                    self.error(
+                    self.error_with_dependency_path(
                         "E0404",
                         format!("GPU-only constant `{name}` is used by Host code"),
                         expression.span,
                         "keep GPU-only values inside shader entries",
+                        name,
                     );
                 }
             }
@@ -661,11 +679,12 @@ impl<'module> Validator<'module> {
                             .get(name.as_str())
                             .is_some_and(|function| function.domain == Domain::Gpu)
                         {
-                            self.error(
+                            self.error_with_dependency_path(
                                 "E0404",
                                 format!("GPU-only function `{name}` is called by Host code"),
                                 expression.span,
                                 "call GPU-only helpers from shader entries",
+                                name,
                             );
                         }
                     }
@@ -675,7 +694,7 @@ impl<'module> Validator<'module> {
                             .find(|builtin| builtin.runtime_op == *operation)
                             .expect("LIR runtime operations come from the builtin registry");
                         if builtin.domain == BuiltinDomain::Gpu {
-                            self.error(
+                            self.error_with_dependency_path(
                                 "E0404",
                                 format!(
                                     "GPU-only builtin `{}` is called by Host code",
@@ -683,6 +702,7 @@ impl<'module> Validator<'module> {
                                 ),
                                 expression.span,
                                 "call this builtin only from shader code",
+                                builtin.name,
                             );
                         }
                     }
@@ -711,12 +731,14 @@ impl<'module> Validator<'module> {
     }
 
     fn validate_gpu_graph(&mut self) {
+        let paths = self.shortest_dependency_paths(Domain::Gpu);
         for entry in self
             .module
             .entries
             .iter()
             .filter(|entry| entry.domain == Domain::Gpu)
         {
+            self.current_path = vec![entry_path_name(entry)];
             self.validate_type(&entry.result, entry.span);
             for parameter in &entry.params {
                 self.validate_type(&parameter.ty, parameter.span);
@@ -724,18 +746,24 @@ impl<'module> Validator<'module> {
             self.inspect_block(&entry.body);
         }
 
-        let mut pending_functions = self.gpu_functions.iter().copied().collect::<Vec<_>>();
-        let mut pending_constants = self.gpu_constants.iter().copied().collect::<Vec<_>>();
         let mut checked_functions = HashSet::new();
         let mut checked_constants = HashSet::new();
-        while !pending_functions.is_empty() || !pending_constants.is_empty() {
-            while let Some(name) = pending_functions.pop() {
-                if !checked_functions.insert(name) {
-                    continue;
-                }
+        loop {
+            if let Some(name) = self
+                .module
+                .functions
+                .iter()
+                .map(|function| function.name.as_str())
+                .find(|name| self.gpu_functions.contains(name) && !checked_functions.contains(name))
+            {
+                checked_functions.insert(name);
                 let Some(function) = self.functions.get(name).copied() else {
                     continue;
                 };
+                self.current_path = paths
+                    .get(&Dependency::Function(name))
+                    .cloned()
+                    .unwrap_or_else(|| vec![name.to_owned()]);
                 self.validate_type(&function.result, function.span);
                 for parameter in &function.params {
                     self.validate_type(&parameter.ty, parameter.span);
@@ -757,41 +785,28 @@ impl<'module> Validator<'module> {
                     );
                 }
                 self.inspect_block(&function.body);
-                pending_functions.extend(
-                    self.gpu_functions
-                        .iter()
-                        .copied()
-                        .filter(|dependency| !checked_functions.contains(dependency)),
-                );
-                pending_constants.extend(
-                    self.gpu_constants
-                        .iter()
-                        .copied()
-                        .filter(|dependency| !checked_constants.contains(dependency)),
-                );
+                continue;
             }
-            while let Some(name) = pending_constants.pop() {
-                if !checked_constants.insert(name) {
-                    continue;
-                }
+            if let Some(name) = self
+                .module
+                .constants
+                .iter()
+                .map(|constant| constant.name.as_str())
+                .find(|name| self.gpu_constants.contains(name) && !checked_constants.contains(name))
+            {
+                checked_constants.insert(name);
                 let Some(constant) = self.constants.get(name).copied() else {
                     continue;
                 };
+                self.current_path = paths
+                    .get(&Dependency::Constant(name))
+                    .cloned()
+                    .unwrap_or_else(|| vec![name.to_owned()]);
                 self.validate_type(&constant.ty, constant.span);
                 self.inspect_expr(&constant.value);
-                pending_functions.extend(
-                    self.gpu_functions
-                        .iter()
-                        .copied()
-                        .filter(|dependency| !checked_functions.contains(dependency)),
-                );
-                pending_constants.extend(
-                    self.gpu_constants
-                        .iter()
-                        .copied()
-                        .filter(|dependency| !checked_constants.contains(dependency)),
-                );
+                continue;
             }
+            break;
         }
         self.validate_dependency_cycles(&checked_functions, &checked_constants);
     }
@@ -801,63 +816,129 @@ impl<'module> Validator<'module> {
         reachable_functions: &HashSet<&'module str>,
         reachable_constants: &HashSet<&'module str>,
     ) {
-        let reachable = reachable_functions
+        let symbols = SymbolTable::new(self.module);
+        let dependencies = self
+            .module
+            .functions
             .iter()
-            .map(|name| Dependency::Function(name))
+            .map(|function| Dependency::Function(function.name.as_str()))
             .chain(
-                reachable_constants
+                self.module
+                    .constants
                     .iter()
-                    .map(|name| Dependency::Constant(name)),
+                    .map(|constant| Dependency::Constant(constant.name.as_str())),
             )
-            .collect::<HashSet<_>>();
-        let mut visiting = HashSet::new();
-        let mut visited = HashSet::new();
-        for dependency in reachable.iter().copied() {
-            self.visit_dependency(dependency, &reachable, &mut visiting, &mut visited);
+            .collect::<Vec<_>>();
+        let mut graph = DependencyGraph::new(symbols.len());
+        for dependency in &dependencies {
+            let symbol = dependency_symbol(&symbols, *dependency);
+            graph.set_dependencies(
+                symbol,
+                self.dependencies(*dependency)
+                    .into_iter()
+                    .map(|dependency| dependency_symbol(&symbols, dependency)),
+            );
+        }
+
+        for component in graph.strongly_connected_components() {
+            let recursive = component.len() > 1
+                || graph
+                    .dependencies(component[0])
+                    .binary_search(&component[0])
+                    .is_ok();
+            if !recursive {
+                continue;
+            }
+            let cycle = component
+                .iter()
+                .map(|symbol| dependencies[symbol.index()])
+                .filter(|dependency| match dependency {
+                    Dependency::Function(name) => reachable_functions.contains(name),
+                    Dependency::Constant(name) => reachable_constants.contains(name),
+                })
+                .collect::<Vec<_>>();
+            let Some(first) = cycle.first().copied() else {
+                continue;
+            };
+            let names = component
+                .iter()
+                .map(|symbol| dependency_name(dependencies[symbol.index()]))
+                .collect::<Vec<_>>();
+            let (kind, name, span) = self.dependency_description(first);
+            self.diagnostics.push(
+                Diagnostic::new(
+                    Severity::Error,
+                    "E0401",
+                    format!("GPU dependency cycle reaches {kind} `{name}`"),
+                    span,
+                )
+                .with_note(format!("dependency cycle members: {}", names.join(", ")))
+                .with_suggestion(Suggestion::rewrite(
+                    span,
+                    "replace the function/constant cycle with an iterative or acyclic expression",
+                )),
+            );
         }
     }
 
-    fn visit_dependency(
-        &mut self,
-        dependency: Dependency<'module>,
-        reachable: &HashSet<Dependency<'module>>,
-        visiting: &mut HashSet<Dependency<'module>>,
-        visited: &mut HashSet<Dependency<'module>>,
-    ) {
-        if visited.contains(&dependency) {
-            return;
-        }
-        if !visiting.insert(dependency) {
-            let (kind, name, span) = match dependency {
-                Dependency::Function(name) => {
-                    let Some(function) = self.functions.get(name) else {
-                        return;
-                    };
-                    ("function", name, function.span)
-                }
-                Dependency::Constant(name) => {
-                    let Some(constant) = self.constants.get(name) else {
-                        return;
-                    };
-                    ("constant", name, constant.span)
-                }
-            };
-            self.error(
-                "E0401",
-                format!("GPU dependency cycle reaches {kind} `{name}`"),
-                span,
-                "replace the function/constant cycle with an iterative or acyclic expression",
-            );
-            return;
-        }
+    fn shortest_dependency_paths(
+        &self,
+        domain: Domain,
+    ) -> HashMap<Dependency<'module>, Vec<String>> {
+        let mut roots = self
+            .module
+            .entries
+            .iter()
+            .filter(|entry| entry.domain == domain)
+            .map(|entry| (entry_path_name(entry), self.block_dependencies(&entry.body)))
+            .collect::<Vec<_>>();
+        roots.sort_by(|left, right| left.0.cmp(&right.0));
 
-        for next in self.dependencies(dependency) {
-            if reachable.contains(&next) {
-                self.visit_dependency(next, reachable, visiting, visited);
+        let mut paths = HashMap::new();
+        let mut pending = VecDeque::new();
+        for (root, mut dependencies) in roots {
+            dependencies.sort_unstable();
+            dependencies.dedup();
+            for dependency in dependencies {
+                let candidate = vec![root.clone(), dependency_name(dependency)];
+                if prefer_path(paths.get(&dependency), &candidate) {
+                    paths.insert(dependency, candidate);
+                    pending.push_back(dependency);
+                }
             }
         }
-        visiting.remove(&dependency);
-        visited.insert(dependency);
+
+        while let Some(dependency) = pending.pop_front() {
+            let path = paths[&dependency].clone();
+            let mut next = self.dependencies(dependency);
+            next.sort_unstable();
+            next.dedup();
+            for dependency in next {
+                let mut candidate = path.clone();
+                candidate.push(dependency_name(dependency));
+                if prefer_path(paths.get(&dependency), &candidate) {
+                    paths.insert(dependency, candidate);
+                    pending.push_back(dependency);
+                }
+            }
+        }
+        paths
+    }
+
+    fn dependency_description(
+        &self,
+        dependency: Dependency<'module>,
+    ) -> (&'static str, &'module str, polygl_span::Span) {
+        match dependency {
+            Dependency::Function(name) => {
+                let function = self.functions[name];
+                ("function", name, function.span)
+            }
+            Dependency::Constant(name) => {
+                let constant = self.constants[name];
+                ("constant", name, constant.span)
+            }
+        }
     }
 
     fn dependencies(&self, dependency: Dependency<'module>) -> Vec<Dependency<'module>> {
@@ -986,11 +1067,12 @@ impl<'module> Validator<'module> {
                     return;
                 };
                 if constant.domain == Domain::Host {
-                    self.error(
+                    self.error_with_dependency_path(
                         "E0404",
                         format!("Host-only constant `{name}` is used by GPU code"),
                         expression.span,
                         "move the value into a GPU-compatible constant or uniform",
+                        name,
                     );
                 } else {
                     self.gpu_constants.insert(constant.name.as_str());
@@ -1033,11 +1115,12 @@ impl<'module> Validator<'module> {
                             return;
                         };
                         if function.domain == Domain::Host {
-                            self.error(
+                            self.error_with_dependency_path(
                                 "E0404",
                                 format!("Host-only function `{name}` is called by GPU code"),
                                 expression.span,
                                 "call a GPU-compatible helper",
+                                name,
                             );
                         } else {
                             self.gpu_functions.insert(function.name.as_str());
@@ -1049,7 +1132,7 @@ impl<'module> Validator<'module> {
                             .find(|builtin| builtin.runtime_op == *operation)
                             .expect("LIR runtime operations come from the builtin registry");
                         if builtin.domain == BuiltinDomain::Host {
-                            self.error(
+                            self.error_with_dependency_path(
                                 "E0404",
                                 format!(
                                     "Host-only builtin `{}` is called by GPU code",
@@ -1057,6 +1140,7 @@ impl<'module> Validator<'module> {
                                 ),
                                 expression.span,
                                 "use a builtin whose domain is GPU or Host/GPU",
+                                builtin.name,
                             );
                         }
                     }
@@ -1213,6 +1297,54 @@ impl<'module> Validator<'module> {
                 .with_suggestion(Suggestion::rewrite(span, suggestion)),
         );
     }
+
+    fn error_with_dependency_path(
+        &mut self,
+        code: impl Into<DiagnosticCode>,
+        message: impl Into<String>,
+        span: polygl_span::Span,
+        suggestion: impl Into<String>,
+        target: impl AsRef<str>,
+    ) {
+        let code = code.into();
+        let mut path = self.current_path.clone();
+        path.push(target.as_ref().to_owned());
+        self.diagnostics.push(
+            Diagnostic::new(Severity::Error, code, message, span)
+                .with_note(format!("dependency path: {}", path.join(" → ")))
+                .with_suggestion(Suggestion::rewrite(span, suggestion)),
+        );
+    }
+}
+
+fn entry_path_name(entry: &EntryPoint) -> String {
+    match &entry.kind {
+        EntryKind::Setup => "setup".to_owned(),
+        EntryKind::Frame => "frame".to_owned(),
+        EntryKind::OnEvent => "on_event".to_owned(),
+        EntryKind::Vertex(name) => format!("vertex_{name}"),
+        EntryKind::Fragment(name) => format!("fragment_{name}"),
+    }
+}
+
+fn dependency_name(dependency: Dependency<'_>) -> String {
+    match dependency {
+        Dependency::Function(name) | Dependency::Constant(name) => name.to_owned(),
+    }
+}
+
+fn dependency_symbol(symbols: &SymbolTable<'_>, dependency: Dependency<'_>) -> crate::SymbolId {
+    match dependency {
+        Dependency::Function(name) => symbols.require(name, SymbolKind::Function),
+        Dependency::Constant(name) => symbols.require(name, SymbolKind::Constant),
+    }
+}
+
+fn prefer_path(existing: Option<&Vec<String>>, candidate: &[String]) -> bool {
+    existing.is_none_or(|existing| {
+        candidate.len() < existing.len()
+            || (candidate.len() == existing.len() && candidate < existing.as_slice())
+    })
 }
 
 fn constant_trip_count(range: &crate::Range) -> Option<u64> {
@@ -2007,6 +2139,73 @@ mod tests {
         });
         let diagnostics = split(&module).expect_err("GPU recursion must fail");
         assert!(codes(&diagnostics).contains("E0401"));
+    }
+
+    #[test]
+    fn reports_the_shortest_dependency_path_for_domain_violations() {
+        let call = |name: &str| {
+            Statement::new(
+                StatementKind::Expr(expression(
+                    ExprKind::Call {
+                        target: CallTarget::Function(name.to_owned()),
+                        args: Vec::new(),
+                    },
+                    Type::Unit,
+                )),
+                span(),
+            )
+        };
+        let function = |name: &str, domain: Domain, statements: Vec<Statement>| Function {
+            name: name.to_owned(),
+            params: Vec::new(),
+            result: Type::Unit,
+            body: Block {
+                statements,
+                span: span(),
+            },
+            domain,
+            span: span(),
+        };
+
+        let mut module = valid_pair(vec![call("helper_a"), call("helper_b"), return_vector4()]);
+        module.functions = vec![
+            function("helper_a", Domain::Gpu, vec![call("helper_b")]),
+            function("helper_b", Domain::Gpu, vec![call("host_io")]),
+            function("host_io", Domain::Host, Vec::new()),
+        ];
+
+        let diagnostics = split(&module).expect_err("GPU-to-Host call must fail");
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.message.contains("host_io"))
+            .unwrap();
+        assert_eq!(
+            diagnostic.notes,
+            ["dependency path: vertex_main → helper_b → host_io"]
+        );
+    }
+
+    #[test]
+    fn orders_shader_pair_diagnostics_by_stable_shader_name() {
+        let module = module(vec![
+            shader_entry(EntryKind::Vertex("zeta".to_owned()), vec![return_vector4()]),
+            shader_entry(
+                EntryKind::Vertex("alpha".to_owned()),
+                vec![return_vector4()],
+            ),
+        ]);
+
+        let diagnostics = split(&module).expect_err("both shader pairs are incomplete");
+        assert_eq!(
+            diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.message.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "shader pair `alpha` is missing `fragment_alpha`",
+                "shader pair `zeta` is missing `fragment_zeta`",
+            ]
+        );
     }
 
     #[test]
