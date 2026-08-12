@@ -73,8 +73,8 @@ polygl --version
 ```
 
 `build` writes a self-contained browser application with `index.html`,
-`app.js`, source maps, reflected shaders, packaged texture assets, and the
-embedded runtime. Debug checks are enabled by default; `--release` removes
+`app.js`, configurable source maps, reflected shaders, packaged texture assets,
+and the embedded runtime. Debug checks are enabled by default; `--release` removes
 compiler-inserted collection, vector/matrix, and absence checks. See the
 [CLI reference](docs/cli.md) for exact behavior.
 

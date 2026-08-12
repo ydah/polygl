@@ -85,6 +85,7 @@ impl SourceMapBuilder {
         output_name: &str,
         generated_line_offset: usize,
         catalog: &SourceCatalog<'_>,
+        include_sources_content: bool,
     ) -> Result<String, EmitError> {
         let mappings = self.encode(generated_line_offset, catalog)?;
         let sources = catalog
@@ -92,20 +93,23 @@ impl SourceMapBuilder {
             .iter()
             .map(SourceFile::name)
             .collect::<Vec<_>>();
-        let contents = catalog
-            .sources()
-            .iter()
-            .map(SourceFile::text)
-            .collect::<Vec<_>>();
-        Ok(serde_json::json!({
+        let mut source_map = serde_json::json!({
             "version": 3,
             "file": output_name,
             "sources": sources,
-            "sourcesContent": contents,
             "names": Vec::<String>::new(),
             "mappings": mappings,
-        })
-        .to_string())
+        });
+        if include_sources_content {
+            source_map["sourcesContent"] = serde_json::json!(
+                catalog
+                    .sources()
+                    .iter()
+                    .map(SourceFile::text)
+                    .collect::<Vec<_>>()
+            );
+        }
+        Ok(source_map.to_string())
     }
 
     fn encode(

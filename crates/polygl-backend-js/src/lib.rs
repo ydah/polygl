@@ -5,7 +5,7 @@ mod emitter;
 mod error;
 mod source_map;
 
-pub use backend::{Artifacts, Backend, BuildMode, JavaScriptBackend};
+pub use backend::{Artifacts, Backend, BuildMode, JavaScriptBackend, SourceMapMode};
 pub use error::EmitError;
 
 #[cfg(test)]

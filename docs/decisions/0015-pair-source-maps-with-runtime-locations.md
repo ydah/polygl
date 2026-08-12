@@ -3,7 +3,7 @@
 
 # 0015: Pair source maps with runtime locations
 
-- Status: Accepted
+- Status: Superseded by [ADR 0032](0032-make-source-map-disclosure-explicit.md)
 - Date: 2026-07-25
 
 ## Context

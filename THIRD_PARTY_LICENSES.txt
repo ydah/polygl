@@ -1686,6 +1686,7 @@ Apache License 2.0
 Used by:
 - arrayvec 0.7.8
 - autocfg 1.5.1
+- base64 0.23.1
 - bitflags 2.13.1
 - bstr 1.13.0
 - cc 1.4.0

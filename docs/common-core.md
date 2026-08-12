@@ -192,8 +192,10 @@ Warnings about intentional numeric incompatibility use W03xx or W04xx.
 ### Runtime locations
 
 Source spans must survive HIR analysis, LIR lowering, and code generation. The
-JavaScript backend must emit Source Map v3 data and an embedded span table for
-checks that report through the runtime overlay. In debug builds, array bounds,
+JavaScript backend must be able to emit Source Map v3 data and must emit an
+embedded span table for checks that report through the runtime overlay. Source
+Map output and `sourcesContent` embedding are explicit packaging policies and
+do not change language semantics. In debug builds, array bounds,
 nil access, and unset-uniform failures must identify the original source file
 and one-based line. Other compiler-generated runtime failures must use the same
 mapping when a source span is available. Release mode may remove the mandated

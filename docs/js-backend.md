@@ -3,10 +3,11 @@
 
 # JavaScript backend
 
-`polygl-backend-js` emits readable ES2020 modules for the Host and Shared
-portions of LIR. The generated module imports the configured runtime namespace
-and exports canonical `setup`, `frame`, and `on_event` entry functions. GPU-only
-constants, functions, and shader entries are left for the GLSL backend.
+`polygl-backend-js` emits readable ES2020 modules for the reachable Host and
+Shared portions of LIR. The generated module imports the configured runtime
+namespace and exports canonical `setup`, `frame`, and `on_event` entry
+functions. GPU-only and Host-unreachable constants and functions are omitted;
+shader entries are left for the GLSL backend.
 
 The emitter preserves Common Core evaluation order. Integer addition,
 subtraction, negation, multiplication, division, remainder, and range
@@ -20,14 +21,17 @@ blocks preserve parameter, loop-variable, and local shadowing from LIR.
 ## Artifacts and source maps
 
 `JavaScriptBackend::generate` accepts the LIR module and every `SourceFile`
-referenced by its spans. It returns JavaScript and an external Source Map v3
-document. Mappings use zero-based UTF-16 columns as required by browser source
-map consumers, while `sourcesContent` embeds the exact original text for
-DevTools. Missing, duplicate, or invalid source spans are emission errors
-rather than silently degrading to generated locations.
+referenced by its spans. It can return no Source Map, an external Source Map v3
+document, or an inline base64 data URL. Mappings use zero-based UTF-16 columns
+as required by browser source-map consumers. Embedding the exact original text
+as `sourcesContent` is a separate option. Missing, duplicate, or invalid source
+spans are emission errors rather than silently degrading to generated
+locations.
 
-The default output pair is `app.js` and `app.js.map`; both the output name and
-runtime module specifier are configurable.
+The library API remains backward compatible by defaulting to an external map
+with `sourcesContent`. Callers can configure the map mode, source-content
+policy, output name, and runtime module specifier independently. The CLI uses
+privacy-preserving defaults described in its documentation.
 
 ## Debug and release modes
 
@@ -44,7 +48,7 @@ evaluated once, validation happens before the right-hand side, and source
 evaluation order is unchanged. Generated integer division and remainder errors
 also carry the same location as `error.polyglLocation`. Release mode emits
 direct JavaScript access and omits the location table and these checks. Source
-maps remain available in both modes.
+Map packaging policy is independent of debug/release runtime checks.
 
 Unset-uniform validation belongs to the shader ABI and GPU split introduced in
 M2; it uses the same source-location contract rather than being approximated

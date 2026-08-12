@@ -1,3 +1,5 @@
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use polygl_builtins::RuntimeOp;
 use polygl_lir::{
     BinaryOp, Block, CallTarget, Constant, Domain, EntryKind, EntryPoint, Expr, ExprKind, Function,
@@ -6,7 +8,7 @@ use polygl_lir::{
 use polygl_span::{SourceFile, SourceId, Span};
 use polygl_types::Type;
 
-use crate::{BuildMode, EmitError, JavaScriptBackend};
+use crate::{BuildMode, EmitError, JavaScriptBackend, SourceMapMode};
 
 fn source() -> SourceFile {
     SourceFile::new(
@@ -280,7 +282,8 @@ fn emits_es2020_runtime_calls_wrapping_ints_and_source_map_v3() {
             .ends_with("//# sourceMappingURL=app.js.map\n")
     );
 
-    let map: serde_json::Value = serde_json::from_str(&artifacts.source_map).unwrap();
+    let map: serde_json::Value =
+        serde_json::from_str(artifacts.source_map.as_deref().unwrap()).unwrap();
     assert_eq!(map["version"], 3);
     assert_eq!(map["file"], "app.js");
     assert_eq!(map["sources"][0], "main.rb");
@@ -433,4 +436,47 @@ fn reports_missing_and_duplicate_source_ids() {
         JavaScriptBackend::default().generate(&module, &[source.clone(), source]),
         Err(EmitError::DuplicateSource(SourceId::new(7)))
     );
+}
+
+#[test]
+fn configures_external_inline_and_omitted_source_maps() {
+    let source = source();
+    let module = sample_module(&source);
+
+    let none = JavaScriptBackend::default()
+        .with_source_map_mode(SourceMapMode::None)
+        .generate(&module, std::slice::from_ref(&source))
+        .unwrap();
+    assert!(none.source_map.is_none());
+    assert!(!none.javascript.contains("sourceMappingURL"));
+
+    let external = JavaScriptBackend::default()
+        .with_sources_content(false)
+        .generate(&module, std::slice::from_ref(&source))
+        .unwrap();
+    let external_map: serde_json::Value =
+        serde_json::from_str(external.source_map.as_deref().unwrap()).unwrap();
+    assert!(
+        external
+            .javascript
+            .ends_with("sourceMappingURL=app.js.map\n")
+    );
+    assert!(external_map.get("sourcesContent").is_none());
+
+    let inline = JavaScriptBackend::default()
+        .with_source_map_mode(SourceMapMode::Inline)
+        .with_sources_content(false)
+        .generate(&module, std::slice::from_ref(&source))
+        .unwrap();
+    assert!(inline.source_map.is_none());
+    let encoded = inline
+        .javascript
+        .trim_end()
+        .rsplit_once("base64,")
+        .unwrap()
+        .1;
+    let decoded = STANDARD.decode(encoded).unwrap();
+    let inline_map: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
+    assert_eq!(inline_map["file"], "app.js");
+    assert!(inline_map.get("sourcesContent").is_none());
 }

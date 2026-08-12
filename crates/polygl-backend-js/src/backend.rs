@@ -1,3 +1,5 @@
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use polygl_lir::Module;
 use polygl_span::SourceFile;
 
@@ -12,10 +14,18 @@ pub enum BuildMode {
     Release,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SourceMapMode {
+    None,
+    #[default]
+    External,
+    Inline,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Artifacts {
     pub javascript: String,
-    pub source_map: String,
+    pub source_map: Option<String>,
 }
 
 pub trait Backend {
@@ -32,6 +42,8 @@ pub struct JavaScriptBackend {
     mode: BuildMode,
     output_name: String,
     runtime_module: String,
+    source_map_mode: SourceMapMode,
+    include_sources_content: bool,
 }
 
 impl JavaScriptBackend {
@@ -41,6 +53,8 @@ impl JavaScriptBackend {
             mode,
             output_name: "app.js".to_owned(),
             runtime_module: "./runtime.js".to_owned(),
+            source_map_mode: SourceMapMode::External,
+            include_sources_content: true,
         }
     }
 
@@ -53,6 +67,18 @@ impl JavaScriptBackend {
     #[must_use]
     pub fn with_runtime_module(mut self, runtime_module: impl Into<String>) -> Self {
         self.runtime_module = runtime_module.into();
+        self
+    }
+
+    #[must_use]
+    pub const fn with_source_map_mode(mut self, mode: SourceMapMode) -> Self {
+        self.source_map_mode = mode;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_sources_content(mut self, include: bool) -> Self {
+        self.include_sources_content = include;
         self
     }
 
@@ -84,15 +110,33 @@ impl Backend for JavaScriptBackend {
         let emitted = Emitter::new(self.mode, &catalog).emit(program)?;
         let header = emitted.header(&self.runtime_module, &catalog)?;
         let header_lines = header.bytes().filter(|byte| *byte == b'\n').count();
-        let source_map_name = format!("{}.map", self.output_name);
-
-        output.source_map = emitted
-            .mappings
-            .to_json(&self.output_name, header_lines, &catalog)?;
-        output.javascript = format!(
-            "{header}{}\n//# sourceMappingURL={source_map_name}\n",
-            emitted.body.trim_end()
-        );
+        let mut javascript = format!("{header}{}\n", emitted.body.trim_end());
+        match self.source_map_mode {
+            SourceMapMode::None => output.source_map = None,
+            SourceMapMode::External => {
+                output.source_map = Some(emitted.mappings.to_json(
+                    &self.output_name,
+                    header_lines,
+                    &catalog,
+                    self.include_sources_content,
+                )?);
+                javascript.push_str(&format!("//# sourceMappingURL={}.map\n", self.output_name));
+            }
+            SourceMapMode::Inline => {
+                let source_map = emitted.mappings.to_json(
+                    &self.output_name,
+                    header_lines,
+                    &catalog,
+                    self.include_sources_content,
+                )?;
+                output.source_map = None;
+                javascript
+                    .push_str("//# sourceMappingURL=data:application/json;charset=utf-8;base64,");
+                javascript.push_str(&STANDARD.encode(source_map));
+                javascript.push('\n');
+            }
+        }
+        output.javascript = javascript;
         Ok(())
     }
 }

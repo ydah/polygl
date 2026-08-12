@@ -12,7 +12,7 @@ use polygl_adapter_perl::PerlAdapter;
 use polygl_adapter_php::PhpAdapter;
 use polygl_adapter_ruby::RubyAdapter;
 use polygl_backend_glsl::{GlslArtifacts, GlslBackend, UniformSource};
-use polygl_backend_js::{BuildMode, JavaScriptBackend};
+use polygl_backend_js::{BuildMode, JavaScriptBackend, SourceMapMode};
 use polygl_core::BuiltinTable;
 use polygl_lir::AssetReference;
 use polygl_span::{Diagnostics, SourceFile, SourceId};
@@ -80,7 +80,7 @@ enum Command {
     Build {
         source: PathBuf,
         output: PathBuf,
-        mode: BuildMode,
+        options: BuildOptions,
     },
     Check {
         source: PathBuf,
@@ -102,6 +102,31 @@ enum Command {
     Help,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct BuildOptions {
+    mode: BuildMode,
+    source_map: SourceMapMode,
+    sources_content: bool,
+}
+
+impl BuildOptions {
+    const fn check() -> Self {
+        Self {
+            mode: BuildMode::Debug,
+            source_map: SourceMapMode::None,
+            sources_content: false,
+        }
+    }
+
+    pub(crate) const fn development() -> Self {
+        Self {
+            mode: BuildMode::Debug,
+            source_map: SourceMapMode::External,
+            sources_content: true,
+        }
+    }
+}
+
 pub fn run(
     args: impl IntoIterator<Item = OsString>,
     output: &mut dyn Write,
@@ -110,11 +135,11 @@ pub fn run(
         Command::Build {
             source,
             output: destination,
-            mode,
-        } => build(&source, &destination, mode, output).map(|_| ()),
+            options,
+        } => build(&source, &destination, options, output).map(|_| ()),
         Command::Check { source } => {
             let (source, typed) = compile_frontend(&source)?;
-            let (_, _, _, warnings) = compile_backends(&source, &typed, BuildMode::Debug)?;
+            let (_, _, _, warnings) = compile_backends(&source, &typed, BuildOptions::check())?;
             write_diagnostics(&warnings, &source, output)?;
             Ok(())
         }
@@ -236,6 +261,8 @@ fn parse_build(mut args: impl Iterator<Item = OsString>) -> Result<Command, CliE
     let mut output = PathBuf::from("dist");
     let mut mode = BuildMode::Debug;
     let mut selected_mode = false;
+    let mut source_map = None;
+    let mut sources_content = false;
     while let Some(argument) = args.next() {
         match argument.to_str() {
             Some("-o" | "--output") => {
@@ -255,14 +282,51 @@ fn parse_build(mut args: impl Iterator<Item = OsString>) -> Result<Command, CliE
                 mode = BuildMode::Release;
                 selected_mode = true;
             }
+            Some("--source-map") if source_map.is_none() => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| CliError::new("source map option requires a mode"))?;
+                source_map = Some(match value.to_str() {
+                    Some("none") => SourceMapMode::None,
+                    Some("external") => SourceMapMode::External,
+                    Some("inline") => SourceMapMode::Inline,
+                    Some(other) => {
+                        return Err(CliError::new(format!(
+                            "unknown source map mode `{other}`; expected none, external, or inline"
+                        )));
+                    }
+                    None => return Err(CliError::new("source map mode is not valid UTF-8")),
+                });
+            }
+            Some("--source-map") => {
+                return Err(CliError::new("source map mode may only be specified once"));
+            }
+            Some("--sources-content") if !sources_content => sources_content = true,
+            Some("--sources-content") => {
+                return Err(CliError::new("sources content may only be specified once"));
+            }
             Some(other) => return Err(CliError::new(format!("unknown build option `{other}`"))),
             None => return Err(CliError::new("build option is not valid UTF-8")),
         }
     }
+    let source_map = source_map.unwrap_or(if mode == BuildMode::Debug {
+        SourceMapMode::External
+    } else {
+        SourceMapMode::None
+    });
+    if sources_content && source_map == SourceMapMode::None {
+        return Err(CliError::new(
+            "--sources-content requires an external or inline source map",
+        ));
+    }
     Ok(Command::Build {
         source,
         output,
-        mode,
+        options: BuildOptions {
+            mode,
+            source_map,
+            sources_content,
+        },
     })
 }
 
@@ -298,22 +362,24 @@ pub(crate) struct BuildReport {
 fn build(
     source_path: &Path,
     destination: &Path,
-    mode: BuildMode,
+    options: BuildOptions,
     messages: &mut dyn Write,
 ) -> Result<BuildReport, CliError> {
     let (source, typed) = compile_frontend(source_path)?;
-    let (javascript, shaders, assets, warnings) = compile_backends(&source, &typed, mode)?;
+    let (javascript, shaders, assets, warnings) = compile_backends(&source, &typed, options)?;
     let assets = prepare_assets(source_path, &assets)?;
     write_diagnostics(&warnings, &source, messages)?;
 
-    let shader_module = render_shader_module(&shaders, &source, mode)?;
+    let shader_module = render_shader_module(&shaders, &source, options.mode)?;
     let mut files = vec![
         ArtifactFile::new("app.js", javascript.javascript.into_bytes()),
-        ArtifactFile::new("app.js.map", javascript.source_map.into_bytes()),
         ArtifactFile::new("shaders.js", shader_module.into_bytes()),
         ArtifactFile::new("runtime.js", RUNTIME_BUNDLE.to_vec()),
         ArtifactFile::new("index.html", INDEX_HTML.as_bytes().to_vec()),
     ];
+    if let Some(source_map) = javascript.source_map {
+        files.push(ArtifactFile::new("app.js.map", source_map.into_bytes()));
+    }
     let mut watched_paths = Vec::with_capacity(assets.source_paths.len() + 1);
     watched_paths.push(source_path.to_path_buf());
     watched_paths.extend(assets.source_paths);
@@ -325,7 +391,7 @@ fn build(
 fn compile_backends(
     source: &SourceFile,
     typed: &TypedModule,
-    mode: BuildMode,
+    options: BuildOptions,
 ) -> Result<
     (
         polygl_backend_js::Artifacts,
@@ -338,7 +404,9 @@ fn compile_backends(
     let lir = polygl_lir::lower(typed);
     let split =
         polygl_lir::split(&lir).map_err(|diagnostics| diagnostic_error(&diagnostics, source))?;
-    let javascript = JavaScriptBackend::new(mode)
+    let javascript = JavaScriptBackend::new(options.mode)
+        .with_source_map_mode(options.source_map)
+        .with_sources_content(options.sources_content)
         .generate(&split.host, std::slice::from_ref(source))
         .map_err(|error| CliError::new(format!("JavaScript generation failed: {error}")))?;
     let shaders = GlslBackend::new()
@@ -467,12 +535,9 @@ fn compile_frontend(source_path: &Path) -> Result<(SourceFile, TypedModule), Cli
             source_path.display()
         ))
     })?;
-    let source = SourceFile::from_bytes(
-        SourceId::new(0),
-        source_path.to_string_lossy().into_owned(),
-        bytes,
-    )
-    .map_err(|error| CliError::new(error.to_string()))?;
+    let source_name = normalized_source_name(source_path)?;
+    let source = SourceFile::from_bytes(SourceId::new(0), source_name, bytes)
+        .map_err(|error| CliError::new(error.to_string()))?;
 
     let mut context = LowerCtx::new(&BuiltinTable);
     let hir = adapter
@@ -481,6 +546,46 @@ fn compile_frontend(source_path: &Path) -> Result<(SourceFile, TypedModule), Cli
     let typed = polygl_types::analyze(&hir)
         .map_err(|diagnostics| diagnostic_error(&diagnostics, &source))?;
     Ok((source, typed))
+}
+
+fn normalized_source_name(source_path: &Path) -> Result<String, CliError> {
+    let canonical_source = source_path.canonicalize().map_err(|error| {
+        CliError::new(format!(
+            "failed to resolve source path {}: {error}",
+            source_path.display()
+        ))
+    })?;
+    let project_relative = std::env::current_dir()
+        .ok()
+        .and_then(|directory| directory.canonicalize().ok())
+        .and_then(|directory| {
+            canonical_source
+                .strip_prefix(directory)
+                .ok()
+                .map(Path::to_path_buf)
+        });
+    let display_path = project_relative
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| {
+            source_path
+                .file_name()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("source"))
+        });
+    let components = display_path
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(value) => Some(value.to_string_lossy()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if components.is_empty() {
+        return Err(CliError::new(format!(
+            "source path {} has no portable file name",
+            source_path.display()
+        )));
+    }
+    Ok(components.join("/"))
 }
 
 fn diagnostic_error(diagnostics: &Diagnostics, source: &SourceFile) -> CliError {
@@ -584,7 +689,7 @@ fn pascal_case(language: &str) -> String {
 fn usage() -> String {
     "\
 usage:
-  polygl build <source.rb|source.php|source.pl> [-o <directory>] [--debug | --release]
+  polygl build <source.rb|source.php|source.pl> [-o <directory>] [--debug | --release] [--source-map <none|external|inline>] [--sources-content]
   polygl serve <source.rb|source.php|source.pl> [--port <port>] [--watch]
   polygl check <source.rb|source.php|source.pl>
   polygl dump-hir <source.rb|source.php|source.pl>
@@ -601,7 +706,7 @@ mod tests {
     use std::fs;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::{BuildMode, Command, VERSION, parse_args, run};
+    use super::{BuildMode, BuildOptions, Command, SourceMapMode, VERSION, parse_args, run};
 
     static NEXT_TEMPORARY: AtomicUsize = AtomicUsize::new(0);
 
@@ -622,19 +727,52 @@ mod tests {
     }
 
     #[test]
-    fn parses_build_modes_and_rejects_conflicts() {
+    fn parses_build_and_source_map_modes_and_rejects_conflicts() {
         assert_eq!(
             parse_args(arguments(["build", "main.rb", "-o", "web", "--release"])).unwrap(),
             Command::Build {
                 source: "main.rb".into(),
                 output: "web".into(),
-                mode: BuildMode::Release,
+                options: BuildOptions {
+                    mode: BuildMode::Release,
+                    source_map: SourceMapMode::None,
+                    sources_content: false,
+                },
+            }
+        );
+        assert_eq!(
+            parse_args(arguments([
+                "build",
+                "main.rb",
+                "--source-map",
+                "inline",
+                "--sources-content",
+            ]))
+            .unwrap(),
+            Command::Build {
+                source: "main.rb".into(),
+                output: "dist".into(),
+                options: BuildOptions {
+                    mode: BuildMode::Debug,
+                    source_map: SourceMapMode::Inline,
+                    sources_content: true,
+                },
             }
         );
         let error = parse_args(arguments(["build", "main.rb", "--debug", "--release"]))
             .unwrap_err()
             .to_string();
         assert!(error.contains("only be specified once"));
+        let error = parse_args(arguments([
+            "build",
+            "main.rb",
+            "--source-map",
+            "none",
+            "--sources-content",
+        ]))
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("requires an external or inline"));
 
         assert_eq!(
             parse_args(arguments(["serve", "main.rb", "--watch", "--port", "8080"])).unwrap(),
@@ -743,6 +881,10 @@ end
         assert!(debug_javascript.contains("[\"kind\"]"));
         assert!(debug_javascript.contains("__pglRuntime.materialShader(\"plasma\")"));
         assert!(debug.join("app.js.map").is_file());
+        let debug_map: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(debug.join("app.js.map")).unwrap()).unwrap();
+        assert_eq!(debug_map["sources"][0], "triangle.rb");
+        assert!(debug_map.get("sourcesContent").is_none());
         assert!(debug.join("runtime.js").is_file());
         let debug_shaders = fs::read_to_string(debug.join("shaders.js")).unwrap();
         assert!(debug_shaders.contains("debug:true"));
@@ -767,15 +909,36 @@ end
             &mut Vec::new(),
         )
         .unwrap();
-        assert!(
-            !fs::read_to_string(release.join("app.js"))
-                .unwrap()
-                .contains("__pglSpans")
-        );
+        let release_javascript = fs::read_to_string(release.join("app.js")).unwrap();
+        assert!(!release_javascript.contains("__pglSpans"));
+        assert!(!release_javascript.contains("sourceMappingURL"));
+        assert!(!release.join("app.js.map").exists());
         assert!(
             fs::read_to_string(release.join("shaders.js"))
                 .unwrap()
                 .contains("debug:false")
+        );
+
+        let inline = temporary.join("inline");
+        run(
+            arguments([
+                "build",
+                source.to_str().unwrap(),
+                "-o",
+                inline.to_str().unwrap(),
+                "--release",
+                "--source-map",
+                "inline",
+                "--sources-content",
+            ]),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert!(!inline.join("app.js.map").exists());
+        assert!(
+            fs::read_to_string(inline.join("app.js"))
+                .unwrap()
+                .contains("sourceMappingURL=data:application/json;charset=utf-8;base64,")
         );
         fs::remove_dir_all(temporary).unwrap();
     }

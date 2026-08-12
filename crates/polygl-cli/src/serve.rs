@@ -10,9 +10,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use polygl_backend_js::BuildMode;
-
-use crate::{CliError, build};
+use crate::{BuildOptions, CliError, build};
 
 const WATCH_INTERVAL: Duration = Duration::from_millis(150);
 const FAILED_BUILD_RETRY_INTERVAL: Duration = Duration::from_secs(1);
@@ -107,7 +105,7 @@ impl Generation {
                 root.display()
             ))
         })?;
-        match build(source, &root, BuildMode::Debug, messages) {
+        match build(source, &root, BuildOptions::development(), messages) {
             Ok(report) => Ok(Arc::new(Self {
                 root,
                 watched_paths: report.watched_paths,

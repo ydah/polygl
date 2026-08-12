@@ -6,7 +6,7 @@
 The CLI accepts one source file and runs the shared compiler pipeline.
 
 ```text
-polygl build <source.rb|source.php|source.pl> [-o <directory>] [--debug | --release]
+polygl build <source.rb|source.php|source.pl> [-o <directory>] [--debug | --release] [--source-map <none|external|inline>] [--sources-content]
 polygl serve <source.rb|source.php|source.pl> [--port <port>] [--watch]
 polygl check <source.rb|source.php|source.pl>
 polygl dump-hir <source.rb|source.php|source.pl>
@@ -19,7 +19,7 @@ polygl --version
 
 - `index.html`, whose module bootstrap activates the runtime before dynamically
   importing the generated program;
-- `app.js` and `app.js.map`;
+- `app.js` and, when external Source Maps are selected, `app.js.map`;
 - `shaders.js`, containing data-only GLSL and reflection metadata;
 - `runtime.js`, embedded in the CLI binary from the tested TypeScript runtime.
 
@@ -27,13 +27,26 @@ Every `texture_load` argument must be a literal relative slash-separated path.
 `build` reads it relative to the source file and copies it to the same path
 under the output directory. Dynamic paths, absolute paths, `.` or `..`
 components, URL/drive prefixes, backslashes, and names that would overwrite a
-generated artifact produce E0501. A missing source asset fails the build before
-any browser artifact is written.
+generated artifact produce E0501. A missing source asset fails before the
+staged generation replaces the last successful output. Complete generations
+are published together, so failed builds cannot mix old and new files and
+stale files disappear on success.
 
 Debug output includes source-located array, vector, matrix, and nil checks.
-Release output removes those checks but retains the source map. Build output
-must be served over HTTP because browsers restrict module imports from local
-`file:` pages.
+Release output removes those checks. Debug builds default to an external Source
+Map; release builds default to no Source Map. `--source-map` selects `none`,
+`external`, or `inline` in either mode. `sourcesContent` is omitted unless
+`--sources-content` is explicitly passed. Source names are normalized to `/`
+separators and are relative to the project working directory when possible;
+sources outside it use only their basename. Build output must be served over
+HTTP because browsers restrict module imports from local `file:` pages.
+
+Source Maps reveal program structure, names, and locations. Embedding
+`sourcesContent` additionally publishes the full original source, including
+comments and literals. Public deployments should omit maps unless debugging is
+required and should enable `--sources-content` only when that disclosure is
+intentional. `serve` always enables an external map with source content because
+it is loopback-only development tooling.
 
 `serve` builds debug artifacts into a private temporary generation, binds only
 to `127.0.0.1` (port 4173 by default), and serves it with caching disabled.
