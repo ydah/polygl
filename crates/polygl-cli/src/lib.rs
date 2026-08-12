@@ -16,18 +16,20 @@ use polygl_core::{
 use polygl_hir::HIR_SCHEMA_VERSION;
 use polygl_lir::LIR_SCHEMA_VERSION;
 use polygl_span::{Diagnostics, SourceFile, SourceId};
+use serde::{Deserialize, Serialize};
 
 mod artifact;
 mod diagnostic_output;
 mod serve;
 
-use artifact::{ArtifactFile, prepare_assets, publish};
+use artifact::{ArtifactFile, prepare_assets, prepare_public_directory, publish};
 use diagnostic_output::DiagnosticFormat;
 
 const RUNTIME_BUNDLE: &[u8] = include_bytes!("../assets/runtime.js");
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const ARTIFACT_MANIFEST_SCHEMA_VERSION: u32 = 2;
-const INDEX_HTML: &str = r#"<!doctype html>
+const ARTIFACT_MANIFEST_SCHEMA_VERSION: u32 = 3;
+const HTML_APP_MARKER: &str = "<!-- polygl:app -->";
+const DEFAULT_HTML_TEMPLATE: &str = r#"<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -40,19 +42,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
   </style>
 </head>
 <body>
-  <canvas id="polygl-canvas" width="640" height="480"></canvas>
-  <script type="module">
-    import { showRuntimeError, start } from "./runtime.js";
-    import { shaderBundle } from "./shaders.js";
-    globalThis.__polyglReady = start(() => import("./app.js"), {
-      requireRuntimeAbi: true,
-      shaderBundle,
-    }).catch((error) => {
-      console.error(error);
-      showRuntimeError(error);
-      throw error;
-    });
-  </script>
+  <!-- polygl:app -->
 </body>
 </html>
 "#;
@@ -110,9 +100,7 @@ impl Error for CliError {}
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Command {
     Build {
-        source: PathBuf,
-        output: PathBuf,
-        options: BuildOptions,
+        request: BuildRequest,
     },
     Check {
         source: PathBuf,
@@ -150,6 +138,254 @@ enum Command {
     Man,
     Version,
     Help,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct BuildRequest {
+    source: Option<PathBuf>,
+    output: Option<PathBuf>,
+    language: Option<String>,
+    mode: Option<BuildMode>,
+    source_map: Option<SourceMapMode>,
+    sources_content: Option<bool>,
+    profile: bool,
+    watch: bool,
+    config: Option<PathBuf>,
+    public_dir: Option<PathBuf>,
+    html_template: Option<PathBuf>,
+    base_url: Option<String>,
+    hashed_filenames: Option<bool>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct BuildPlan {
+    request: BuildRequest,
+    source: PathBuf,
+    output: PathBuf,
+    language: Option<String>,
+    options: BuildOptions,
+    package: PackageOptions,
+    watch: bool,
+    watched_config: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug)]
+struct PackageOptions {
+    public_dir: Option<PathBuf>,
+    html_template: Option<PathBuf>,
+    base_url: String,
+    hashed_filenames: bool,
+    runtime: RuntimeConfig,
+}
+
+impl Default for PackageOptions {
+    fn default() -> Self {
+        Self {
+            public_dir: None,
+            html_template: None,
+            base_url: "/".to_owned(),
+            hashed_filenames: false,
+            runtime: RuntimeConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectConfig {
+    language: Option<String>,
+    entry: Option<PathBuf>,
+    output: Option<PathBuf>,
+    mode: Option<ConfigBuildMode>,
+    source_map: Option<ConfigSourceMap>,
+    sources_content: Option<bool>,
+    public_dir: Option<PathBuf>,
+    html_template: Option<PathBuf>,
+    base_url: Option<String>,
+    hashed_filenames: Option<bool>,
+    #[serde(default)]
+    runtime: RuntimeConfig,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ConfigBuildMode {
+    Debug,
+    Release,
+}
+
+impl From<ConfigBuildMode> for BuildMode {
+    fn from(value: ConfigBuildMode) -> Self {
+        match value {
+            ConfigBuildMode::Debug => Self::Debug,
+            ConfigBuildMode::Release => Self::Release,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ConfigSourceMap {
+    None,
+    External,
+    Inline,
+}
+
+impl From<ConfigSourceMap> for SourceMapMode {
+    fn from(value: ConfigSourceMap) -> Self {
+        match value {
+            ConfigSourceMap::None => Self::None,
+            ConfigSourceMap::External => Self::External,
+            ConfigSourceMap::Inline => Self::Inline,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    seed: Option<u32>,
+    #[serde(
+        rename = "maxDeltaSeconds",
+        alias = "max_delta_seconds",
+        skip_serializing_if = "Option::is_none"
+    )]
+    max_delta_seconds: Option<f64>,
+    #[serde(
+        rename = "fixedDeltaSeconds",
+        alias = "fixed_delta_seconds",
+        skip_serializing_if = "Option::is_none"
+    )]
+    fixed_delta_seconds: Option<f64>,
+    #[serde(
+        rename = "maxCatchUpSteps",
+        alias = "max_catch_up_steps",
+        skip_serializing_if = "Option::is_none"
+    )]
+    max_catch_up_steps: Option<u32>,
+    #[serde(
+        rename = "visibilityPolicy",
+        alias = "visibility_policy",
+        skip_serializing_if = "Option::is_none"
+    )]
+    visibility_policy: Option<VisibilityPolicy>,
+    #[serde(
+        rename = "autoResize",
+        alias = "auto_resize",
+        skip_serializing_if = "Option::is_none"
+    )]
+    auto_resize: Option<bool>,
+    #[serde(
+        rename = "devicePixelRatio",
+        alias = "device_pixel_ratio",
+        skip_serializing_if = "Option::is_none"
+    )]
+    device_pixel_ratio: Option<f64>,
+    #[serde(
+        rename = "focusOnPointerDown",
+        alias = "focus_on_pointer_down",
+        skip_serializing_if = "Option::is_none"
+    )]
+    focus_on_pointer_down: Option<bool>,
+    #[serde(
+        rename = "preventDefaultInput",
+        alias = "prevent_default_input",
+        skip_serializing_if = "Option::is_none"
+    )]
+    prevent_default_input: Option<bool>,
+    #[serde(
+        rename = "externalWebGLPolicy",
+        alias = "external_webgl_policy",
+        skip_serializing_if = "Option::is_none"
+    )]
+    external_web_gl_policy: Option<ExternalWebGlPolicy>,
+    #[serde(
+        rename = "textureFailurePolicy",
+        alias = "texture_failure_policy",
+        skip_serializing_if = "Option::is_none"
+    )]
+    texture_failure_policy: Option<TextureFailurePolicy>,
+    #[serde(
+        rename = "resourceLimits",
+        alias = "resource_limits",
+        skip_serializing_if = "Option::is_none"
+    )]
+    resource_limits: Option<RuntimeResourceLimitsConfig>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum VisibilityPolicy {
+    Continue,
+    Pause,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum ExternalWebGlPolicy {
+    Exclusive,
+    Reset,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum TextureFailurePolicy {
+    Stop,
+    Placeholder,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeResourceLimitsConfig {
+    #[serde(
+        rename = "maxMeshes",
+        alias = "max_meshes",
+        skip_serializing_if = "Option::is_none"
+    )]
+    max_meshes: Option<u32>,
+    #[serde(
+        rename = "maxMeshBytes",
+        alias = "max_mesh_bytes",
+        skip_serializing_if = "Option::is_none"
+    )]
+    max_mesh_bytes: Option<u64>,
+    #[serde(
+        rename = "maxNodes",
+        alias = "max_nodes",
+        skip_serializing_if = "Option::is_none"
+    )]
+    max_nodes: Option<u32>,
+    #[serde(
+        rename = "maxTextures",
+        alias = "max_textures",
+        skip_serializing_if = "Option::is_none"
+    )]
+    max_textures: Option<u32>,
+    #[serde(
+        rename = "maxTextureBytes",
+        alias = "max_texture_bytes",
+        skip_serializing_if = "Option::is_none"
+    )]
+    max_texture_bytes: Option<u64>,
+    #[serde(
+        rename = "maxTextureWidth",
+        alias = "max_texture_width",
+        skip_serializing_if = "Option::is_none"
+    )]
+    max_texture_width: Option<u32>,
+    #[serde(
+        rename = "maxTextureHeight",
+        alias = "max_texture_height",
+        skip_serializing_if = "Option::is_none"
+    )]
+    max_texture_height: Option<u32>,
+    #[serde(
+        rename = "maxShaderPrograms",
+        alias = "max_shader_programs",
+        skip_serializing_if = "Option::is_none"
+    )]
+    max_shader_programs: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -317,11 +553,14 @@ pub fn run_with_io(
     color_supported: bool,
 ) -> Result<(), CliError> {
     match parse_args(args).map_err(|error| error.with_kind(CliErrorKind::Usage))? {
-        Command::Build {
-            source,
-            output: destination,
-            options,
-        } => build(&source, &destination, options, output).map(|_| ()),
+        Command::Build { request } => {
+            let plan = resolve_build_request(request)?;
+            if plan.watch {
+                serve::watch_build(plan, output)
+            } else {
+                build_plan(&plan, output).map(|_| ())
+            }
+        }
         Command::Check {
             source,
             mut diagnostic_options,
@@ -754,38 +993,52 @@ fn parse_completions(mut args: impl Iterator<Item = OsString>) -> Result<Command
     Ok(Command::Completions { shell })
 }
 
-fn parse_build(mut args: impl Iterator<Item = OsString>) -> Result<Command, CliError> {
-    let source = required_path(args.next(), "build requires a source file")?;
-    let mut output = PathBuf::from("dist");
-    let mut mode = BuildMode::Debug;
-    let mut selected_mode = false;
-    let mut source_map = None;
-    let mut sources_content = false;
-    let mut profile = false;
+fn parse_build(args: impl Iterator<Item = OsString>) -> Result<Command, CliError> {
+    let mut args = args.peekable();
+    let mut request = BuildRequest::default();
+    if args
+        .peek()
+        .is_some_and(|argument| !argument.to_string_lossy().starts_with('-'))
+    {
+        request.source = args.next().map(PathBuf::from);
+    }
     while let Some(argument) = args.next() {
         match argument.to_str() {
+            Some("-o" | "--output") if request.output.is_none() => {
+                request.output = Some(required_path(
+                    args.next(),
+                    "output option requires a directory",
+                )?);
+            }
             Some("-o" | "--output") => {
-                output = required_path(args.next(), "output option requires a directory")?;
+                return Err(CliError::new("output may only be specified once"));
             }
-            Some("--debug") => {
-                if selected_mode {
-                    return Err(CliError::new("build mode may only be specified once"));
-                }
-                mode = BuildMode::Debug;
-                selected_mode = true;
+            Some("--language") if request.language.is_none() => {
+                request.language = Some(
+                    args.next()
+                        .ok_or_else(|| CliError::new("language requires an adapter id"))?
+                        .into_string()
+                        .map_err(|_| CliError::new("language id is not valid UTF-8"))?,
+                );
             }
-            Some("--release") => {
-                if selected_mode {
-                    return Err(CliError::new("build mode may only be specified once"));
-                }
-                mode = BuildMode::Release;
-                selected_mode = true;
+            Some("--language") => {
+                return Err(CliError::new("language may only be specified once"));
             }
-            Some("--source-map") if source_map.is_none() => {
+            Some("--debug" | "--release") if request.mode.is_none() => {
+                request.mode = Some(if argument == "--release" {
+                    BuildMode::Release
+                } else {
+                    BuildMode::Debug
+                });
+            }
+            Some("--debug" | "--release") => {
+                return Err(CliError::new("build mode may only be specified once"));
+            }
+            Some("--source-map") if request.source_map.is_none() => {
                 let value = args
                     .next()
                     .ok_or_else(|| CliError::new("source map option requires a mode"))?;
-                source_map = Some(match value.to_str() {
+                request.source_map = Some(match value.to_str() {
                     Some("none") => SourceMapMode::None,
                     Some("external") => SourceMapMode::External,
                     Some("inline") => SourceMapMode::Inline,
@@ -800,38 +1053,72 @@ fn parse_build(mut args: impl Iterator<Item = OsString>) -> Result<Command, CliE
             Some("--source-map") => {
                 return Err(CliError::new("source map mode may only be specified once"));
             }
-            Some("--sources-content") if !sources_content => sources_content = true,
+            Some("--sources-content") if request.sources_content.is_none() => {
+                request.sources_content = Some(true);
+            }
             Some("--sources-content") => {
                 return Err(CliError::new("sources content may only be specified once"));
             }
-            Some("--profile") if !profile => profile = true,
+            Some("--profile") if !request.profile => request.profile = true,
             Some("--profile") => {
                 return Err(CliError::new("profile may only be specified once"));
+            }
+            Some("--watch") if !request.watch => request.watch = true,
+            Some("--watch") => return Err(CliError::new("watch may only be specified once")),
+            Some("--config") if request.config.is_none() => {
+                request.config = Some(required_path(
+                    args.next(),
+                    "config option requires a TOML file",
+                )?);
+            }
+            Some("--config") => {
+                return Err(CliError::new("config may only be specified once"));
+            }
+            Some("--public-dir") if request.public_dir.is_none() => {
+                request.public_dir = Some(required_path(
+                    args.next(),
+                    "public directory option requires a path",
+                )?);
+            }
+            Some("--public-dir") => {
+                return Err(CliError::new("public directory may only be specified once"));
+            }
+            Some("--html-template") if request.html_template.is_none() => {
+                request.html_template = Some(required_path(
+                    args.next(),
+                    "HTML template option requires a path",
+                )?);
+            }
+            Some("--html-template") => {
+                return Err(CliError::new("HTML template may only be specified once"));
+            }
+            Some("--base-url") if request.base_url.is_none() => {
+                request.base_url = Some(
+                    args.next()
+                        .ok_or_else(|| CliError::new("base URL option requires a path"))?
+                        .into_string()
+                        .map_err(|_| CliError::new("base URL is not valid UTF-8"))?,
+                );
+            }
+            Some("--base-url") => {
+                return Err(CliError::new("base URL may only be specified once"));
+            }
+            Some("--hashed-filenames") if request.hashed_filenames.is_none() => {
+                request.hashed_filenames = Some(true);
+            }
+            Some("--hashed-filenames") => {
+                return Err(CliError::new("hashed filenames may only be specified once"));
             }
             Some(other) => return Err(CliError::new(format!("unknown build option `{other}`"))),
             None => return Err(CliError::new("build option is not valid UTF-8")),
         }
     }
-    let source_map = source_map.unwrap_or(if mode == BuildMode::Debug {
-        SourceMapMode::External
-    } else {
-        SourceMapMode::None
-    });
-    if sources_content && source_map == SourceMapMode::None {
+    if request.sources_content == Some(true) && request.source_map == Some(SourceMapMode::None) {
         return Err(CliError::new(
             "--sources-content requires an external or inline source map",
         ));
     }
-    Ok(Command::Build {
-        source,
-        output,
-        options: BuildOptions {
-            mode,
-            source_map,
-            sources_content,
-            profile,
-        },
-    })
+    Ok(Command::Build { request })
 }
 
 fn parse_single_source(
@@ -859,8 +1146,201 @@ fn ensure_empty(mut args: impl Iterator<Item = OsString>) -> Result<(), CliError
     Ok(())
 }
 
+pub(crate) fn resolve_build_request(request: BuildRequest) -> Result<BuildPlan, CliError> {
+    let original_request = request.clone();
+    let explicit_config = request.config.is_some();
+    let config_path = request
+        .config
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("polygl.toml"));
+    let (config, config_base, watched_config) = match fs::read_to_string(&config_path) {
+        Ok(contents) => {
+            let config = toml::from_str::<ProjectConfig>(&contents).map_err(|error| {
+                CliError::new(format!(
+                    "failed to parse project config {}: {error}",
+                    config_path.display()
+                ))
+                .with_kind(CliErrorKind::Parse)
+            })?;
+            let base = config_path.parent().unwrap_or_else(|| Path::new("."));
+            (config, base.to_path_buf(), Some(config_path.clone()))
+        }
+        Err(error) if !explicit_config && error.kind() == std::io::ErrorKind::NotFound => {
+            (ProjectConfig::default(), PathBuf::from("."), None)
+        }
+        Err(error) => {
+            return Err(CliError::new(format!(
+                "failed to read project config {}: {error}",
+                config_path.display()
+            ))
+            .with_kind(CliErrorKind::Io));
+        }
+    };
+
+    let source = request
+        .source
+        .or_else(|| config.entry.map(|path| config_base.join(path)))
+        .ok_or_else(|| {
+            CliError::new("build requires a source file or `entry` in polygl.toml")
+                .with_kind(CliErrorKind::Usage)
+        })?;
+    let output = request
+        .output
+        .or_else(|| config.output.map(|path| config_base.join(path)))
+        .unwrap_or_else(|| config_base.join("dist"));
+    let mode = request
+        .mode
+        .or_else(|| config.mode.map(Into::into))
+        .unwrap_or(BuildMode::Debug);
+    let source_map = request
+        .source_map
+        .or_else(|| config.source_map.map(Into::into))
+        .unwrap_or(if mode == BuildMode::Debug {
+            SourceMapMode::External
+        } else {
+            SourceMapMode::None
+        });
+    let sources_content = request
+        .sources_content
+        .or(config.sources_content)
+        .unwrap_or(false);
+    if sources_content && source_map == SourceMapMode::None {
+        return Err(
+            CliError::new("sources_content requires an external or inline source map")
+                .with_kind(CliErrorKind::Usage),
+        );
+    }
+
+    validate_runtime_config(&config.runtime)?;
+    let base_url = normalize_base_url(
+        request
+            .base_url
+            .or(config.base_url)
+            .as_deref()
+            .unwrap_or("/"),
+    )?;
+    let public_dir = request
+        .public_dir
+        .or_else(|| config.public_dir.map(|path| config_base.join(path)));
+    let html_template = request
+        .html_template
+        .or_else(|| config.html_template.map(|path| config_base.join(path)));
+    Ok(BuildPlan {
+        request: original_request,
+        source,
+        output,
+        language: request.language.or(config.language),
+        options: BuildOptions {
+            mode,
+            source_map,
+            sources_content,
+            profile: request.profile,
+        },
+        package: PackageOptions {
+            public_dir,
+            html_template,
+            base_url,
+            hashed_filenames: request
+                .hashed_filenames
+                .or(config.hashed_filenames)
+                .unwrap_or(false),
+            runtime: config.runtime,
+        },
+        watch: request.watch,
+        watched_config: watched_config.or(Some(config_path)),
+    })
+}
+
+fn normalize_base_url(value: &str) -> Result<String, CliError> {
+    if !value.starts_with('/')
+        || !value.ends_with('/')
+        || value
+            .chars()
+            .any(|character| !character.is_ascii_alphanumeric() && !"/-._~".contains(character))
+        || value
+            .split('/')
+            .any(|component| matches!(component, "." | ".."))
+    {
+        return Err(CliError::new(
+            "base_url must be an absolute URL path ending in `/` without dot segments, a query, or a fragment",
+        )
+        .with_kind(CliErrorKind::Usage));
+    }
+    Ok(value.to_owned())
+}
+
+fn validate_runtime_config(runtime: &RuntimeConfig) -> Result<(), CliError> {
+    for (name, value) in [
+        ("runtime.max_delta_seconds", runtime.max_delta_seconds),
+        ("runtime.fixed_delta_seconds", runtime.fixed_delta_seconds),
+        ("runtime.device_pixel_ratio", runtime.device_pixel_ratio),
+    ] {
+        if value.is_some_and(|value| !value.is_finite() || value <= 0.0) {
+            return Err(
+                CliError::new(format!("{name} must be a positive finite number"))
+                    .with_kind(CliErrorKind::Usage),
+            );
+        }
+    }
+    if runtime.max_catch_up_steps == Some(0) {
+        return Err(
+            CliError::new("runtime.max_catch_up_steps must be greater than zero")
+                .with_kind(CliErrorKind::Usage),
+        );
+    }
+    if let Some(limits) = &runtime.resource_limits {
+        for (name, value) in [
+            ("max_meshes", limits.max_meshes.map(u64::from)),
+            ("max_mesh_bytes", limits.max_mesh_bytes),
+            ("max_nodes", limits.max_nodes.map(u64::from)),
+            ("max_textures", limits.max_textures.map(u64::from)),
+            ("max_texture_bytes", limits.max_texture_bytes),
+            ("max_texture_width", limits.max_texture_width.map(u64::from)),
+            (
+                "max_texture_height",
+                limits.max_texture_height.map(u64::from),
+            ),
+            (
+                "max_shader_programs",
+                limits.max_shader_programs.map(u64::from),
+            ),
+        ] {
+            if value == Some(0) || value.is_some_and(|value| value > 9_007_199_254_740_991) {
+                return Err(CliError::new(format!(
+                    "runtime.resource_limits.{name} must be a positive JavaScript-safe integer"
+                ))
+                .with_kind(CliErrorKind::Usage));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) struct BuildReport {
     pub(crate) watched_paths: Vec<PathBuf>,
+}
+
+#[derive(Clone, Debug)]
+struct ArtifactEntrypoints {
+    app: String,
+    shaders: String,
+    runtime: String,
+    source_map: Option<String>,
+}
+
+pub(crate) fn build_plan(
+    plan: &BuildPlan,
+    messages: &mut dyn Write,
+) -> Result<BuildReport, CliError> {
+    build_with_package(
+        &plan.source,
+        &plan.output,
+        plan.language.as_deref(),
+        plan.options,
+        &plan.package,
+        plan.watched_config.as_deref(),
+        messages,
+    )
 }
 
 fn build(
@@ -869,9 +1349,42 @@ fn build(
     options: BuildOptions,
     messages: &mut dyn Write,
 ) -> Result<BuildReport, CliError> {
+    build_with_package(
+        source_path,
+        destination,
+        None,
+        options,
+        &PackageOptions::default(),
+        None,
+        messages,
+    )
+}
+
+fn build_with_package(
+    source_path: &Path,
+    destination: &Path,
+    language: Option<&str>,
+    options: BuildOptions,
+    package: &PackageOptions,
+    watched_config: Option<&Path>,
+    messages: &mut dyn Write,
+) -> Result<BuildReport, CliError> {
+    validate_destination_separation(
+        destination,
+        source_path,
+        watched_config,
+        package.html_template.as_deref(),
+        package.public_dir.as_deref(),
+    )?;
     let source = load_source(source_path)?;
     let compiler = compiler();
-    let adapter = adapter_for_source(compiler.adapters(), source_path)?;
+    let adapter = match language {
+        Some(language) => compiler.adapters().by_id(language).ok_or_else(|| {
+            CliError::new(format!("unsupported source language `{language}`"))
+                .with_kind(CliErrorKind::Usage)
+        })?,
+        None => adapter_for_source(compiler.adapters(), source_path)?,
+    };
     let compiled = compiler
         .compile(&source, adapter.id(), options.compiler())
         .map_err(|error| compilation_error(error, &source))?;
@@ -887,24 +1400,277 @@ fn build(
     )?;
 
     let shader_module = render_shader_module(&compiled.shaders, &source, options.mode)?;
-    let mut files = vec![
-        ArtifactFile::new("app.js", compiled.javascript.javascript.into_bytes()),
-        ArtifactFile::new("shaders.js", shader_module.into_bytes()),
-        ArtifactFile::new("runtime.js", RUNTIME_BUNDLE.to_vec()),
-        ArtifactFile::new("index.html", INDEX_HTML.as_bytes().to_vec()),
-    ];
-    if let Some(source_map) = compiled.javascript.source_map {
-        files.push(ArtifactFile::new("app.js.map", source_map.into_bytes()));
-    }
+    let (mut files, entrypoints) = prepare_generated_files(
+        compiled.javascript.javascript,
+        compiled.javascript.source_map,
+        shader_module,
+        package,
+    )?;
     files.extend(assets.files);
+    let mut public_sources = Vec::new();
+    if let Some(public_dir) = &package.public_dir {
+        let public = prepare_public_directory(public_dir)?;
+        public_sources = public.source_paths;
+        files.extend(public.files);
+    }
     files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-    let manifest = render_artifact_manifest(&source, adapter, options, &files)?;
+    let manifest =
+        render_artifact_manifest(&source, adapter, options, package, &entrypoints, &files)?;
     files.push(ArtifactFile::new("polygl-manifest.json", manifest));
-    let mut watched_paths = Vec::with_capacity(assets.source_paths.len() + 1);
+    let mut watched_paths =
+        Vec::with_capacity(assets.source_paths.len() + public_sources.len() + 4);
     watched_paths.push(source_path.to_path_buf());
     watched_paths.extend(assets.source_paths);
+    watched_paths.extend(public_sources);
+    if let Some(config) = watched_config {
+        watched_paths.push(config.to_path_buf());
+    }
+    if let Some(template) = &package.html_template {
+        watched_paths.push(template.clone());
+    }
+    if let Some(public) = &package.public_dir {
+        watched_paths.push(public.clone());
+    }
     publish(destination, files)?;
     Ok(BuildReport { watched_paths })
+}
+
+fn validate_destination_separation(
+    destination: &Path,
+    source: &Path,
+    config: Option<&Path>,
+    template: Option<&Path>,
+    public: Option<&Path>,
+) -> Result<(), CliError> {
+    let destination = comparable_path(destination)?;
+    for (label, input) in [
+        ("source file", Some(source)),
+        ("project config", config),
+        ("HTML template", template),
+    ] {
+        let Some(input) = input else { continue };
+        let input = comparable_path(input)?;
+        if input.starts_with(&destination) {
+            return Err(CliError::new(format!(
+                "output directory {} may not contain the {label} {}",
+                destination.display(),
+                input.display()
+            ))
+            .with_kind(CliErrorKind::Usage));
+        }
+    }
+    if let Some(public) = public {
+        let public = comparable_path(public)?;
+        if public.starts_with(&destination) || destination.starts_with(&public) {
+            return Err(CliError::new(format!(
+                "output directory {} and public directory {} may not contain one another",
+                destination.display(),
+                public.display()
+            ))
+            .with_kind(CliErrorKind::Usage));
+        }
+    }
+    Ok(())
+}
+
+fn comparable_path(path: &Path) -> Result<PathBuf, CliError> {
+    let mut cursor = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| CliError::new(format!("failed to read working directory: {error}")))?
+            .join(path)
+    };
+    let mut missing = Vec::new();
+    loop {
+        match cursor.canonicalize() {
+            Ok(mut resolved) => {
+                for component in missing.iter().rev() {
+                    resolved.push(component);
+                }
+                return Ok(resolved);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let name = cursor.file_name().ok_or_else(|| {
+                    CliError::new(format!(
+                        "failed to resolve path {}: no existing ancestor",
+                        path.display()
+                    ))
+                })?;
+                missing.push(name.to_os_string());
+                cursor = cursor
+                    .parent()
+                    .ok_or_else(|| {
+                        CliError::new(format!(
+                            "failed to resolve path {}: no existing ancestor",
+                            path.display()
+                        ))
+                    })?
+                    .to_path_buf();
+            }
+            Err(error) => {
+                return Err(CliError::new(format!(
+                    "failed to resolve path {}: {error}",
+                    path.display()
+                )));
+            }
+        }
+    }
+}
+
+fn prepare_generated_files(
+    mut javascript: String,
+    source_map: Option<String>,
+    shader_module: String,
+    package: &PackageOptions,
+) -> Result<(Vec<ArtifactFile>, ArtifactEntrypoints), CliError> {
+    let (source_map_name, source_map_file) = match source_map {
+        Some(source_map) if package.hashed_filenames => {
+            let mut map =
+                serde_json::from_str::<serde_json::Value>(&source_map).map_err(|error| {
+                    CliError::new(format!("failed to parse generated source map: {error}"))
+                        .with_kind(CliErrorKind::Internal)
+                })?;
+            let object = map.as_object_mut().ok_or_else(|| {
+                CliError::new("generated source map is not a JSON object")
+                    .with_kind(CliErrorKind::Internal)
+            })?;
+            // `file` is optional in source-map v3. Removing it avoids a cyclic
+            // name dependency: the app hash contains the map filename while a
+            // map hash containing the app filename would depend on the app hash.
+            object.remove("file");
+            let mut source_map = serde_json::to_string(&map).map_err(|error| {
+                CliError::new(format!("failed to serialize generated source map: {error}"))
+                    .with_kind(CliErrorKind::Internal)
+            })?;
+            source_map.push('\n');
+            let name = content_hashed_name("app", "js.map", source_map.as_bytes());
+            let suffix = "//# sourceMappingURL=app.js.map\n";
+            let Some(prefix) = javascript.strip_suffix(suffix) else {
+                return Err(CliError::new(
+                    "external source map output is missing its expected URL marker",
+                )
+                .with_kind(CliErrorKind::Internal));
+            };
+            javascript = format!("{prefix}//# sourceMappingURL={name}\n");
+            (
+                Some(name.clone()),
+                Some(ArtifactFile::new(name, source_map)),
+            )
+        }
+        Some(source_map) => (
+            Some("app.js.map".to_owned()),
+            Some(ArtifactFile::new("app.js.map", source_map)),
+        ),
+        None => (None, None),
+    };
+    let app = if package.hashed_filenames {
+        content_hashed_name("app", "js", javascript.as_bytes())
+    } else {
+        "app.js".to_owned()
+    };
+    let shaders = if package.hashed_filenames {
+        content_hashed_name("shaders", "js", shader_module.as_bytes())
+    } else {
+        "shaders.js".to_owned()
+    };
+    let runtime = if package.hashed_filenames {
+        content_hashed_name("runtime", "js", RUNTIME_BUNDLE)
+    } else {
+        "runtime.js".to_owned()
+    };
+    let entrypoints = ArtifactEntrypoints {
+        app,
+        shaders,
+        runtime,
+        source_map: source_map_name,
+    };
+    let index = render_index(package, &entrypoints)?;
+    let mut files = vec![
+        ArtifactFile::new(&entrypoints.app, javascript),
+        ArtifactFile::new(&entrypoints.shaders, shader_module),
+        ArtifactFile::new(&entrypoints.runtime, RUNTIME_BUNDLE.to_vec()),
+        ArtifactFile::new("index.html", index),
+    ];
+    if let Some(source_map) = source_map_file {
+        files.push(source_map);
+    }
+    Ok((files, entrypoints))
+}
+
+fn content_hashed_name(stem: &str, extension: &str, contents: &[u8]) -> String {
+    let digest = blake3::hash(contents).to_hex();
+    format!("{stem}.{}.{extension}", &digest.as_str()[..16])
+}
+
+fn render_index(
+    package: &PackageOptions,
+    entrypoints: &ArtifactEntrypoints,
+) -> Result<Vec<u8>, CliError> {
+    let template = match &package.html_template {
+        Some(path) => fs::read_to_string(path).map_err(|error| {
+            CliError::new(format!(
+                "failed to read HTML template {}: {error}",
+                path.display()
+            ))
+            .with_kind(CliErrorKind::Io)
+        })?,
+        None => DEFAULT_HTML_TEMPLATE.to_owned(),
+    };
+    if template.matches(HTML_APP_MARKER).count() != 1 {
+        return Err(CliError::new(format!(
+            "HTML template must contain exactly one `{HTML_APP_MARKER}` marker"
+        ))
+        .with_kind(CliErrorKind::Usage));
+    }
+    let runtime_url = inline_json_string(&asset_url(&package.base_url, &entrypoints.runtime))?;
+    let shaders_url = inline_json_string(&asset_url(&package.base_url, &entrypoints.shaders))?;
+    let app_url = inline_json_string(&asset_url(&package.base_url, &entrypoints.app))?;
+    let runtime_options = inline_json(&package.runtime)?;
+    let bootstrap = format!(
+        r#"<canvas id="polygl-canvas" width="640" height="480"></canvas>
+  <script type="module">
+    import {{ showRuntimeError, start }} from {runtime_url};
+    import {{ shaderBundle }} from {shaders_url};
+    const runtimeOptions = {{ ...{runtime_options}, requireRuntimeAbi: true, shaderBundle }};
+    globalThis.__polyglReady = start(() => import({app_url}), runtimeOptions).catch((error) => {{
+      console.error(error);
+      showRuntimeError(error);
+      throw error;
+    }});
+  </script>"#
+    );
+    Ok(template
+        .replacen(HTML_APP_MARKER, &bootstrap, 1)
+        .into_bytes())
+}
+
+fn asset_url(base_url: &str, name: &str) -> String {
+    if base_url == "/" {
+        format!("./{name}")
+    } else {
+        format!("{base_url}{name}")
+    }
+}
+
+fn inline_json(value: &impl Serialize) -> Result<String, CliError> {
+    serde_json::to_string(value)
+        .map(|value| escape_script_text(&value))
+        .map_err(|error| {
+            CliError::new(format!("failed to serialize runtime options: {error}"))
+                .with_kind(CliErrorKind::Internal)
+        })
+}
+
+fn inline_json_string(value: &str) -> Result<String, CliError> {
+    inline_json(&value)
+}
+
+fn escape_script_text(value: &str) -> String {
+    value
+        .replace('<', "\\u003c")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029")
 }
 
 fn emit(
@@ -980,21 +1746,26 @@ fn emit(
             }
             EmitKind::Manifest => {
                 let shader_module = render_shader_module(&compiled.shaders, &source, options.mode)?;
-                let mut files = vec![
-                    ArtifactFile::new("app.js", compiled.javascript.javascript.as_bytes().to_vec()),
-                    ArtifactFile::new("shaders.js", shader_module.into_bytes()),
-                    ArtifactFile::new("runtime.js", RUNTIME_BUNDLE.to_vec()),
-                    ArtifactFile::new("index.html", INDEX_HTML.as_bytes().to_vec()),
-                ];
-                if let Some(map) = &compiled.javascript.source_map {
-                    files.push(ArtifactFile::new("app.js.map", map.as_bytes().to_vec()));
-                }
+                let package = PackageOptions::default();
+                let (mut files, entrypoints) = prepare_generated_files(
+                    compiled.javascript.javascript.clone(),
+                    compiled.javascript.source_map.clone(),
+                    shader_module,
+                    &package,
+                )?;
                 if let Some(source_path) = source_path {
                     files.extend(prepare_assets(source_path, &compiled.assets)?.files);
                 }
                 files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-                String::from_utf8(render_artifact_manifest(&source, adapter, options, &files)?)
-                    .expect("artifact manifest is UTF-8 JSON")
+                String::from_utf8(render_artifact_manifest(
+                    &source,
+                    adapter,
+                    options,
+                    &package,
+                    &entrypoints,
+                    &files,
+                )?)
+                .expect("artifact manifest is UTF-8 JSON")
             }
         };
         values.insert(kind.name(), value);
@@ -1163,6 +1934,8 @@ fn render_artifact_manifest(
     source: &SourceFile,
     adapter: &dyn LanguageAdapter,
     options: BuildOptions,
+    package: &PackageOptions,
+    entrypoints: &ArtifactEntrypoints,
     files: &[ArtifactFile],
 ) -> Result<Vec<u8>, CliError> {
     let mut features = adapter
@@ -1199,7 +1972,16 @@ fn render_artifact_manifest(
             "name": "polygl",
             "version": VERSION,
         },
+        "entrypoints": {
+            "app": entrypoints.app,
+            "html": "index.html",
+            "runtime": entrypoints.runtime,
+            "shaders": entrypoints.shaders,
+            "sourceMap": entrypoints.source_map,
+        },
         "options": {
+            "baseUrl": package.base_url,
+            "hashedFilenames": package.hashed_filenames,
             "mode": match options.mode {
                 BuildMode::Debug => "debug",
                 BuildMode::Release => "release",
@@ -1641,7 +2423,7 @@ fn pascal_case(language: &str) -> String {
 fn usage() -> String {
     "\
 usage:
-  polygl build <source.rb|source.php|source.pl> [-o <directory>] [--debug | --release] [--source-map <none|external|inline>] [--sources-content] [--profile]
+  polygl build [source.rb|source.php|source.pl] [-o <directory>] [--config <polygl.toml>] [--language <adapter-id>] [--debug | --release] [--source-map <none|external|inline>] [--sources-content] [--public-dir <directory>] [--html-template <file>] [--base-url </path/>] [--hashed-filenames] [--watch] [--profile]
   polygl serve <source.rb|source.php|source.pl> [--port <port>] [--watch] [--open]
   polygl check <source.rb|source.php|source.pl> [--diagnostic-format <human|json|sarif|lsp>] [--deny-warnings] [--allow <Wcode|WxxFamily>] [--deny <Wcode|WxxFamily>] [--max-warnings <count>] [--profile]
   polygl dump-hir <source.rb|source.php|source.pl>
@@ -1663,7 +2445,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::{
-        BuildMode, BuildOptions, CliError, CliErrorKind, Command, SourceMapMode, VERSION,
+        BuildMode, BuildRequest, CliError, CliErrorKind, Command, SourceMapMode, VERSION,
         parse_args, run, run_with_io,
     };
 
@@ -1690,14 +2472,12 @@ mod tests {
         assert_eq!(
             parse_args(arguments(["build", "main.rb", "-o", "web", "--release"])).unwrap(),
             Command::Build {
-                source: "main.rb".into(),
-                output: "web".into(),
-                options: BuildOptions {
-                    mode: BuildMode::Release,
-                    source_map: SourceMapMode::None,
-                    sources_content: false,
-                    profile: false,
-                },
+                request: BuildRequest {
+                    source: Some("main.rb".into()),
+                    output: Some("web".into()),
+                    mode: Some(BuildMode::Release),
+                    ..BuildRequest::default()
+                }
             }
         );
         assert_eq!(
@@ -1710,14 +2490,12 @@ mod tests {
             ]))
             .unwrap(),
             Command::Build {
-                source: "main.rb".into(),
-                output: "dist".into(),
-                options: BuildOptions {
-                    mode: BuildMode::Debug,
-                    source_map: SourceMapMode::Inline,
-                    sources_content: true,
-                    profile: false,
-                },
+                request: BuildRequest {
+                    source: Some("main.rb".into()),
+                    source_map: Some(SourceMapMode::Inline),
+                    sources_content: Some(true),
+                    ..BuildRequest::default()
+                }
             }
         );
         let error = parse_args(arguments(["build", "main.rb", "--debug", "--release"]))
@@ -2042,7 +2820,7 @@ end
         let debug_manifest_bytes = fs::read(debug.join("polygl-manifest.json")).unwrap();
         let debug_manifest: serde_json::Value =
             serde_json::from_slice(&debug_manifest_bytes).unwrap();
-        assert_eq!(debug_manifest["schemaVersion"], 2);
+        assert_eq!(debug_manifest["schemaVersion"], 3);
         assert_eq!(debug_manifest["compiler"]["version"], VERSION);
         assert_eq!(debug_manifest["adapter"]["id"], "ruby");
         assert_eq!(debug_manifest["adapter"]["apiVersion"], 1);
@@ -2562,6 +3340,190 @@ sub setup {
         let explanation = String::from_utf8(explanation).unwrap();
         assert!(explanation.contains("unsafe GPU integer divisor"));
         assert!(explanation.contains("provably nonzero"));
+        fs::remove_dir_all(temporary).unwrap();
+    }
+
+    #[test]
+    fn builds_strict_configured_hashed_deployments() {
+        let temporary = temporary_directory();
+        let source = temporary.join("main.rb");
+        fs::write(&source, "def setup\n  background(0.0, 0.0, 0.0)\nend\n").unwrap();
+        let public = temporary.join("public");
+        fs::create_dir(&public).unwrap();
+        fs::write(public.join("robots.txt"), "User-agent: *\n").unwrap();
+        let template = temporary.join("shell.html");
+        fs::write(
+            &template,
+            "<!doctype html><html><body><!-- polygl:app --></body></html>",
+        )
+        .unwrap();
+        let config = temporary.join("polygl.toml");
+        fs::write(
+            &config,
+            r#"language = "ruby"
+entry = "main.rb"
+output = "site"
+mode = "release"
+source_map = "none"
+public_dir = "public"
+html_template = "shell.html"
+base_url = "/gallery/"
+hashed_filenames = true
+
+[runtime]
+seed = 42
+auto_resize = true
+external_webgl_policy = "reset"
+
+[runtime.resource_limits]
+max_meshes = 4
+"#,
+        )
+        .unwrap();
+
+        run(
+            arguments(["build", "--config", config.to_str().unwrap()]),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let output = temporary.join("site");
+        assert_eq!(
+            fs::read_to_string(output.join("robots.txt")).unwrap(),
+            "User-agent: *\n"
+        );
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(output.join("polygl-manifest.json")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["schemaVersion"], 3);
+        assert_eq!(manifest["options"]["baseUrl"], "/gallery/");
+        assert_eq!(manifest["options"]["hashedFilenames"], true);
+        for key in ["app", "runtime", "shaders"] {
+            let name = manifest["entrypoints"][key].as_str().unwrap();
+            let hash = name.split('.').nth(1).unwrap();
+            let contents = fs::read(output.join(name)).unwrap();
+            assert_eq!(hash, &blake3::hash(&contents).to_hex().as_str()[..16]);
+        }
+        let html = fs::read_to_string(output.join("index.html")).unwrap();
+        assert!(html.contains("/gallery/runtime."));
+        assert!(html.contains("\"seed\":42"));
+        assert!(html.contains("\"externalWebGLPolicy\":\"reset\""));
+        assert!(html.contains("\"maxMeshes\":4"));
+        assert!(!html.contains("polygl:app"));
+
+        let debug_output = temporary.join("debug-site");
+        run(
+            arguments([
+                "build",
+                "--config",
+                config.to_str().unwrap(),
+                "-o",
+                debug_output.to_str().unwrap(),
+                "--debug",
+                "--source-map",
+                "external",
+            ]),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let debug_manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(debug_output.join("polygl-manifest.json")).unwrap())
+                .unwrap();
+        let app_name = debug_manifest["entrypoints"]["app"].as_str().unwrap();
+        let map_name = debug_manifest["entrypoints"]["sourceMap"].as_str().unwrap();
+        let app = fs::read_to_string(debug_output.join(app_name)).unwrap();
+        assert!(app.ends_with(&format!("//# sourceMappingURL={map_name}\n")));
+        let map_bytes = fs::read(debug_output.join(map_name)).unwrap();
+        assert_eq!(
+            map_name.split('.').nth(1).unwrap(),
+            &blake3::hash(&map_bytes).to_hex().as_str()[..16]
+        );
+        let map: serde_json::Value = serde_json::from_slice(&map_bytes).unwrap();
+        assert!(map.get("file").is_none());
+
+        fs::write(&config, "entry = \"main.rb\"\nunknown = true\n").unwrap();
+        let error = run(
+            arguments(["build", "--config", config.to_str().unwrap()]),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, CliErrorKind::Parse);
+        assert!(error.to_string().contains("unknown field"));
+        fs::remove_dir_all(temporary).unwrap();
+    }
+
+    #[test]
+    fn rejects_unsafe_base_urls_and_ambiguous_templates_before_publication() {
+        let temporary = temporary_directory();
+        let source = temporary.join("main.rb");
+        fs::write(&source, "def setup\nend\n").unwrap();
+        let output = temporary.join("dist");
+        let error = run(
+            arguments([
+                "build",
+                source.to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+                "--base-url",
+                "/safe/../escape/",
+            ]),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("without dot segments"));
+        assert!(!output.exists());
+
+        let template = temporary.join("ambiguous.html");
+        fs::write(&template, "<!-- polygl:app --><!-- polygl:app -->").unwrap();
+        let error = run(
+            arguments([
+                "build",
+                source.to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+                "--html-template",
+                template.to_str().unwrap(),
+            ]),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("exactly one"));
+        assert!(!output.exists());
+
+        let public = temporary.join("public");
+        fs::create_dir(&public).unwrap();
+        let nested_output = public.join("dist");
+        let error = run(
+            arguments([
+                "build",
+                source.to_str().unwrap(),
+                "-o",
+                nested_output.to_str().unwrap(),
+                "--public-dir",
+                public.to_str().unwrap(),
+            ]),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("may not contain one another"));
+        assert!(!nested_output.exists());
+
+        let destructive_output = temporary.clone();
+        let error = run(
+            arguments([
+                "build",
+                source.to_str().unwrap(),
+                "-o",
+                destructive_output.to_str().unwrap(),
+            ]),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("may not contain the source file")
+        );
+        assert!(source.is_file());
         fs::remove_dir_all(temporary).unwrap();
     }
 

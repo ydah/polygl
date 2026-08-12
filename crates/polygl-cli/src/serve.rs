@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::{BuildOptions, CliError, build};
+use crate::{BuildOptions, BuildPlan, CliError, build, build_plan, resolve_build_request};
 
 const WATCH_INTERVAL: Duration = Duration::from_millis(150);
 const FAILED_BUILD_RETRY_INTERVAL: Duration = Duration::from_secs(1);
@@ -263,6 +263,76 @@ pub(crate) fn serve(
         }
         thread::sleep(ACCEPT_RETRY);
     }
+}
+
+pub(crate) fn watch_build(mut plan: BuildPlan, messages: &mut dyn Write) -> Result<(), CliError> {
+    let source_before_build = path_fingerprint(&plan.source);
+    let mut watched_paths = configured_watch_paths(&plan);
+    let mut fingerprint = paths_fingerprint(&watched_paths);
+    let mut failed = false;
+    match build_plan(&plan, messages) {
+        Ok(report) => {
+            watched_paths = report.watched_paths;
+            fingerprint = paths_fingerprint(&watched_paths);
+            writeln!(messages, "watching {}", plan.source.display())
+                .map_err(|error| CliError::new(format!("failed to write watch status: {error}")))?;
+        }
+        Err(error) => {
+            write_error(messages, &error.to_string())?;
+            failed = true;
+        }
+    }
+    if path_fingerprint(&plan.source) != source_before_build {
+        fingerprint = None;
+    }
+    let mut next_failed_retry = Instant::now() + FAILED_BUILD_RETRY_INTERVAL;
+    loop {
+        thread::sleep(WATCH_INTERVAL);
+        let observed = paths_fingerprint(&watched_paths);
+        if observed == fingerprint && !(failed && Instant::now() >= next_failed_retry) {
+            continue;
+        }
+        fingerprint = observed;
+        next_failed_retry = Instant::now() + FAILED_BUILD_RETRY_INTERVAL;
+        plan = match resolve_build_request(plan.request.clone()) {
+            Ok(plan) => plan,
+            Err(error) => {
+                write_error(messages, &error.to_string())?;
+                failed = true;
+                continue;
+            }
+        };
+        match build_plan(&plan, messages) {
+            Ok(report) => {
+                watched_paths = report.watched_paths;
+                fingerprint = paths_fingerprint(&watched_paths);
+                failed = false;
+                writeln!(messages, "rebuilt {}", plan.source.display()).map_err(|error| {
+                    CliError::new(format!("failed to write rebuild status: {error}"))
+                })?;
+            }
+            Err(error) => {
+                write_error(messages, &error.to_string())?;
+                watched_paths = configured_watch_paths(&plan);
+                fingerprint = paths_fingerprint(&watched_paths);
+                failed = true;
+            }
+        }
+    }
+}
+
+fn configured_watch_paths(plan: &BuildPlan) -> Vec<PathBuf> {
+    let mut paths = vec![plan.source.clone()];
+    if let Some(config) = &plan.watched_config {
+        paths.push(config.clone());
+    }
+    if let Some(template) = &plan.package.html_template {
+        paths.push(template.clone());
+    }
+    if let Some(public) = &plan.package.public_dir {
+        paths.push(public.clone());
+    }
+    paths
 }
 
 fn open_browser(url: &str) -> Result<(), CliError> {
@@ -973,9 +1043,39 @@ fn paths_fingerprint(paths: &[PathBuf]) -> Option<u64> {
     let mut hasher = DefaultHasher::new();
     for path in paths {
         path.hash(&mut hasher);
-        path_fingerprint(path)?.hash(&mut hasher);
+        fingerprint_tree(path, &mut hasher).ok()?;
     }
     Some(hasher.finish())
+}
+
+fn fingerprint_tree(path: &Path, hasher: &mut DefaultHasher) -> io::Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            0_u8.hash(hasher);
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
+    if metadata.file_type().is_symlink() {
+        1_u8.hash(hasher);
+        fs::read_link(path)?.hash(hasher);
+    } else if metadata.is_file() {
+        2_u8.hash(hasher);
+        metadata.len().hash(hasher);
+        fs::read(path)?.hash(hasher);
+    } else if metadata.is_dir() {
+        3_u8.hash(hasher);
+        let mut entries = fs::read_dir(path)?.collect::<Result<Vec<_>, _>>()?;
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        for entry in entries {
+            entry.file_name().hash(hasher);
+            fingerprint_tree(&entry.path(), hasher)?;
+        }
+    } else {
+        4_u8.hash(hasher);
+    }
+    Ok(())
 }
 
 fn current_watch_paths(state: &ServerState, source: &Path) -> Result<Vec<PathBuf>, CliError> {
@@ -1084,9 +1184,9 @@ mod tests {
     use super::{
         CLIENT_START, ConnectionPermit, DEV_CLIENT, ERROR_START, Generation, MAX_HTTP_CONNECTIONS,
         MAX_REQUEST_BYTES, ServerState, broadcast, content_type, decorate_index, etag_matches,
-        handle_connection, read_client_frame, read_request, safe_relative_path, same_origin, serve,
-        start_broadcast_worker, static_etag, valid_http_host, valid_websocket_key,
-        websocket_accept, websocket_frame,
+        handle_connection, paths_fingerprint, read_client_frame, read_request, safe_relative_path,
+        same_origin, serve, start_broadcast_worker, static_etag, valid_http_host,
+        valid_websocket_key, websocket_accept, websocket_frame,
     };
 
     #[test]
@@ -1359,6 +1459,21 @@ mod tests {
         fs::write(&source, "def setup\n").unwrap();
         let error = serve(&source, false, 0, false, &mut Vec::new()).unwrap_err();
         assert!(error.to_string().contains("E0100"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fingerprints_missing_paths_and_recursive_directory_changes() {
+        let root = temporary_path("fingerprint-tree");
+        fs::create_dir(&root).unwrap();
+        let missing = root.join("polygl.toml");
+        let watched = vec![root.clone(), missing.clone()];
+        let initial = paths_fingerprint(&watched).unwrap();
+        fs::write(root.join("source.rb"), "def setup\nend\n").unwrap();
+        let with_source = paths_fingerprint(&watched).unwrap();
+        assert_ne!(initial, with_source);
+        fs::write(&missing, "entry = \"source.rb\"\n").unwrap();
+        assert_ne!(with_source, paths_fingerprint(&watched).unwrap());
         fs::remove_dir_all(root).unwrap();
     }
 

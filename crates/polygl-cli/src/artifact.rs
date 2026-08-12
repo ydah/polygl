@@ -91,6 +91,97 @@ pub(crate) fn prepare_assets(
     })
 }
 
+pub(crate) fn prepare_public_directory(public: &Path) -> Result<PreparedAssets, CliError> {
+    let metadata = fs::symlink_metadata(public).map_err(|error| {
+        CliError::new(format!(
+            "failed to inspect public directory {}: {error}",
+            public.display()
+        ))
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(CliError::new(format!(
+            "public path {} must be a real directory, not a file or symlink",
+            public.display()
+        )));
+    }
+    let mut prepared = PreparedAssets {
+        files: Vec::new(),
+        source_paths: vec![public.to_path_buf()],
+    };
+    collect_public_directory(public, public, &mut prepared)?;
+    prepared
+        .files
+        .sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    prepared.source_paths.sort();
+    Ok(prepared)
+}
+
+fn collect_public_directory(
+    root: &Path,
+    directory: &Path,
+    prepared: &mut PreparedAssets,
+) -> Result<(), CliError> {
+    let mut entries = fs::read_dir(directory)
+        .map_err(|error| {
+            CliError::new(format!(
+                "failed to read public directory {}: {error}",
+                directory.display()
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            CliError::new(format!(
+                "failed to enumerate public directory {}: {error}",
+                directory.display()
+            ))
+        })?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            CliError::new(format!(
+                "failed to inspect public entry {}: {error}",
+                path.display()
+            ))
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(CliError::new(format!(
+                "public directory entry {} may not be a symlink",
+                path.display()
+            )));
+        }
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| {
+                CliError::new(format!(
+                    "public entry {} escaped its root {}",
+                    path.display(),
+                    root.display()
+                ))
+            })?
+            .to_path_buf();
+        if metadata.is_dir() {
+            prepared.source_paths.push(path.clone());
+            collect_public_directory(root, &path, prepared)?;
+        } else if metadata.is_file() {
+            let contents = fs::read(&path).map_err(|error| {
+                CliError::new(format!(
+                    "failed to read public file {}: {error}",
+                    path.display()
+                ))
+            })?;
+            prepared.source_paths.push(path);
+            prepared.files.push(ArtifactFile::new(relative, contents));
+        } else {
+            return Err(CliError::new(format!(
+                "public entry {} is not a regular file or directory",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn publish(destination: &Path, files: Vec<ArtifactFile>) -> Result<(), CliError> {
     validate_paths(&files)?;
     let (parent, target) = resolve_destination(destination)?;
@@ -351,7 +442,7 @@ mod tests {
     use polygl_lir::AssetReference;
     use polygl_span::{SourceFile, SourceId};
 
-    use super::{ArtifactFile, prepare_assets, publish, validate_paths};
+    use super::{ArtifactFile, prepare_assets, prepare_public_directory, publish, validate_paths};
 
     #[test]
     fn rejects_platform_and_prefix_collisions() {
@@ -420,6 +511,39 @@ mod tests {
         .unwrap_err();
         assert!(error.to_string().contains("collide"));
         assert_eq!(fs::read(output.join("sentinel.txt")).unwrap(), b"previous");
+    }
+
+    #[test]
+    fn copies_public_directories_in_stable_relative_order() {
+        let temporary = tempfile::tempdir().unwrap();
+        let public = temporary.path().join("public");
+        fs::create_dir_all(public.join("nested")).unwrap();
+        fs::write(public.join("z.txt"), "z").unwrap();
+        fs::write(public.join("nested/a.txt"), "a").unwrap();
+        let prepared = prepare_public_directory(&public).unwrap();
+        assert_eq!(
+            prepared
+                .files
+                .iter()
+                .map(|file| file.relative_path.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            ["nested/a.txt", "z.txt"]
+        );
+        assert!(prepared.source_paths.contains(&public.join("nested")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_every_public_directory_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let public = temporary.path().join("public");
+        fs::create_dir(&public).unwrap();
+        fs::write(public.join("target.txt"), "target").unwrap();
+        symlink(public.join("target.txt"), public.join("alias.txt")).unwrap();
+        let error = prepare_public_directory(&public).unwrap_err();
+        assert!(error.to_string().contains("may not be a symlink"));
     }
 
     #[cfg(unix)]
