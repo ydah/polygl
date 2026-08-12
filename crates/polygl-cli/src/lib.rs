@@ -160,6 +160,7 @@ struct DiagnosticOptions {
     color: ColorChoice,
     color_supported: bool,
     warning_policy: WarningPolicy,
+    profile: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -233,6 +234,7 @@ pub(crate) struct BuildOptions {
     mode: BuildMode,
     source_map: SourceMapMode,
     sources_content: bool,
+    profile: bool,
 }
 
 impl BuildOptions {
@@ -241,6 +243,7 @@ impl BuildOptions {
             mode: BuildMode::Debug,
             source_map: SourceMapMode::None,
             sources_content: false,
+            profile: false,
         }
     }
 
@@ -249,6 +252,7 @@ impl BuildOptions {
             mode: BuildMode::Debug,
             source_map: SourceMapMode::External,
             sources_content: true,
+            profile: false,
         }
     }
 
@@ -293,7 +297,11 @@ pub fn run_with_color_support(
                 .map_err(|error| {
                     compilation_error_with_options(error, &source_file, &diagnostic_options)
                 })?;
+            let profile = diagnostic_options.profile;
             write_diagnostics(&compiled.warnings, &source_file, diagnostic_options, output)?;
+            if profile {
+                write_profile(&compiled, output)?;
+            }
             Ok(())
         }
         Command::Serve {
@@ -434,6 +442,10 @@ fn parse_diagnostic_options(
             }
             Some("--max-warnings") => {
                 return Err(CliError::new("max warnings may only be specified once"));
+            }
+            Some("--profile") if !options.profile => options.profile = true,
+            Some("--profile") => {
+                return Err(CliError::new("profile may only be specified once"));
             }
             Some("--allow" | "--deny") => {
                 let deny = argument == "--deny";
@@ -597,6 +609,7 @@ fn parse_build(mut args: impl Iterator<Item = OsString>) -> Result<Command, CliE
     let mut selected_mode = false;
     let mut source_map = None;
     let mut sources_content = false;
+    let mut profile = false;
     while let Some(argument) = args.next() {
         match argument.to_str() {
             Some("-o" | "--output") => {
@@ -639,6 +652,10 @@ fn parse_build(mut args: impl Iterator<Item = OsString>) -> Result<Command, CliE
             Some("--sources-content") => {
                 return Err(CliError::new("sources content may only be specified once"));
             }
+            Some("--profile") if !profile => profile = true,
+            Some("--profile") => {
+                return Err(CliError::new("profile may only be specified once"));
+            }
             Some(other) => return Err(CliError::new(format!("unknown build option `{other}`"))),
             None => return Err(CliError::new("build option is not valid UTF-8")),
         }
@@ -660,6 +677,7 @@ fn parse_build(mut args: impl Iterator<Item = OsString>) -> Result<Command, CliE
             mode,
             source_map,
             sources_content,
+            profile,
         },
     })
 }
@@ -705,6 +723,9 @@ fn build(
     let compiled = compiler
         .compile(&source, adapter.id(), options.compiler())
         .map_err(|error| compilation_error(error, &source))?;
+    if options.profile {
+        write_profile(&compiled, messages)?;
+    }
     let assets = prepare_assets(source_path, &compiled.assets)?;
     write_diagnostics(
         &compiled.warnings,
@@ -1109,6 +1130,53 @@ fn write_languages(json: bool, output: &mut dyn Write) -> Result<(), CliError> {
     Ok(())
 }
 
+fn write_profile(
+    compiled: &polygl_core::CompileOutput,
+    output: &mut dyn Write,
+) -> Result<(), CliError> {
+    writeln!(output, "profile:")
+        .map_err(|error| CliError::new(format!("failed to write profile: {error}")))?;
+    for pass in &compiled.trace {
+        writeln!(
+            output,
+            "  {:<20} {:>9.3} ms  {:?} -> {:?}",
+            pass.name,
+            pass.elapsed.as_secs_f64() * 1000.0,
+            pass.input,
+            pass.output,
+        )
+        .map_err(|error| CliError::new(format!("failed to write profile: {error}")))?;
+    }
+    let statistics = compiled.statistics;
+    writeln!(
+        output,
+        "  counts: hir_nodes={} host_functions={} gpu_functions={} shaders={} assets={}",
+        statistics.hir.syntax_node_count,
+        statistics.host_functions,
+        statistics.gpu_functions,
+        statistics.shaders,
+        statistics.assets,
+    )
+    .map_err(|error| CliError::new(format!("failed to write profile: {error}")))?;
+    writeln!(
+        output,
+        "  output: javascript={} bytes source_map={} bytes glsl={} bytes",
+        compiled.javascript.javascript.len(),
+        compiled
+            .javascript
+            .source_map
+            .as_ref()
+            .map_or(0, String::len),
+        compiled
+            .shaders
+            .shaders
+            .iter()
+            .map(|shader| shader.vertex.len() + shader.fragment.len())
+            .sum::<usize>(),
+    )
+    .map_err(|error| CliError::new(format!("failed to write profile: {error}")))
+}
+
 fn write_explanation(
     code: polygl_span::DiagnosticCode,
     format: DiagnosticFormat,
@@ -1259,9 +1327,9 @@ fn pascal_case(language: &str) -> String {
 fn usage() -> String {
     "\
 usage:
-  polygl build <source.rb|source.php|source.pl> [-o <directory>] [--debug | --release] [--source-map <none|external|inline>] [--sources-content]
+  polygl build <source.rb|source.php|source.pl> [-o <directory>] [--debug | --release] [--source-map <none|external|inline>] [--sources-content] [--profile]
   polygl serve <source.rb|source.php|source.pl> [--port <port>] [--watch] [--open]
-  polygl check <source.rb|source.php|source.pl> [--diagnostic-format <human|json|sarif|lsp>] [--deny-warnings] [--allow <Wcode|WxxFamily>] [--deny <Wcode|WxxFamily>] [--max-warnings <count>]
+  polygl check <source.rb|source.php|source.pl> [--diagnostic-format <human|json|sarif|lsp>] [--deny-warnings] [--allow <Wcode|WxxFamily>] [--deny <Wcode|WxxFamily>] [--max-warnings <count>] [--profile]
   polygl dump-hir <source.rb|source.php|source.pl>
   polygl explain <diagnostic-code> [--diagnostic-format <human|json>]
   polygl languages [--json]
@@ -1313,6 +1381,7 @@ mod tests {
                     mode: BuildMode::Release,
                     source_map: SourceMapMode::None,
                     sources_content: false,
+                    profile: false,
                 },
             }
         );
@@ -1332,6 +1401,7 @@ mod tests {
                     mode: BuildMode::Debug,
                     source_map: SourceMapMode::Inline,
                     sources_content: true,
+                    profile: false,
                 },
             }
         );
@@ -2027,6 +2097,18 @@ sub setup {
         let dump = String::from_utf8(output).unwrap();
         assert!(dump.contains("entry setup() [host]"));
         assert!(dump.contains("let value: int = 1;"));
+
+        let mut profile = Vec::new();
+        run(
+            arguments(["check", valid.to_str().unwrap(), "--profile"]),
+            &mut profile,
+        )
+        .unwrap();
+        let profile = String::from_utf8(profile).unwrap();
+        assert!(profile.contains("adapter.lower"));
+        assert!(profile.contains("backend.javascript"));
+        assert!(profile.contains("hir_nodes="));
+        assert!(profile.contains("javascript="));
 
         let warning = temporary.join("warning.rb");
         fs::write(
