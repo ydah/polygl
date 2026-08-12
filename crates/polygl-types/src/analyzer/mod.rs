@@ -55,6 +55,7 @@ pub(super) struct InstanceInfo {
 
 #[derive(Clone)]
 struct PendingInstance {
+    order: usize,
     source_name: Symbol,
     _provisional_function: Function,
     provisional_parameters: Vec<InferType>,
@@ -137,6 +138,7 @@ pub(super) struct Analyzer {
     constant_types: HashMap<String, InferType>,
     instances: HashMap<InstanceKey, InstanceInfo>,
     pending_instances: HashMap<usize, PendingInstance>,
+    next_pending_order: usize,
     instance_counts: HashMap<String, usize>,
     instance_returns: HashMap<String, Type>,
     active: HashSet<String>,
@@ -237,6 +239,7 @@ impl Analyzer {
             constant_types,
             instances: HashMap::new(),
             pending_instances: HashMap::new(),
+            next_pending_order: 0,
             instance_counts: HashMap::new(),
             instance_returns: HashMap::new(),
             active: HashSet::new(),
@@ -509,24 +512,32 @@ impl Analyzer {
     }
 
     fn unify_pending_results(&mut self) {
-        let mut groups = HashMap::<InstanceKey, Vec<(InferType, Span)>>::new();
-        for pending in self.pending_instances.values() {
+        let mut pending = self.pending_instances.values().collect::<Vec<_>>();
+        pending.sort_by_key(|pending| pending.order);
+        let mut groups = Vec::<(InstanceKey, Vec<(InferType, Span)>)>::new();
+        for pending in pending {
             let arguments = pending
                 .provisional_parameters
                 .iter()
                 .map(|parameter| self.solver.resolve_expression(parameter))
                 .collect::<Result<Vec<_>, _>>();
             if let Ok(arguments) = arguments {
-                groups
-                    .entry(InstanceKey {
-                        function: pending.source_name.as_str().to_owned(),
-                        arguments,
-                    })
-                    .or_default()
-                    .push((pending.provisional_result.clone(), pending.call_span));
+                let key = InstanceKey {
+                    function: pending.source_name.as_str().to_owned(),
+                    arguments,
+                };
+                if let Some((_, calls)) = groups.iter_mut().find(|(candidate, _)| *candidate == key)
+                {
+                    calls.push((pending.provisional_result.clone(), pending.call_span));
+                } else {
+                    groups.push((
+                        key,
+                        vec![(pending.provisional_result.clone(), pending.call_span)],
+                    ));
+                }
             }
         }
-        for calls in groups.into_values() {
+        for (_, calls) in groups {
             let mut calls = calls.into_iter();
             let Some((mut shared, first_span)) = calls.next() else {
                 continue;
@@ -551,18 +562,20 @@ impl Analyzer {
     }
 
     fn propagate_pending_result_constraints(&mut self) {
-        let pending = self
+        let mut pending = self
             .pending_instances
             .values()
             .map(|pending| {
                 (
+                    pending.order,
                     pending.provisional_result.clone(),
                     pending.provisional_body_result.clone(),
                     pending.call_span,
                 )
             })
             .collect::<Vec<_>>();
-        for (result, body_result, span) in pending {
+        pending.sort_by_key(|pending| pending.0);
+        for (_, result, body_result, span) in pending {
             if let Ok(expected) = self.solver.resolve_expression(&result)
                 && let Err(error) = self
                     .solver
@@ -962,9 +975,12 @@ impl Analyzer {
         }
 
         if record_instance {
+            let order = self.next_pending_order;
+            self.next_pending_order += 1;
             self.pending_instances.insert(
                 expression_key,
                 PendingInstance {
+                    order,
                     source_name: source_name.clone(),
                     _provisional_function: function,
                     provisional_parameters: parameter_bindings,
