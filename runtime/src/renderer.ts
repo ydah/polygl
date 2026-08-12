@@ -167,7 +167,7 @@ export class WebGL2BatchRenderer {
     this.flush();
     this.canvas.width = safeWidth;
     this.canvas.height = safeHeight;
-    this.gl.viewport(0, 0, safeWidth, safeHeight);
+    this.stateCache.setViewport(0, 0, safeWidth, safeHeight);
     this.textOverlay?.resize(safeWidth, safeHeight);
   }
 

@@ -750,10 +750,14 @@ test("invalidates cached WebGL and uniform state at explicit boundaries", async 
   frames[1](1_016);
   assert.equal(gl.programUses.length, cachedProgramUses);
 
+  gl.context.viewport(7, 9, 1, 2);
+  gl.context.blendEquation(0x800b);
   invalidateWebGLState();
   frames[2](1_032);
   assert.equal(gl.programUses.length, cachedProgramUses + 1);
   assert.equal(handle.stats().state.programSwitches, cachedProgramUses + 1);
+  assert.deepEqual(gl.viewports.at(-1), [0, 0, 64, 64]);
+  assert.equal(gl.blendEquations.at(-1), gl.context.FUNC_ADD);
   handle.stop();
 });
 
@@ -2461,6 +2465,8 @@ function fakeWebGl2(options = {}) {
   const elementDraws = [];
   const clears = [];
   const depthMasks = [];
+  const blendEquations = [];
+  const viewports = [];
   const uploads = [];
   const bufferAllocations = [];
   const textureUploads = [];
@@ -2504,6 +2510,7 @@ function fakeWebGl2(options = {}) {
     FLOAT_VEC3: 0x8b51,
     FLOAT_VEC4: 0x8b52,
     FRAGMENT_SHADER: 0x8b30,
+    FUNC_ADD: 0x8006,
     LEQUAL: 0x0203,
     LINEAR: 0x2601,
     LINEAR_MIPMAP_LINEAR: 0x2703,
@@ -2552,6 +2559,7 @@ function fakeWebGl2(options = {}) {
     bindBuffer() {},
     bindTexture() {},
     bindVertexArray() {},
+    blendEquation(value) { blendEquations.push(value); },
     blendFunc() {},
     bufferData(_target, data) {
       if (typeof data === "number") bufferAllocations.push(data);
@@ -2691,7 +2699,7 @@ function fakeWebGl2(options = {}) {
     },
     useProgram(program) { programUses.push(program); },
     vertexAttribPointer() {},
-    viewport() {},
+    viewport(...value) { viewports.push(value); },
   };
   return {
     context,
@@ -2699,6 +2707,8 @@ function fakeWebGl2(options = {}) {
     elementDraws,
     clears,
     depthMasks,
+    blendEquations,
+    viewports,
     uploads,
     bufferAllocations,
     textureUploads,

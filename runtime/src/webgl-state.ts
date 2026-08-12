@@ -11,7 +11,9 @@ export class WebGLStateCache {
   private blendEnabled: boolean | undefined;
   private depthEnabled: boolean | undefined;
   private blendAlphaConfigured = false;
+  private blendEquationConfigured = false;
   private depthFunction: number | undefined;
+  private viewportValue: readonly [number, number, number, number] | undefined;
   private activeTextureUnit: number | undefined;
   private readonly textures2d = new Map<number, WebGLTexture | null>();
   private changeCount = 0;
@@ -60,6 +62,11 @@ export class WebGLStateCache {
       this.blendAlphaConfigured = true;
       this.changeCount += 1;
     }
+    if (!this.blendEquationConfigured) {
+      this.gl.blendEquation(this.gl.FUNC_ADD);
+      this.blendEquationConfigured = true;
+      this.changeCount += 1;
+    }
   }
 
   public setDepthTest(enabled: boolean): void {
@@ -93,6 +100,19 @@ export class WebGLStateCache {
     this.changeCount += 1;
   }
 
+  public setViewport(x: number, y: number, width: number, height: number): void {
+    const next = [x, y, width, height] as const;
+    if (
+      this.viewportValue !== undefined &&
+      this.viewportValue.every((value, index) => value === next[index])
+    ) {
+      return;
+    }
+    this.gl.viewport(x, y, width, height);
+    this.viewportValue = next;
+    this.changeCount += 1;
+  }
+
   public invalidate(): void {
     this.program = undefined;
     this.arrayBuffer = undefined;
@@ -101,7 +121,9 @@ export class WebGLStateCache {
     this.blendEnabled = undefined;
     this.depthEnabled = undefined;
     this.blendAlphaConfigured = false;
+    this.blendEquationConfigured = false;
     this.depthFunction = undefined;
+    this.viewportValue = undefined;
     this.activeTextureUnit = undefined;
     this.textures2d.clear();
   }

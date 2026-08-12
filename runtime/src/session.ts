@@ -836,6 +836,12 @@ export class RuntimeSession implements RuntimeHandle {
     if (this.externalWebGLPolicy === "reset") {
       this.invalidateWebGLState();
     }
+    this.renderer.stateCache.setViewport(
+      0,
+      0,
+      this.canvas.width,
+      this.canvas.height,
+    );
     this.updateShaderUniforms();
     this.scene.render(
       this.elapsedSeconds,

@@ -1090,6 +1090,7 @@ export class WebGLStateCache {
     constructor(gl) {
         this.gl = gl;
         this.blendAlphaConfigured = false;
+        this.blendEquationConfigured = false;
         this.textures2d = new Map();
         this.changeCount = 0;
         this.switchCount = 0;
@@ -1135,6 +1136,11 @@ export class WebGLStateCache {
             this.blendAlphaConfigured = true;
             this.changeCount += 1;
         }
+        if (!this.blendEquationConfigured) {
+            this.gl.blendEquation(this.gl.FUNC_ADD);
+            this.blendEquationConfigured = true;
+            this.changeCount += 1;
+        }
     }
     setDepthTest(enabled) {
         if (this.depthEnabled === enabled)
@@ -1170,6 +1176,16 @@ export class WebGLStateCache {
         this.textures2d.set(unit, texture);
         this.changeCount += 1;
     }
+    setViewport(x, y, width, height) {
+        const next = [x, y, width, height];
+        if (this.viewportValue !== undefined &&
+            this.viewportValue.every((value, index) => value === next[index])) {
+            return;
+        }
+        this.gl.viewport(x, y, width, height);
+        this.viewportValue = next;
+        this.changeCount += 1;
+    }
     invalidate() {
         this.program = undefined;
         this.arrayBuffer = undefined;
@@ -1178,7 +1194,9 @@ export class WebGLStateCache {
         this.blendEnabled = undefined;
         this.depthEnabled = undefined;
         this.blendAlphaConfigured = false;
+        this.blendEquationConfigured = false;
         this.depthFunction = undefined;
+        this.viewportValue = undefined;
         this.activeTextureUnit = undefined;
         this.textures2d.clear();
     }
@@ -1281,7 +1299,7 @@ export class WebGL2BatchRenderer {
         this.flush();
         this.canvas.width = safeWidth;
         this.canvas.height = safeHeight;
-        this.gl.viewport(0, 0, safeWidth, safeHeight);
+        this.stateCache.setViewport(0, 0, safeWidth, safeHeight);
         this.textOverlay?.resize(safeWidth, safeHeight);
     }
     background(r, g, b) {
@@ -3961,6 +3979,7 @@ export class RuntimeSession {
         if (this.externalWebGLPolicy === "reset") {
             this.invalidateWebGLState();
         }
+        this.renderer.stateCache.setViewport(0, 0, this.canvas.width, this.canvas.height);
         this.updateShaderUniforms();
         this.scene.render(this.elapsedSeconds, this.canvas.width, this.canvas.height);
         this.renderer.flush();
