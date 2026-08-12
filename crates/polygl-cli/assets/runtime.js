@@ -298,6 +298,8 @@ export function validateRuntimeOptions(value) {
     const resourceLimits = resourceLimitsValue === undefined
         ? undefined
         : validateResourceLimits(resourceLimitsValue);
+    const textureFailurePolicy = optionalStringChoice(properties, "textureFailurePolicy", ["stop", "placeholder"]);
+    const onTextureError = optionalFunction(properties, "onTextureError");
     const onError = optionalFunction(properties, "onError");
     const requireRuntimeAbi = optionalBoolean(properties, "requireRuntimeAbi");
     const maxDeltaSeconds = optionalPositiveFiniteNumber(properties, "maxDeltaSeconds");
@@ -319,6 +321,8 @@ export function validateRuntimeOptions(value) {
         ...(shaderBundle === undefined ? {} : { shaderBundle }),
         ...(imageLoader === undefined ? {} : { imageLoader }),
         ...(resourceLimits === undefined ? {} : { resourceLimits }),
+        ...(textureFailurePolicy === undefined ? {} : { textureFailurePolicy }),
+        ...(onTextureError === undefined ? {} : { onTextureError }),
         ...(onError === undefined ? {} : { onError }),
         ...(requireRuntimeAbi === undefined ? {} : { requireRuntimeAbi }),
         ...(maxDeltaSeconds === undefined ? {} : { maxDeltaSeconds }),
@@ -961,10 +965,44 @@ export function customMesh(vertices, indices) {
     return createMeshData(vertices, indices);
 }
 function createMeshData(vertices, indices) {
+    const typedVertices = new Float32Array(vertices);
+    if (typedVertices.some((value) => !Number.isFinite(value))) {
+        throw new RangeError("mesh vertices must fit in finite 32-bit floats");
+    }
     return {
-        vertices: new Float32Array(vertices),
+        vertices: typedVertices,
         indices: new Uint32Array(indices),
+        bounds: meshBounds(typedVertices),
     };
+}
+function meshBounds(vertices) {
+    let minX = Infinity;
+    let minY = Infinity;
+    let minZ = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    let maxZ = -Infinity;
+    for (let offset = 0; offset < vertices.length; offset += FLOATS_PER_MESH_VERTEX) {
+        const x = vertices[offset] ?? 0;
+        const y = vertices[offset + 1] ?? 0;
+        const z = vertices[offset + 2] ?? 0;
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        minZ = Math.min(minZ, z);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+        maxZ = Math.max(maxZ, z);
+    }
+    const center = [
+        (minX + maxX) / 2,
+        (minY + maxY) / 2,
+        (minZ + maxZ) / 2,
+    ];
+    let radius = 0;
+    for (let offset = 0; offset < vertices.length; offset += FLOATS_PER_MESH_VERTEX) {
+        radius = Math.max(radius, Math.hypot((vertices[offset] ?? 0) - center[0], (vertices[offset + 1] ?? 0) - center[1], (vertices[offset + 2] ?? 0) - center[2]));
+    }
+    return Object.freeze({ center, radius });
 }
 function pushVertex(target, position, normal, uv) {
     target.push(...position, ...normal, ...uv, 1, 1, 1, 1);
@@ -1158,13 +1196,17 @@ export class WebGL2BatchRenderer {
             this.strokePath([[x1, y1], [x2, y2], [x3, y3]], true, this.strokeColor);
         }
     }
-    text(value, x, y) {
+    text(value, x, y, options) {
+        if (typeof value !== "string") {
+            throw new TypeError("text value must be a string");
+        }
+        const safeOptions = validateTextOptions(options);
         this.flush();
         const overlay = this.textOverlay;
         if (overlay === undefined) {
             throw new Error("text requires an attached browser canvas with Canvas2D support");
         }
-        overlay.draw(value, x, y, this.fillColor, this.transform);
+        overlay.draw(value, x, y, this.fillColor, this.transform, safeOptions);
     }
     pushMatrix() {
         this.transformStack.push(this.transform);
@@ -1472,13 +1514,21 @@ class Canvas2DTextOverlay {
     clear() {
         this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
     }
-    draw(value, x, y, color, transform) {
+    draw(value, x, y, color, transform, options) {
         const [a, b, c, d, e, f] = transform;
         this.context.save();
         this.context.setTransform(a, b, c, d, e, f);
         this.context.fillStyle = `rgba(${color[0] * 255}, ${color[1] * 255}, ${color[2] * 255}, ${color[3]})`;
-        this.context.textBaseline = "alphabetic";
-        this.context.fillText(value, coordinate(x), coordinate(y));
+        this.context.font = options.font;
+        this.context.textAlign = options.align;
+        this.context.textBaseline = options.baseline;
+        this.context.direction = options.direction;
+        if (options.maxWidth === Infinity) {
+            this.context.fillText(value, coordinate(x), coordinate(y));
+        }
+        else {
+            this.context.fillText(value, coordinate(x), coordinate(y), options.maxWidth);
+        }
         this.context.restore();
     }
     dispose() {
@@ -1486,6 +1536,81 @@ class Canvas2DTextOverlay {
         this.target.style.gridArea = this.originalGridArea;
         this.wrapper.replaceWith(this.target);
     }
+}
+const DEFAULT_TEXT_OPTIONS = Object.freeze({
+    font: "10px sans-serif",
+    align: "start",
+    baseline: "alphabetic",
+    direction: "inherit",
+    maxWidth: Infinity,
+});
+function validateTextOptions(value) {
+    if (value === undefined)
+        return DEFAULT_TEXT_OPTIONS;
+    if (typeof value !== "object" || value === null) {
+        throw new TypeError("text options must be a plain object");
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+        throw new TypeError("text options must not use a custom prototype");
+    }
+    const properties = new Map();
+    for (const key of Reflect.ownKeys(value)) {
+        if (typeof key !== "string") {
+            throw new TypeError("text options must not contain symbol properties");
+        }
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (descriptor === undefined || !("value" in descriptor)) {
+            throw new TypeError(`text options.${key} must be a data property`);
+        }
+        properties.set(key, descriptor.value);
+    }
+    for (const key of properties.keys()) {
+        if (!["font", "align", "baseline", "direction", "maxWidth"].includes(key)) {
+            throw new TypeError(`unknown text option \`${key}\``);
+        }
+    }
+    const fontValue = properties.get("font");
+    const font = fontValue === undefined ? DEFAULT_TEXT_OPTIONS.font : fontValue;
+    if (typeof font !== "string" ||
+        font.trim().length === 0 ||
+        font.length > 1024 ||
+        font.includes("\u0000")) {
+        throw new TypeError("text options.font must be a non-empty CSS font string");
+    }
+    const maxWidthValue = properties.get("maxWidth");
+    let maxWidth = DEFAULT_TEXT_OPTIONS.maxWidth;
+    if (maxWidthValue !== undefined) {
+        if (typeof maxWidthValue !== "number" ||
+            !Number.isFinite(maxWidthValue) ||
+            maxWidthValue <= 0) {
+            throw new TypeError("text options.maxWidth must be a finite number greater than zero");
+        }
+        maxWidth = maxWidthValue;
+    }
+    return Object.freeze({
+        font,
+        align: textChoice(properties, "align", ["start", "end", "left", "right", "center"], DEFAULT_TEXT_OPTIONS.align),
+        baseline: textChoice(properties, "baseline", [
+            "top",
+            "hanging",
+            "middle",
+            "alphabetic",
+            "ideographic",
+            "bottom",
+        ], DEFAULT_TEXT_OPTIONS.baseline),
+        direction: textChoice(properties, "direction", ["inherit", "ltr", "rtl"], DEFAULT_TEXT_OPTIONS.direction),
+        maxWidth,
+    });
+}
+function textChoice(properties, name, choices, fallback) {
+    const value = properties.get(name);
+    if (value === undefined)
+        return fallback;
+    if (typeof value !== "string" || !choices.includes(value)) {
+        throw new TypeError(`text options.${name} must be ${choices.join(" or ")}`);
+    }
+    return value;
 }
 function multiply(left, right) {
     const [a, b, c, d, e, f] = left;
@@ -2139,12 +2264,14 @@ function monotonicMilliseconds() {
 const sceneOwnerBrand = Symbol("SceneOwner");
 const sceneHandleInfo = new WeakMap();
 export class WebGL2SceneRenderer {
-    constructor(gl, shaderRegistry, documentObject, imageLoader = defaultImageLoader, onAsyncError = () => { }, resourceLimits = {}) {
+    constructor(gl, shaderRegistry, documentObject, imageLoader = defaultImageLoader, onAsyncError = () => { }, resourceLimits = {}, textureFailurePolicy = "stop", onTextureError = () => { }) {
         this.gl = gl;
         this.documentObject = documentObject;
         this.imageLoader = imageLoader;
         this.onAsyncError = onAsyncError;
         this.resourceLimits = resourceLimits;
+        this.textureFailurePolicy = textureFailurePolicy;
+        this.onTextureError = onTextureError;
         this.owner = {};
         this.meshes = new Set();
         this.nodes = new Set();
@@ -2159,6 +2286,7 @@ export class WebGL2SceneRenderer {
         this.meshBytes = 0;
         this.drawCalls = 0;
         this.triangles = 0;
+        this.culledNodes = 0;
         this.camera = {
             verticalFov: Math.PI / 4,
             near: 0.1,
@@ -2184,6 +2312,7 @@ export class WebGL2SceneRenderer {
             meshBytes: this.meshBytes,
             nodes: this.nodes.size,
             textures: this.textures.size,
+            culledNodes: this.culledNodes,
         });
     }
     meshBox(width, height, depth) {
@@ -2415,26 +2544,36 @@ export class WebGL2SceneRenderer {
         this.gl.enable(this.gl.DEPTH_TEST);
         this.gl.depthFunc(this.gl.LEQUAL);
         this.gl.clear(this.gl.DEPTH_BUFFER_BIT);
+        const opaque = [];
+        const transparent = [];
         for (const node of this.nodes) {
             const model = model4(node.position, node.rotation, node.scale);
-            if (node.material.kind === "basic") {
-                this.bindBasic(node.material, model, view, projection);
-                this.bindMesh(node.mesh, STANDARD_ATTRIBUTES);
+            if (this.basicMaterials.has(node.material)) {
+                if (this.basicNodeOutsideFrustum(node, model, view, width, height)) {
+                    this.culledNodes += 1;
+                    continue;
+                }
+                const material = node.material;
+                const center = transformPoint3(view, transformPoint3(model, node.mesh.bounds.center));
+                const item = { node, model, basic: material, depth: -center[2] };
+                (material.color[3] < 1 ? transparent : opaque).push(item);
+                continue;
             }
-            else {
-                const attributes = this.shaderRegistry.bindForDraw(node.material, node.uniforms, {
-                    elapsedSeconds,
-                    width,
-                    height,
-                    model,
-                    view,
-                    projection,
-                });
-                this.bindMesh(node.mesh, attributes);
+            opaque.push({ node, model, basic: undefined, depth: 0 });
+        }
+        this.gl.depthMask(true);
+        for (const item of opaque) {
+            this.drawItem(item, view, projection, elapsedSeconds, width, height);
+        }
+        if (transparent.length > 0) {
+            transparent.sort((left, right) => right.depth - left.depth);
+            this.gl.enable(this.gl.BLEND);
+            this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
+            this.gl.depthMask(false);
+            for (const item of transparent) {
+                this.drawItem(item, view, projection, elapsedSeconds, width, height);
             }
-            this.gl.drawElements(this.gl.TRIANGLES, node.mesh.indexCount, this.gl.UNSIGNED_INT, 0);
-            this.drawCalls += 1;
-            this.triangles += node.mesh.indexCount / 3;
+            this.gl.depthMask(true);
         }
         this.gl.bindVertexArray(null);
         this.gl.disable(this.gl.DEPTH_TEST);
@@ -2492,6 +2631,7 @@ export class WebGL2SceneRenderer {
             indexCount: data.indices.length,
             byteLength,
             vertexArrays: new Map(),
+            bounds: data.bounds,
             references: 0,
         };
         this.meshes.add(mesh);
@@ -2525,6 +2665,42 @@ export class WebGL2SceneRenderer {
             this.gl.vertexAttribPointer(attribute.location, layout.size, this.gl.FLOAT, false, stride, layout.offset * Float32Array.BYTES_PER_ELEMENT);
         }
         mesh.vertexArrays.set(layoutKey, vertexArray);
+    }
+    basicNodeOutsideFrustum(node, model, view, width, height) {
+        const worldCenter = transformPoint3(model, node.mesh.bounds.center);
+        const center = transformPoint3(view, worldCenter);
+        const radius = node.mesh.bounds.radius * Math.max(Math.abs(node.scale[0]), Math.abs(node.scale[1]), Math.abs(node.scale[2]));
+        const depth = -center[2];
+        if (depth + radius < this.camera.near)
+            return true;
+        if (depth - radius > this.camera.far)
+            return true;
+        if (depth - radius <= this.camera.near)
+            return false;
+        const vertical = depth * Math.tan(this.camera.verticalFov / 2);
+        const horizontal = vertical * (Math.max(1, width) / Math.max(1, height));
+        return Math.abs(center[0]) > horizontal + radius ||
+            Math.abs(center[1]) > vertical + radius;
+    }
+    drawItem(item, view, projection, elapsedSeconds, width, height) {
+        if (item.basic !== undefined) {
+            this.bindBasic(item.basic, item.model, view, projection);
+            this.bindMesh(item.node.mesh, STANDARD_ATTRIBUTES);
+        }
+        else {
+            const attributes = this.shaderRegistry.bindForDraw(item.node.material, item.node.uniforms, {
+                elapsedSeconds,
+                width,
+                height,
+                model: item.model,
+                view,
+                projection,
+            });
+            this.bindMesh(item.node.mesh, attributes);
+        }
+        this.gl.drawElements(this.gl.TRIANGLES, item.node.mesh.indexCount, this.gl.UNSIGNED_INT, 0);
+        this.drawCalls += 1;
+        this.triangles += item.node.mesh.indexCount / 3;
     }
     bindBasic(material, model, view, projection) {
         const basic = this.basicProgram ?? this.createBasicProgram();
@@ -2574,7 +2750,12 @@ export class WebGL2SceneRenderer {
                 this.textures.get(handle.cacheKey) !== handle) {
                 return;
             }
-            throw new Error(`failed to load texture \`${handle.path}\`: ${errorMessage(error)}`);
+            const failure = new Error(`failed to load texture \`${handle.path}\`: ${errorMessage(error)}`);
+            if (this.textureFailurePolicy === "placeholder") {
+                this.onTextureError(failure, handle.path);
+                return;
+            }
+            throw failure;
         }
         if (this.disposed ||
             handle.disposed ||
@@ -2830,6 +3011,22 @@ function finiteVec3(value, label) {
         throw new RangeError(`${label} must contain finite numbers`);
     }
     return value;
+}
+function transformPoint3(matrix, point) {
+    return [
+        (matrix[0] ?? 0) * point[0] +
+            (matrix[4] ?? 0) * point[1] +
+            (matrix[8] ?? 0) * point[2] +
+            (matrix[12] ?? 0),
+        (matrix[1] ?? 0) * point[0] +
+            (matrix[5] ?? 0) * point[1] +
+            (matrix[9] ?? 0) * point[2] +
+            (matrix[13] ?? 0),
+        (matrix[2] ?? 0) * point[0] +
+            (matrix[6] ?? 0) * point[1] +
+            (matrix[10] ?? 0) * point[2] +
+            (matrix[14] ?? 0),
+    ];
 }
 function validateAssetPath(path) {
     if (typeof path !== "string" ||
@@ -3233,7 +3430,7 @@ export class RuntimeSession {
         this.windowObject = this.documentObject?.defaultView ?? undefined;
         this.renderer = new WebGL2BatchRenderer(canvas, options.context, this.documentObject);
         this.shaderRegistry = WebGL2ShaderRegistry.fromBundle(this.renderer.context, undefined, false, options.resourceLimits?.maxShaderPrograms);
-        this.scene = new WebGL2SceneRenderer(this.renderer.context, this.shaderRegistry, this.documentObject, options.imageLoader, (reason) => this.fail(reason), options.resourceLimits);
+        this.scene = new WebGL2SceneRenderer(this.renderer.context, this.shaderRegistry, this.documentObject, options.imageLoader, (reason) => this.fail(reason), options.resourceLimits, options.textureFailurePolicy, options.onTextureError);
         this.resourceLimits = options.resourceLimits ?? {};
         this.initialShaderBundle = options.shaderBundle;
         this.requireRuntimeAbi = options.requireRuntimeAbi ?? false;
@@ -3698,8 +3895,8 @@ export function line(x1, y1, x2, y2) {
 export function triangle(x1, y1, x2, y2, x3, y3) {
     session().renderer.triangle(x1, y1, x2, y2, x3, y3);
 }
-export function text(value, x, y) {
-    session().renderer.text(value, x, y);
+export function text(value, x, y, options) {
+    session().renderer.text(value, x, y, options);
 }
 export function pushMatrix() {
     session().renderer.pushMatrix();

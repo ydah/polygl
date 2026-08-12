@@ -128,6 +128,10 @@ test("validates runtime options without invoking accessors", async () => {
   );
   await assert.rejects(start({}, { seed: Number.NaN }), /seed.*finite number/);
   await assert.rejects(start({}, { autoResize: "yes" }), /autoResize.*boolean/);
+  await assert.rejects(
+    start({}, { textureFailurePolicy: "ignore" }),
+    /textureFailurePolicy.*"stop" or "placeholder"/,
+  );
   const accessorLimits = {};
   Object.defineProperty(accessorLimits, "maxMeshes", {
     get() {
@@ -1136,6 +1140,96 @@ test("applies strokes and transforms while dispatching input events", async () =
   assert.equal(documentObject.listeners.size, 0);
 });
 
+test("normalizes wheel, keyboard code, modifiers, focus, and default policy", async () => {
+  const canvas = fakeCanvas();
+  const documentObject = fakeDocument();
+  const events = [];
+  let prevented = 0;
+  const preventDefault = () => { prevented += 1; };
+  const handle = await start({
+    on_event(event) { events.push(event); },
+  }, {
+    canvas,
+    context: fakeWebGl2().context,
+    document: documentObject,
+    focusOnPointerDown: true,
+    preventDefaultInput: true,
+    onError() {},
+  });
+  canvas.listeners.get("pointerdown")({
+    clientX: 10,
+    clientY: 12,
+    pointerId: 3,
+    buttons: 1,
+    button: 0,
+    pressure: 0.5,
+    shiftKey: true,
+    preventDefault,
+  });
+  canvas.listeners.get("wheel")({
+    clientX: 70,
+    clientY: 12,
+    buttons: 0,
+    deltaX: -2,
+    deltaY: 4,
+    ctrlKey: true,
+    preventDefault,
+  });
+  documentObject.listeners.get("keydown")({
+    key: "a",
+    code: "KeyA",
+    altKey: true,
+    preventDefault,
+  });
+  assert.equal(canvas.focusCount, 1);
+  assert.equal(prevented, 3);
+  assert.deepEqual(
+    events.map((event) => ({
+      kind: event.kind,
+      code: event.code,
+      inside: event.inside,
+      wheelX: event.wheelX,
+      wheelY: event.wheelY,
+      altKey: event.altKey,
+      ctrlKey: event.ctrlKey,
+      shiftKey: event.shiftKey,
+    })),
+    [
+      {
+        kind: "pointerdown",
+        code: null,
+        inside: true,
+        wheelX: 0,
+        wheelY: 0,
+        altKey: false,
+        ctrlKey: false,
+        shiftKey: true,
+      },
+      {
+        kind: "wheel",
+        code: null,
+        inside: false,
+        wheelX: -2,
+        wheelY: 4,
+        altKey: false,
+        ctrlKey: true,
+        shiftKey: false,
+      },
+      {
+        kind: "keydown",
+        code: "KeyA",
+        inside: false,
+        wheelX: 0,
+        wheelY: 0,
+        altKey: true,
+        ctrlKey: false,
+        shiftKey: false,
+      },
+    ],
+  );
+  handle.stop();
+});
+
 test("draws text on a transformed Canvas2D overlay", async () => {
   const { context } = fakeWebGl2();
   const canvas = fakeCanvas();
@@ -1147,6 +1241,26 @@ test("draws text on a transformed Canvas2D overlay", async () => {
         pushMatrix();
         translate(3, 4);
         text("hello", 5, 6);
+        let getterCalls = 0;
+        const accessorOptions = {};
+        Object.defineProperty(accessorOptions, "font", {
+          get() {
+            getterCalls += 1;
+            return "12px serif";
+          },
+        });
+        assert.throws(
+          () => text("unsafe", 0, 0, accessorOptions),
+          /font.*data property/,
+        );
+        assert.equal(getterCalls, 0);
+        text("aligned", 7, 8, {
+          font: "16px serif",
+          align: "center",
+          baseline: "middle",
+          direction: "rtl",
+          maxWidth: 120,
+        });
         popMatrix();
         background(0, 0, 0);
       },
@@ -1159,9 +1273,16 @@ test("draws text on a transformed Canvas2D overlay", async () => {
     },
   );
 
-  assert.deepEqual(overlay.transforms, [[1, 0, 0, 1, 3, 4]]);
-  assert.deepEqual(overlay.texts, [["hello", 5, 6]]);
+  assert.deepEqual(overlay.transforms, [
+    [1, 0, 0, 1, 3, 4],
+    [1, 0, 0, 1, 3, 4],
+  ]);
+  assert.deepEqual(overlay.texts, [["hello", 5, 6], ["aligned", 7, 8, 120]]);
   assert.equal(overlay.fillStyles[0], "rgba(63.75, 127.5, 191.25, 0.8)");
+  assert.deepEqual(overlay.fonts, ["10px sans-serif", "16px serif"]);
+  assert.deepEqual(overlay.alignments, ["start", "center"]);
+  assert.deepEqual(overlay.baselines, ["alphabetic", "middle"]);
+  assert.deepEqual(overlay.directions, ["inherit", "rtl"]);
   assert.deepEqual(overlay.clears, [[0, 0, 64, 64]]);
   handle.stop();
   assert.equal(overlay.removed, true);
@@ -1442,6 +1563,13 @@ test("renders retained 3D primitives and rejects handles from old sessions", asy
     () => meshFrom([0, 1, 2], [0, 1, 2]),
     /12 finite values per vertex/,
   );
+  assert.throws(
+    () => meshFrom(
+      [1e100, 0, 0, 0, 0, 1, 0, 0, 1, 1, 1, 1],
+      [0, 0, 0],
+    ),
+    /finite 32-bit floats/,
+  );
   handle.stop();
 
   const next = fakeWebGl2();
@@ -1456,6 +1584,59 @@ test("renders retained 3D primitives and rejects handles from old sessions", asy
     ),
     /another runtime session/,
   );
+});
+
+test("culls bounded basic nodes without culling programmable shaders", async () => {
+  const gl = fakeWebGl2();
+  const handle = await start({
+    setup() {
+      const mesh = meshBox(1, 1, 1);
+      const basicNode = nodeAdd(mesh, materialBasic([1, 1, 1, 1]));
+      nodeSetPos(basicNode, 1_000_000, 0, 0);
+      const programmableNode = nodeAdd(mesh, materialShader("warped"));
+      nodeSetPos(programmableNode, 1_000_000, 0, 0);
+    },
+  }, {
+    canvas: fakeCanvas(),
+    context: gl.context,
+    shaderBundle: shaderBundle([{
+      name: "warped",
+      attributes: [{
+        name: "position",
+        glslName: "a_position",
+        location: 0,
+        type: "vec3",
+      }],
+    }]),
+    onError() {},
+  });
+  assert.deepEqual(gl.elementDraws, [36]);
+  assert.equal(runtimeStats().scene.culledNodes, 1);
+  handle.stop();
+});
+
+test("sorts transparent basic nodes and disables depth writes", async () => {
+  const gl = fakeWebGl2();
+  const handle = await start({
+    setup() {
+      const mesh = meshBox(1, 1, 1);
+      const transparent = materialBasic([1, 1, 1, 0.5]);
+      const near = nodeAdd(mesh, transparent);
+      nodeSetPos(near, 0, 0, 4);
+      const far = nodeAdd(mesh, transparent);
+      nodeSetPos(far, 0, 0, -5);
+    },
+  }, {
+    canvas: fakeCanvas(),
+    context: gl.context,
+    onError() {},
+  });
+  const models = gl.uniformMatrix4Values.filter(
+    (upload) => upload.name === "u_model",
+  );
+  assert.deepEqual(models.map((upload) => upload.value[14]), [-5, 4]);
+  assert.deepEqual(gl.depthMasks, [true, false, true]);
+  handle.stop();
 });
 
 test("uploads custom shader uniforms independently for each node", async () => {
@@ -1856,6 +2037,27 @@ test("turns setup texture failures into startup failures", async () => {
   );
   assert.equal(failures.length, 1);
   assert.equal(canvas.listeners.size, 0);
+
+  const placeholderGl = fakeWebGl2();
+  const textureFailures = [];
+  let placeholder;
+  const handle = await start({
+    setup() { placeholder = textureLoad("assets/optional.png"); },
+  }, {
+    canvas: fakeCanvas(),
+    context: placeholderGl.context,
+    textureFailurePolicy: "placeholder",
+    onTextureError(reason, path) {
+      textureFailures.push([String(reason), path]);
+    },
+    imageLoader: async () => { throw new Error("offline"); },
+    onError() {},
+  });
+  assert.equal(placeholder.loaded, false);
+  assert.match(textureFailures[0][0], /failed to load texture.*offline/);
+  assert.equal(textureFailures[0][1], "assets/optional.png");
+  assert.equal(handle.state, "running");
+  handle.stop();
 });
 
 test("releases built-in renderer resources when startup fails", async () => {
@@ -2037,6 +2239,10 @@ function fakeTextOverlay(canvas) {
   const transforms = [];
   const texts = [];
   const fillStyles = [];
+  const fonts = [];
+  const alignments = [];
+  const baselines = [];
+  const directions = [];
   const clears = [];
   const documentObject = fakeDocument();
   let removed = false;
@@ -2052,7 +2258,10 @@ function fakeTextOverlay(canvas) {
     set fillStyle(value) {
       fillStyles.push(value);
     },
-    set textBaseline(_value) {},
+    set font(value) { fonts.push(value); },
+    set textAlign(value) { alignments.push(value); },
+    set textBaseline(value) { baselines.push(value); },
+    set direction(value) { directions.push(value); },
     setTransform(...args) {
       transforms.push(args);
     },
@@ -2100,6 +2309,10 @@ function fakeTextOverlay(canvas) {
     clears,
     document: documentObject,
     fillStyles,
+    fonts,
+    alignments,
+    baselines,
+    directions,
     get removed() {
       return removed;
     },
@@ -2112,6 +2325,7 @@ function fakeWebGl2(options = {}) {
   const draws = [];
   const elementDraws = [];
   const clears = [];
+  const depthMasks = [];
   const uploads = [];
   const bufferAllocations = [];
   const textureUploads = [];
@@ -2238,6 +2452,7 @@ function fakeWebGl2(options = {}) {
     deleteTexture(texture) { deletedTextures.push(texture); },
     deleteVertexArray(vertexArray) { deletedVertexArrays.push(vertexArray); },
     depthFunc() {},
+    depthMask(value) { depthMasks.push(value); },
     disable() {},
     drawArrays(_mode, _first, count) {
       draws.push(count);
@@ -2343,6 +2558,7 @@ function fakeWebGl2(options = {}) {
     draws,
     elementDraws,
     clears,
+    depthMasks,
     uploads,
     bufferAllocations,
     textureUploads,

@@ -17,6 +17,7 @@ import type {
   SceneShaderValue,
   TextureOptions,
   TextureHandle,
+  TextureFailurePolicy,
 } from "./scene.js";
 import { WebGL2ShaderRegistry } from "./shader.js";
 import type {
@@ -84,6 +85,8 @@ export interface RuntimeOptions {
   readonly shaderBundle?: ShaderBundle;
   readonly imageLoader?: RuntimeImageLoader;
   readonly resourceLimits?: RuntimeResourceLimits;
+  readonly textureFailurePolicy?: TextureFailurePolicy;
+  readonly onTextureError?: (reason: unknown, path: string) => void;
   readonly onError?: (reason: unknown) => void;
   readonly requireRuntimeAbi?: boolean;
   readonly maxDeltaSeconds?: number;
@@ -193,6 +196,8 @@ export class RuntimeSession implements RuntimeHandle {
       options.imageLoader,
       (reason) => this.fail(reason),
       options.resourceLimits,
+      options.textureFailurePolicy,
+      options.onTextureError,
     );
     this.resourceLimits = options.resourceLimits ?? {};
     this.initialShaderBundle = options.shaderBundle;

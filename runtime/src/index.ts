@@ -26,6 +26,7 @@ export type {
   BatchRendererStats,
   StrokeCap,
   StrokeJoin,
+  TextOptions,
 } from "./renderer.js";
 export { readRuntimeCapabilities } from "./capabilities.js";
 export type { RuntimeCapabilities } from "./capabilities.js";
@@ -41,6 +42,7 @@ export type {
   SceneRendererStats,
   SceneShaderValue,
   TextureHandle,
+  TextureFailurePolicy,
   TextureOptions,
 } from "./scene.js";
 export { WebGL2ShaderRegistry } from "./shader.js";
@@ -90,7 +92,7 @@ import type {
 } from "./scene.js";
 import type { RuntimeCapabilities } from "./capabilities.js";
 import type { RuntimeStats } from "./session.js";
-import type { StrokeCap, StrokeJoin } from "./renderer.js";
+import type { StrokeCap, StrokeJoin, TextOptions } from "./renderer.js";
 import {
   validateProgramSource,
   validateRuntimeOptions,
@@ -205,8 +207,13 @@ export function triangle(
   session().renderer.triangle(x1, y1, x2, y2, x3, y3);
 }
 
-export function text(value: string, x: number, y: number): void {
-  session().renderer.text(value, x, y);
+export function text(
+  value: string,
+  x: number,
+  y: number,
+  options?: TextOptions,
+): void {
+  session().renderer.text(value, x, y, options);
 }
 
 export function pushMatrix(): void {

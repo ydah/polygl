@@ -19,6 +19,14 @@ export interface BatchRendererStats {
   readonly bufferCapacityBytes: number;
 }
 
+export interface TextOptions {
+  readonly font?: string;
+  readonly align?: CanvasTextAlign;
+  readonly baseline?: CanvasTextBaseline;
+  readonly direction?: CanvasDirection;
+  readonly maxWidth?: number;
+}
+
 interface ScreenSegment {
   readonly startX: number;
   readonly startY: number;
@@ -275,7 +283,11 @@ export class WebGL2BatchRenderer {
     }
   }
 
-  public text(value: string, x: number, y: number): void {
+  public text(value: string, x: number, y: number, options?: TextOptions): void {
+    if (typeof value !== "string") {
+      throw new TypeError("text value must be a string");
+    }
+    const safeOptions = validateTextOptions(options);
     this.flush();
     const overlay = this.textOverlay;
     if (overlay === undefined) {
@@ -283,7 +295,7 @@ export class WebGL2BatchRenderer {
         "text requires an attached browser canvas with Canvas2D support",
       );
     }
-    overlay.draw(value, x, y, this.fillColor, this.transform);
+    overlay.draw(value, x, y, this.fillColor, this.transform, safeOptions);
   }
 
   public pushMatrix(): void {
@@ -725,13 +737,26 @@ class Canvas2DTextOverlay {
     y: number,
     color: Color,
     transform: Matrix2D,
+    options: Required<TextOptions>,
   ): void {
     const [a, b, c, d, e, f] = transform;
     this.context.save();
     this.context.setTransform(a, b, c, d, e, f);
     this.context.fillStyle = `rgba(${color[0] * 255}, ${color[1] * 255}, ${color[2] * 255}, ${color[3]})`;
-    this.context.textBaseline = "alphabetic";
-    this.context.fillText(value, coordinate(x), coordinate(y));
+    this.context.font = options.font;
+    this.context.textAlign = options.align;
+    this.context.textBaseline = options.baseline;
+    this.context.direction = options.direction;
+    if (options.maxWidth === Infinity) {
+      this.context.fillText(value, coordinate(x), coordinate(y));
+    } else {
+      this.context.fillText(
+        value,
+        coordinate(x),
+        coordinate(y),
+        options.maxWidth,
+      );
+    }
     this.context.restore();
   }
 
@@ -740,6 +765,106 @@ class Canvas2DTextOverlay {
     this.target.style.gridArea = this.originalGridArea;
     this.wrapper.replaceWith(this.target);
   }
+}
+
+const DEFAULT_TEXT_OPTIONS: Required<TextOptions> = Object.freeze({
+  font: "10px sans-serif",
+  align: "start",
+  baseline: "alphabetic",
+  direction: "inherit",
+  maxWidth: Infinity,
+});
+
+function validateTextOptions(value: unknown): Required<TextOptions> {
+  if (value === undefined) return DEFAULT_TEXT_OPTIONS;
+  if (typeof value !== "object" || value === null) {
+    throw new TypeError("text options must be a plain object");
+  }
+  const prototype: unknown = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError("text options must not use a custom prototype");
+  }
+  const properties = new Map<string, unknown>();
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string") {
+      throw new TypeError("text options must not contain symbol properties");
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !("value" in descriptor)) {
+      throw new TypeError(`text options.${key} must be a data property`);
+    }
+    properties.set(key, descriptor.value);
+  }
+  for (const key of properties.keys()) {
+    if (!["font", "align", "baseline", "direction", "maxWidth"].includes(key)) {
+      throw new TypeError(`unknown text option \`${key}\``);
+    }
+  }
+  const fontValue = properties.get("font");
+  const font = fontValue === undefined ? DEFAULT_TEXT_OPTIONS.font : fontValue;
+  if (
+    typeof font !== "string" ||
+    font.trim().length === 0 ||
+    font.length > 1_024 ||
+    font.includes("\u0000")
+  ) {
+    throw new TypeError("text options.font must be a non-empty CSS font string");
+  }
+  const maxWidthValue = properties.get("maxWidth");
+  let maxWidth = DEFAULT_TEXT_OPTIONS.maxWidth;
+  if (maxWidthValue !== undefined) {
+    if (
+      typeof maxWidthValue !== "number" ||
+      !Number.isFinite(maxWidthValue) ||
+      maxWidthValue <= 0
+    ) {
+      throw new TypeError("text options.maxWidth must be a finite number greater than zero");
+    }
+    maxWidth = maxWidthValue;
+  }
+  return Object.freeze({
+    font,
+    align: textChoice(
+      properties,
+      "align",
+      ["start", "end", "left", "right", "center"] as const,
+      DEFAULT_TEXT_OPTIONS.align,
+    ),
+    baseline: textChoice(
+      properties,
+      "baseline",
+      [
+        "top",
+        "hanging",
+        "middle",
+        "alphabetic",
+        "ideographic",
+        "bottom",
+      ] as const,
+      DEFAULT_TEXT_OPTIONS.baseline,
+    ),
+    direction: textChoice(
+      properties,
+      "direction",
+      ["inherit", "ltr", "rtl"] as const,
+      DEFAULT_TEXT_OPTIONS.direction,
+    ),
+    maxWidth,
+  });
+}
+
+function textChoice<const T extends readonly string[]>(
+  properties: ReadonlyMap<string, unknown>,
+  name: string,
+  choices: T,
+  fallback: T[number],
+): T[number] {
+  const value = properties.get(name);
+  if (value === undefined) return fallback;
+  if (typeof value !== "string" || !choices.includes(value)) {
+    throw new TypeError(`text options.${name} must be ${choices.join(" or ")}`);
+  }
+  return value;
 }
 
 function multiply(left: Matrix2D, right: Matrix2D): Matrix2D {

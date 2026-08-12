@@ -71,6 +71,7 @@ export interface SceneRendererStats {
   readonly meshBytes: number;
   readonly nodes: number;
   readonly textures: number;
+  readonly culledNodes: number;
 }
 
 export interface TextureOptions {
@@ -100,6 +101,7 @@ export type RuntimeImageLoader = (
   url: string,
   request: RuntimeImageRequest,
 ) => Promise<TexImageSource>;
+export type TextureFailurePolicy = "stop" | "placeholder";
 
 interface MeshResource {
   readonly handle: MeshHandle;
@@ -108,6 +110,7 @@ interface MeshResource {
   readonly indexCount: number;
   readonly byteLength: number;
   readonly vertexArrays: Map<string, WebGLVertexArrayObject>;
+  readonly bounds: MeshData["bounds"];
   references: number;
 }
 
@@ -120,6 +123,13 @@ interface SceneNode {
   scale: Vec3;
   readonly uniforms: Map<string, ShaderUniformValue>;
   readonly textureUniforms: Map<string, SceneTexture>;
+}
+
+interface SceneRenderItem {
+  readonly node: SceneNode;
+  readonly model: Mat4;
+  readonly basic: BasicMaterial | undefined;
+  readonly depth: number;
 }
 
 interface SceneTexture {
@@ -177,6 +187,7 @@ export class WebGL2SceneRenderer {
   private meshBytes = 0;
   private drawCalls = 0;
   private triangles = 0;
+  private culledNodes = 0;
   private camera: CameraState = {
     verticalFov: Math.PI / 4,
     near: 0.1,
@@ -197,6 +208,11 @@ export class WebGL2SceneRenderer {
     private readonly imageLoader: RuntimeImageLoader = defaultImageLoader,
     private readonly onAsyncError: (reason: unknown) => void = () => {},
     private readonly resourceLimits: RuntimeResourceLimits = {},
+    private readonly textureFailurePolicy: TextureFailurePolicy = "stop",
+    private readonly onTextureError: (
+      reason: unknown,
+      path: string,
+    ) => void = () => {},
   ) {
     this.shaderRegistry = shaderRegistry;
   }
@@ -213,6 +229,7 @@ export class WebGL2SceneRenderer {
       meshBytes: this.meshBytes,
       nodes: this.nodes.size,
       textures: this.textures.size,
+      culledNodes: this.culledNodes,
     });
   }
 
@@ -535,34 +552,39 @@ export class WebGL2SceneRenderer {
     this.gl.enable(this.gl.DEPTH_TEST);
     this.gl.depthFunc(this.gl.LEQUAL);
     this.gl.clear(this.gl.DEPTH_BUFFER_BIT);
+    const opaque: SceneRenderItem[] = [];
+    const transparent: SceneRenderItem[] = [];
     for (const node of this.nodes) {
       const model = model4(node.position, node.rotation, node.scale);
-      if (node.material.kind === "basic") {
-        this.bindBasic(node.material, model, view, projection);
-        this.bindMesh(node.mesh, STANDARD_ATTRIBUTES);
-      } else {
-        const attributes = this.shaderRegistry.bindForDraw(
-          node.material,
-          node.uniforms,
-          {
-            elapsedSeconds,
-            width,
-            height,
-            model,
-            view,
-            projection,
-          },
+      if (this.basicMaterials.has(node.material)) {
+        if (this.basicNodeOutsideFrustum(node, model, view, width, height)) {
+          this.culledNodes += 1;
+          continue;
+        }
+        const material = node.material as BasicMaterial;
+        const center = transformPoint3(
+          view,
+          transformPoint3(model, node.mesh.bounds.center),
         );
-        this.bindMesh(node.mesh, attributes);
+        const item = { node, model, basic: material, depth: -center[2] };
+        (material.color[3] < 1 ? transparent : opaque).push(item);
+        continue;
       }
-      this.gl.drawElements(
-        this.gl.TRIANGLES,
-        node.mesh.indexCount,
-        this.gl.UNSIGNED_INT,
-        0,
-      );
-      this.drawCalls += 1;
-      this.triangles += node.mesh.indexCount / 3;
+      opaque.push({ node, model, basic: undefined, depth: 0 });
+    }
+    this.gl.depthMask(true);
+    for (const item of opaque) {
+      this.drawItem(item, view, projection, elapsedSeconds, width, height);
+    }
+    if (transparent.length > 0) {
+      transparent.sort((left, right) => right.depth - left.depth);
+      this.gl.enable(this.gl.BLEND);
+      this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
+      this.gl.depthMask(false);
+      for (const item of transparent) {
+        this.drawItem(item, view, projection, elapsedSeconds, width, height);
+      }
+      this.gl.depthMask(true);
     }
     this.gl.bindVertexArray(null);
     this.gl.disable(this.gl.DEPTH_TEST);
@@ -630,6 +652,7 @@ export class WebGL2SceneRenderer {
       indexCount: data.indices.length,
       byteLength,
       vertexArrays: new Map(),
+      bounds: data.bounds,
       references: 0,
     };
     this.meshes.add(mesh);
@@ -675,6 +698,66 @@ export class WebGL2SceneRenderer {
       );
     }
     mesh.vertexArrays.set(layoutKey, vertexArray);
+  }
+
+  private basicNodeOutsideFrustum(
+    node: SceneNode,
+    model: Mat4,
+    view: Mat4,
+    width: number,
+    height: number,
+  ): boolean {
+    const worldCenter = transformPoint3(model, node.mesh.bounds.center);
+    const center = transformPoint3(view, worldCenter);
+    const radius = node.mesh.bounds.radius * Math.max(
+      Math.abs(node.scale[0]),
+      Math.abs(node.scale[1]),
+      Math.abs(node.scale[2]),
+    );
+    const depth = -center[2];
+    if (depth + radius < this.camera.near) return true;
+    if (depth - radius > this.camera.far) return true;
+    if (depth - radius <= this.camera.near) return false;
+    const vertical = depth * Math.tan(this.camera.verticalFov / 2);
+    const horizontal = vertical * (Math.max(1, width) / Math.max(1, height));
+    return Math.abs(center[0]) > horizontal + radius ||
+      Math.abs(center[1]) > vertical + radius;
+  }
+
+  private drawItem(
+    item: SceneRenderItem,
+    view: Mat4,
+    projection: Mat4,
+    elapsedSeconds: number,
+    width: number,
+    height: number,
+  ): void {
+    if (item.basic !== undefined) {
+      this.bindBasic(item.basic, item.model, view, projection);
+      this.bindMesh(item.node.mesh, STANDARD_ATTRIBUTES);
+    } else {
+      const attributes = this.shaderRegistry.bindForDraw(
+        item.node.material as ShaderMaterial,
+        item.node.uniforms,
+        {
+          elapsedSeconds,
+          width,
+          height,
+          model: item.model,
+          view,
+          projection,
+        },
+      );
+      this.bindMesh(item.node.mesh, attributes);
+    }
+    this.gl.drawElements(
+      this.gl.TRIANGLES,
+      item.node.mesh.indexCount,
+      this.gl.UNSIGNED_INT,
+      0,
+    );
+    this.drawCalls += 1;
+    this.triangles += item.node.mesh.indexCount / 3;
   }
 
   private bindBasic(
@@ -744,9 +827,14 @@ export class WebGL2SceneRenderer {
       ) {
         return;
       }
-      throw new Error(
+      const failure = new Error(
         `failed to load texture \`${handle.path}\`: ${errorMessage(error)}`,
       );
+      if (this.textureFailurePolicy === "placeholder") {
+        this.onTextureError(failure, handle.path);
+        return;
+      }
+      throw failure;
     }
     if (
       this.disposed ||
@@ -1081,6 +1169,23 @@ function finiteVec3(value: Vec3, label: string): Vec3 {
     throw new RangeError(`${label} must contain finite numbers`);
   }
   return value;
+}
+
+function transformPoint3(matrix: Mat4, point: Vec3): Vec3 {
+  return [
+    (matrix[0] ?? 0) * point[0] +
+    (matrix[4] ?? 0) * point[1] +
+    (matrix[8] ?? 0) * point[2] +
+    (matrix[12] ?? 0),
+    (matrix[1] ?? 0) * point[0] +
+    (matrix[5] ?? 0) * point[1] +
+    (matrix[9] ?? 0) * point[2] +
+    (matrix[13] ?? 0),
+    (matrix[2] ?? 0) * point[0] +
+    (matrix[6] ?? 0) * point[1] +
+    (matrix[10] ?? 0) * point[2] +
+    (matrix[14] ?? 0),
+  ];
 }
 
 function validateAssetPath(path: unknown): string {

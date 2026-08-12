@@ -72,6 +72,15 @@ export function validateRuntimeOptions(value: unknown): RuntimeOptions {
   const resourceLimits = resourceLimitsValue === undefined
     ? undefined
     : validateResourceLimits(resourceLimitsValue);
+  const textureFailurePolicy = optionalStringChoice(
+    properties,
+    "textureFailurePolicy",
+    ["stop", "placeholder"] as const,
+  );
+  const onTextureError = optionalFunction<RuntimeOptions["onTextureError"]>(
+    properties,
+    "onTextureError",
+  );
   const onError = optionalFunction<(reason: unknown) => void>(
     properties,
     "onError",
@@ -118,6 +127,8 @@ export function validateRuntimeOptions(value: unknown): RuntimeOptions {
     ...(shaderBundle === undefined ? {} : { shaderBundle }),
     ...(imageLoader === undefined ? {} : { imageLoader }),
     ...(resourceLimits === undefined ? {} : { resourceLimits }),
+    ...(textureFailurePolicy === undefined ? {} : { textureFailurePolicy }),
+    ...(onTextureError === undefined ? {} : { onTextureError }),
     ...(onError === undefined ? {} : { onError }),
     ...(requireRuntimeAbi === undefined ? {} : { requireRuntimeAbi }),
     ...(maxDeltaSeconds === undefined ? {} : { maxDeltaSeconds }),

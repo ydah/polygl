@@ -3,6 +3,10 @@ export const FLOATS_PER_MESH_VERTEX = 12;
 export interface MeshData {
   readonly vertices: Float32Array;
   readonly indices: Uint32Array;
+  readonly bounds: {
+    readonly center: readonly [number, number, number];
+    readonly radius: number;
+  };
 }
 
 export function boxMesh(width: number, height: number, depth: number): MeshData {
@@ -157,10 +161,52 @@ function createMeshData(
   vertices: readonly number[],
   indices: readonly number[],
 ): MeshData {
+  const typedVertices = new Float32Array(vertices);
+  if (typedVertices.some((value) => !Number.isFinite(value))) {
+    throw new RangeError("mesh vertices must fit in finite 32-bit floats");
+  }
   return {
-    vertices: new Float32Array(vertices),
+    vertices: typedVertices,
     indices: new Uint32Array(indices),
+    bounds: meshBounds(typedVertices),
   };
+}
+
+function meshBounds(vertices: Float32Array): MeshData["bounds"] {
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+  for (let offset = 0; offset < vertices.length; offset += FLOATS_PER_MESH_VERTEX) {
+    const x = vertices[offset] ?? 0;
+    const y = vertices[offset + 1] ?? 0;
+    const z = vertices[offset + 2] ?? 0;
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    minZ = Math.min(minZ, z);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+    maxZ = Math.max(maxZ, z);
+  }
+  const center = [
+    (minX + maxX) / 2,
+    (minY + maxY) / 2,
+    (minZ + maxZ) / 2,
+  ] as const;
+  let radius = 0;
+  for (let offset = 0; offset < vertices.length; offset += FLOATS_PER_MESH_VERTEX) {
+    radius = Math.max(
+      radius,
+      Math.hypot(
+        (vertices[offset] ?? 0) - center[0],
+        (vertices[offset + 1] ?? 0) - center[1],
+        (vertices[offset + 2] ?? 0) - center[2],
+      ),
+    );
+  }
+  return Object.freeze({ center, radius });
 }
 
 function pushVertex(
