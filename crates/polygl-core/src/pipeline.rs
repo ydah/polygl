@@ -1,6 +1,11 @@
 use std::error::Error;
 use std::fmt;
 
+use crate::{
+    AdapterRegistry, BuiltinTable, CompileBudget, CompileStage, CompileStatistics,
+    DomainResolvedLir, LoweredHir, PassTrace, TypedHir, ValidatedSplitProgram,
+};
+use crate::{pass::PassManager, stage::StageValidator};
 use polygl_adapter_api::{LanguageAdapter, LowerCtx};
 use polygl_adapter_perl::PerlAdapter;
 use polygl_adapter_php::PhpAdapter;
@@ -11,15 +16,13 @@ use polygl_lir::AssetReference;
 use polygl_span::{
     Diagnostic, DiagnosticCode, DiagnosticInvariantError, Diagnostics, Severity, SourceFile,
 };
-use polygl_types::TypedModule;
-
-use crate::{AdapterRegistry, BuiltinTable};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CompileOptions {
     pub mode: BuildMode,
     pub source_map: SourceMapMode,
     pub sources_content: bool,
+    pub budget: CompileBudget,
 }
 
 impl CompileOptions {
@@ -29,6 +32,7 @@ impl CompileOptions {
             mode: BuildMode::Debug,
             source_map: SourceMapMode::None,
             sources_content: false,
+            budget: CompileBudget::standard(),
         }
     }
 }
@@ -39,22 +43,26 @@ impl Default for CompileOptions {
             mode: BuildMode::Debug,
             source_map: SourceMapMode::External,
             sources_content: false,
+            budget: CompileBudget::standard(),
         }
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct FrontendOutput {
-    pub typed: TypedModule,
+    pub typed: TypedHir,
+    pub trace: Vec<PassTrace>,
 }
 
 #[derive(Clone, Debug)]
 pub struct CompileOutput {
-    pub typed: TypedModule,
+    pub typed: TypedHir,
     pub javascript: Artifacts,
     pub shaders: GlslArtifacts,
     pub assets: Vec<AssetReference>,
     pub warnings: Diagnostics,
+    pub trace: Vec<PassTrace>,
+    pub statistics: CompileStatistics,
 }
 
 pub struct Compiler<'adapter> {
@@ -77,11 +85,20 @@ impl<'adapter> Compiler<'adapter> {
         source: &SourceFile,
         language_id: &str,
     ) -> Result<FrontendOutput, CompileError> {
+        self.analyze_with_budget(source, language_id, CompileBudget::standard())
+    }
+
+    pub fn analyze_with_budget(
+        &self,
+        source: &SourceFile,
+        language_id: &str,
+        budget: CompileBudget,
+    ) -> Result<FrontendOutput, CompileError> {
         let adapter = self
             .adapters
             .by_id(language_id)
             .ok_or_else(|| CompileError::UnsupportedLanguage(language_id.to_owned()))?;
-        self.analyze_with_adapter(source, adapter)
+        self.analyze_with_adapter_and_budget(source, adapter, budget)
     }
 
     pub fn analyze_with_adapter(
@@ -89,13 +106,70 @@ impl<'adapter> Compiler<'adapter> {
         source: &SourceFile,
         adapter: &dyn LanguageAdapter,
     ) -> Result<FrontendOutput, CompileError> {
+        self.analyze_with_adapter_and_budget(source, adapter, CompileBudget::standard())
+    }
+
+    pub fn analyze_with_adapter_and_budget(
+        &self,
+        source: &SourceFile,
+        adapter: &dyn LanguageAdapter,
+        budget: CompileBudget,
+    ) -> Result<FrontendOutput, CompileError> {
+        let validator = StageValidator::new(budget);
+        validate_budget_configuration(source, &validator)?;
+        validate_source_budget(source, &validator)?;
+        let mut passes = PassManager::default();
+        let typed = self.analyze_managed(source, adapter, budget, &validator, &mut passes)?;
+        Ok(FrontendOutput {
+            typed,
+            trace: passes.finish(),
+        })
+    }
+
+    fn analyze_managed(
+        &self,
+        source: &SourceFile,
+        adapter: &dyn LanguageAdapter,
+        budget: CompileBudget,
+        validator: &StageValidator,
+        passes: &mut PassManager,
+    ) -> Result<TypedHir, CompileError> {
         let mut context = LowerCtx::new(&BuiltinTable);
-        let hir = adapter
-            .lower(source, &mut context)
-            .map_err(|diagnostics| validated_diagnostics("adapter", diagnostics))?;
-        let typed = polygl_types::analyze(&hir)
-            .map_err(|diagnostics| validated_diagnostics("type analyzer", diagnostics))?;
-        Ok(FrontendOutput { typed })
+        let hir = passes.run(
+            "adapter.lower",
+            CompileStage::Source,
+            CompileStage::LoweredHir,
+            true,
+            || {
+                adapter
+                    .lower(source, &mut context)
+                    .map(LoweredHir::new)
+                    .map_err(|diagnostics| {
+                        validated_diagnostics("adapter", source, diagnostics, budget)
+                    })
+            },
+        )?;
+        validator
+            .validate_lowered(&hir)
+            .map_err(|violation| budget_error(source, violation))?;
+
+        let typed = passes.run(
+            "types.analyze",
+            CompileStage::LoweredHir,
+            CompileStage::TypedHir,
+            true,
+            || {
+                polygl_types::analyze(hir.module())
+                    .map(TypedHir::new)
+                    .map_err(|diagnostics| {
+                        validated_diagnostics("type analyzer", source, diagnostics, budget)
+                    })
+            },
+        )?;
+        validator
+            .validate_typed(&typed)
+            .map_err(|violation| budget_error(source, violation))?;
+        Ok(typed)
     }
 
     pub fn compile(
@@ -105,42 +179,162 @@ impl<'adapter> Compiler<'adapter> {
         options: CompileOptions,
     ) -> Result<CompileOutput, CompileError> {
         validate_options(source, options)?;
-        let frontend = self.analyze(source, language_id)?;
-        self.compile_typed(source, frontend.typed, options)
+        let adapter = self
+            .adapters
+            .by_id(language_id)
+            .ok_or_else(|| CompileError::UnsupportedLanguage(language_id.to_owned()))?;
+        let validator = StageValidator::new(options.budget);
+        validate_budget_configuration(source, &validator)?;
+        validate_source_budget(source, &validator)?;
+        let mut passes = PassManager::default();
+        let typed =
+            self.analyze_managed(source, adapter, options.budget, &validator, &mut passes)?;
+        self.compile_typed(source, typed, options, &validator, passes)
     }
 
     fn compile_typed(
         &self,
         source: &SourceFile,
-        typed: TypedModule,
+        typed: TypedHir,
         options: CompileOptions,
+        validator: &StageValidator,
+        mut passes: PassManager,
     ) -> Result<CompileOutput, CompileError> {
-        let lir = polygl_lir::lower(&typed);
-        let split = polygl_lir::split(&lir)
-            .map_err(|diagnostics| validated_split_diagnostics("LIR split", diagnostics))?;
+        let lir = passes.run(
+            "lir.lower",
+            CompileStage::TypedHir,
+            CompileStage::DomainResolvedLir,
+            true,
+            || Ok::<_, CompileError>(DomainResolvedLir::new(polygl_lir::lower(typed.module()))),
+        )?;
+        validator
+            .validate_lir(&lir)
+            .map_err(|violation| budget_error(source, violation))?;
+
+        let split = passes.run(
+            "lir.split",
+            CompileStage::DomainResolvedLir,
+            CompileStage::SplitProgram,
+            true,
+            || {
+                polygl_lir::split(lir.module())
+                    .map(ValidatedSplitProgram::new)
+                    .map_err(|diagnostics| {
+                        validated_split_diagnostics(
+                            "LIR split",
+                            source,
+                            diagnostics,
+                            options.budget,
+                        )
+                    })
+            },
+        )?;
+        validator
+            .validate_split(&split)
+            .map_err(|violation| budget_error(source, violation))?;
         split
+            .program()
             .warnings
             .validate()
             .map_err(|reason| CompileError::InvalidDiagnostics {
                 producer: "LIR split",
                 reason,
             })?;
-        let javascript = JavaScriptBackend::new(options.mode)
-            .with_source_map_mode(options.source_map)
-            .with_sources_content(options.sources_content)
-            .generate(&split.host, std::slice::from_ref(source))
-            .map_err(CompileError::JavaScript)?;
-        let shaders = GlslBackend::new()
-            .generate(&split.gpu)
-            .map_err(CompileError::Glsl)?;
+        validate_diagnostic_budget(source, &split.program().warnings, options.budget)?;
+        let javascript = passes.run(
+            "backend.javascript",
+            CompileStage::SplitProgram,
+            CompileStage::JavaScript,
+            true,
+            || {
+                JavaScriptBackend::new(options.mode)
+                    .with_source_map_mode(options.source_map)
+                    .with_sources_content(options.sources_content)
+                    .generate(&split.program().host, std::slice::from_ref(source))
+                    .map_err(CompileError::JavaScript)
+            },
+        )?;
+        let shaders = passes.run(
+            "backend.glsl",
+            CompileStage::SplitProgram,
+            CompileStage::Glsl,
+            true,
+            || {
+                GlslBackend::new()
+                    .generate(&split.program().gpu)
+                    .map_err(CompileError::Glsl)
+            },
+        )?;
+        let statistics = CompileStatistics::from_split(typed.metrics(), split.program());
+        let split = split.into_program();
         Ok(CompileOutput {
             typed,
             javascript,
             shaders,
             assets: split.assets,
             warnings: split.warnings,
+            trace: passes.finish(),
+            statistics,
         })
     }
+}
+
+fn validate_budget_configuration(
+    source: &SourceFile,
+    validator: &StageValidator,
+) -> Result<(), CompileError> {
+    validator
+        .validate_configuration()
+        .map_err(|violation| budget_error(source, violation))
+}
+
+fn validate_source_budget(
+    source: &SourceFile,
+    validator: &StageValidator,
+) -> Result<(), CompileError> {
+    validator
+        .validate_source(source.len())
+        .map_err(|violation| budget_error(source, violation))
+}
+
+fn validate_diagnostic_budget(
+    source: &SourceFile,
+    diagnostics: &Diagnostics,
+    budget: CompileBudget,
+) -> Result<(), CompileError> {
+    let actual = diagnostics.iter().len();
+    if actual > budget.max_diagnostics {
+        Err(budget_error(
+            source,
+            crate::stage::BudgetViolation {
+                resource: "diagnostic count",
+                limit: budget.max_diagnostics,
+                actual,
+            },
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn budget_error(source: &SourceFile, violation: crate::stage::BudgetViolation) -> CompileError {
+    let span = source
+        .span(0, 0)
+        .expect("the start of every source is a valid empty span");
+    let mut diagnostics = Diagnostics::new();
+    diagnostics.push(
+        Diagnostic::new(
+            Severity::Error,
+            DiagnosticCode::E0001,
+            format!(
+                "compiler budget for {} was exceeded (limit {}, actual {})",
+                violation.resource, violation.limit, violation.actual
+            ),
+            span,
+        )
+        .with_note("reduce the input size or raise the corresponding CompileBudget limit"),
+    );
+    CompileError::Configuration(diagnostics)
 }
 
 fn validate_options(source: &SourceFile, options: CompileOptions) -> Result<(), CompileError> {
@@ -251,28 +445,46 @@ impl Error for CompileError {
     }
 }
 
-fn validated_diagnostics(producer: &'static str, diagnostics: Diagnostics) -> CompileError {
+fn validated_diagnostics(
+    producer: &'static str,
+    source: &SourceFile,
+    diagnostics: Diagnostics,
+    budget: CompileBudget,
+) -> CompileError {
     match diagnostics.validate() {
-        Ok(()) => CompileError::Frontend(diagnostics),
+        Ok(()) => match validate_diagnostic_budget(source, &diagnostics, budget) {
+            Ok(()) => CompileError::Frontend(diagnostics),
+            Err(error) => error,
+        },
         Err(reason) => CompileError::InvalidDiagnostics { producer, reason },
     }
 }
 
-fn validated_split_diagnostics(producer: &'static str, diagnostics: Diagnostics) -> CompileError {
+fn validated_split_diagnostics(
+    producer: &'static str,
+    source: &SourceFile,
+    diagnostics: Diagnostics,
+    budget: CompileBudget,
+) -> CompileError {
     match diagnostics.validate() {
-        Ok(()) => CompileError::Split(diagnostics),
+        Ok(()) => match validate_diagnostic_budget(source, &diagnostics, budget) {
+            Ok(()) => CompileError::Split(diagnostics),
+            Err(error) => error,
+        },
         Err(reason) => CompileError::InvalidDiagnostics { producer, reason },
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use polygl_adapter_api::{FeatureTag, LanguageAdapter, LowerCtx};
-    use polygl_hir::HirBuilder;
+    use polygl_hir::{HirBuilder, Item, UnOp};
     use polygl_span::{Diagnostic, Diagnostics, Severity, SourceFile, SourceId};
 
     use super::{CompileError, CompileOptions, Compiler};
-    use crate::AdapterRegistry;
+    use crate::{AdapterRegistry, CompileBudget, CompileStage};
 
     struct EmptyAdapter;
 
@@ -334,6 +546,108 @@ mod tests {
 
     static INVALID_DIAGNOSTIC: InvalidDiagnosticAdapter = InvalidDiagnosticAdapter;
 
+    static COUNTING_LOWER_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    struct CountingAdapter;
+
+    impl LanguageAdapter for CountingAdapter {
+        fn id(&self) -> &'static str {
+            "counting"
+        }
+
+        fn file_extensions(&self) -> &'static [&'static str] {
+            &["counting"]
+        }
+
+        fn lower(
+            &self,
+            source: &SourceFile,
+            _context: &mut LowerCtx<'_>,
+        ) -> Result<polygl_hir::Module, Diagnostics> {
+            COUNTING_LOWER_CALLS.fetch_add(1, Ordering::Relaxed);
+            let span = source.span(0, source.len()).unwrap();
+            Ok(HirBuilder::new(span).module(Vec::new()))
+        }
+
+        fn capabilities(&self) -> &'static [FeatureTag] {
+            &[FeatureTag::Core]
+        }
+    }
+
+    static COUNTING: CountingAdapter = CountingAdapter;
+
+    struct DeepAdapter;
+
+    impl LanguageAdapter for DeepAdapter {
+        fn id(&self) -> &'static str {
+            "deep"
+        }
+
+        fn file_extensions(&self) -> &'static [&'static str] {
+            &["deep"]
+        }
+
+        fn lower(
+            &self,
+            source: &SourceFile,
+            _context: &mut LowerCtx<'_>,
+        ) -> Result<polygl_hir::Module, Diagnostics> {
+            let span = source.span(0, source.len()).unwrap();
+            let builder = HirBuilder::new(span);
+            let mut value = builder.int(1);
+            for _ in 0..32 {
+                value = builder.unary(UnOp::Neg, value);
+            }
+            Ok(builder.module(vec![Item::Const(polygl_hir::ConstDef {
+                name: "DEEP".into(),
+                ty: None,
+                value,
+                span,
+            })]))
+        }
+
+        fn capabilities(&self) -> &'static [FeatureTag] {
+            &[FeatureTag::Core]
+        }
+    }
+
+    static DEEP: DeepAdapter = DeepAdapter;
+
+    struct NoisyAdapter;
+
+    impl LanguageAdapter for NoisyAdapter {
+        fn id(&self) -> &'static str {
+            "noisy"
+        }
+
+        fn file_extensions(&self) -> &'static [&'static str] {
+            &["noisy"]
+        }
+
+        fn lower(
+            &self,
+            source: &SourceFile,
+            _context: &mut LowerCtx<'_>,
+        ) -> Result<polygl_hir::Module, Diagnostics> {
+            let mut diagnostics = Diagnostics::new();
+            for index in 0..3 {
+                diagnostics.push(Diagnostic::new(
+                    Severity::Warning,
+                    "W0401",
+                    format!("failure {index}"),
+                    source.span(0, 0).unwrap(),
+                ));
+            }
+            Err(diagnostics)
+        }
+
+        fn capabilities(&self) -> &'static [FeatureTag] {
+            &[FeatureTag::Core]
+        }
+    }
+
+    static NOISY: NoisyAdapter = NoisyAdapter;
+
     #[test]
     fn compiles_in_memory_without_cli_or_filesystem_state() {
         let registry = AdapterRegistry::from_adapters([&EMPTY as &dyn LanguageAdapter]).unwrap();
@@ -349,6 +663,47 @@ mod tests {
         assert!(output.shaders.shaders.is_empty());
         assert!(output.assets.is_empty());
         assert!(output.warnings.is_empty());
+        assert_eq!(
+            output
+                .trace
+                .iter()
+                .map(|pass| (pass.name, pass.input, pass.output))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    "adapter.lower",
+                    CompileStage::Source,
+                    CompileStage::LoweredHir
+                ),
+                (
+                    "types.analyze",
+                    CompileStage::LoweredHir,
+                    CompileStage::TypedHir
+                ),
+                (
+                    "lir.lower",
+                    CompileStage::TypedHir,
+                    CompileStage::DomainResolvedLir
+                ),
+                (
+                    "lir.split",
+                    CompileStage::DomainResolvedLir,
+                    CompileStage::SplitProgram
+                ),
+                (
+                    "backend.javascript",
+                    CompileStage::SplitProgram,
+                    CompileStage::JavaScript
+                ),
+                (
+                    "backend.glsl",
+                    CompileStage::SplitProgram,
+                    CompileStage::Glsl
+                ),
+            ]
+        );
+        assert_eq!(output.statistics.hir.item_count, 0);
+        assert_eq!(output.statistics.host_functions, 0);
     }
 
     #[test]
@@ -387,6 +742,59 @@ mod tests {
                 .to_string()
                 .contains("requires at least one suggested fix")
         );
+    }
+
+    #[test]
+    fn rejects_source_before_calling_an_adapter_when_source_budget_is_exceeded() {
+        COUNTING_LOWER_CALLS.store(0, Ordering::Relaxed);
+        let registry = AdapterRegistry::from_adapters([&COUNTING as &dyn LanguageAdapter]).unwrap();
+        let compiler = Compiler::new(registry);
+        let source = SourceFile::new(SourceId::new(0), "main.deep", "too large");
+        let budget = CompileBudget {
+            max_source_bytes: 2,
+            ..CompileBudget::standard()
+        };
+
+        let error = compiler
+            .analyze_with_budget(&source, "counting", budget)
+            .unwrap_err();
+        assert!(matches!(error, CompileError::Configuration(_)));
+        assert_eq!(COUNTING_LOWER_CALLS.load(Ordering::Relaxed), 0);
+        assert!(error.render(&source).contains("source bytes"));
+    }
+
+    #[test]
+    fn rejects_deep_lowered_hir_before_recursive_type_analysis() {
+        let registry = AdapterRegistry::from_adapters([&DEEP as &dyn LanguageAdapter]).unwrap();
+        let compiler = Compiler::new(registry);
+        let source = SourceFile::new(SourceId::new(0), "main.deep", "x");
+        let budget = CompileBudget {
+            max_syntax_depth: 8,
+            ..CompileBudget::standard()
+        };
+
+        let error = compiler
+            .analyze_with_budget(&source, "deep", budget)
+            .unwrap_err();
+        assert!(matches!(error, CompileError::Configuration(_)));
+        assert!(error.render(&source).contains("syntax depth"));
+    }
+
+    #[test]
+    fn rejects_diagnostic_floods_at_the_trust_boundary() {
+        let registry = AdapterRegistry::from_adapters([&NOISY as &dyn LanguageAdapter]).unwrap();
+        let compiler = Compiler::new(registry);
+        let source = SourceFile::new(SourceId::new(0), "main.noisy", "x");
+        let budget = CompileBudget {
+            max_diagnostics: 2,
+            ..CompileBudget::standard()
+        };
+
+        let error = compiler
+            .analyze_with_budget(&source, "noisy", budget)
+            .unwrap_err();
+        assert!(matches!(error, CompileError::Configuration(_)));
+        assert!(error.render(&source).contains("diagnostic count"));
     }
 
     #[test]

@@ -7,6 +7,7 @@ mod builder;
 mod dump;
 mod expr;
 mod item;
+mod metrics;
 mod normalize;
 mod stmt;
 mod symbol;
@@ -19,6 +20,7 @@ pub use item::{
     ConstDef, DomainHint, EntryPoint, EntryPointKind, FieldDef, Function, Item, Module, Param,
     StructDef,
 };
+pub use metrics::{ModuleMetrics, module_metrics};
 pub use stmt::{Block, Place, PlaceKind, RangeExpr, Stmt, StmtKind};
 pub use symbol::{BuiltinId, Symbol};
 pub use types::{OpaqueType, TypeExpr, TypeKind};

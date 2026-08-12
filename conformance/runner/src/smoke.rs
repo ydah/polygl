@@ -155,7 +155,7 @@ fn compile_typed(
         })?;
     Compiler::standard()
         .analyze(&source, language.id())
-        .map(|output| output.typed)
+        .map(|output| output.typed.into_module())
         .map_err(|error| ConformanceError::Compile {
             case: case.id.clone(),
             message: error.render(&source),
