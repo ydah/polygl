@@ -37,8 +37,8 @@ async function fixture(t, curlMode) {
   await writeCommand(
     curl,
     `
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+const { appendFileSync, existsSync, readFileSync, writeFileSync } = require("node:fs");
+const { join } = require("node:path");
 const url = process.argv.at(-1);
 const mode = process.env.FAKE_CURL_MODE;
 let status = mode === "present" ? "200" : mode === "error" ? "503" : "404";
@@ -61,7 +61,7 @@ process.stdout.write(status);
   await writeCommand(
     command,
     `
-import { appendFileSync } from "node:fs";
+const { appendFileSync } = require("node:fs");
 appendFileSync(
   process.env.FAKE_COMMAND_LOG,
   JSON.stringify({ command: process.env.FAKE_COMMAND_NAME, args: process.argv.slice(2) }) + "\\n",
@@ -72,7 +72,7 @@ appendFileSync(
   await writeCommand(
     sleep,
     `
-import { appendFileSync } from "node:fs";
+const { appendFileSync } = require("node:fs");
 appendFileSync(
   process.env.FAKE_COMMAND_LOG,
   JSON.stringify({ command: "sleep", args: process.argv.slice(2) }) + "\\n",
