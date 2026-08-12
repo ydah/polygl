@@ -54,6 +54,10 @@ test.beforeAll(async ({}, testInfo) => {
     path.join(buildRoot, "source-location", "ruby"),
     "--debug",
   ]);
+  await writeFile(
+    path.join(buildRoot, "rectangle", "ruby", "red.svg"),
+    "<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'><rect width='1' height='1' fill='#ff0000'/></svg>",
+  );
 });
 
 test.afterAll(async () => {
@@ -221,6 +225,104 @@ test("debug runtime overlay reports the generated source location", async ({
   );
 });
 
+test("a loaded texture is sampled into a real framebuffer", async ({ page }) => {
+  await page.addInitScript(() => {
+    const originalGetContext = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function getContext(
+      contextId,
+      options,
+    ) {
+      return originalGetContext.call(
+        this,
+        contextId,
+        contextId === "webgl2"
+          ? { ...options, preserveDrawingBuffer: true }
+          : options,
+      );
+    };
+  });
+  await routeBuild(page);
+  await page.goto("http://polygl.test/rectangle/ruby/index.html");
+  await page.evaluate(() => globalThis.__polyglReady);
+  const pixel = await page.evaluate(async () => {
+    const runtime = await import("./runtime.js");
+    const location = {
+      source: "texture-framebuffer.test",
+      line: 1,
+      column: 1,
+      start: 0,
+      end: 1,
+    };
+    const shader = {
+      name: "texture_framebuffer",
+      vertex: `#version 300 es
+precision highp float;
+layout(location = 0) in vec3 a_position;
+layout(location = 2) in vec2 a_uv;
+out vec2 v_uv;
+void main() {
+  v_uv = a_uv;
+  gl_Position = vec4(a_position.x, a_position.z, 0.0, 1.0);
+}`,
+      fragment: `#version 300 es
+precision highp float;
+in vec2 v_uv;
+uniform sampler2D pgl_u_texture_map;
+out vec4 out_color;
+void main() { out_color = texture(pgl_u_texture_map, v_uv); }`,
+      attributes: [
+        {
+          name: "position",
+          glslName: "a_position",
+          location: 0,
+          type: "vec3",
+        },
+        { name: "uv", glslName: "a_uv", location: 2, type: "vec2" },
+      ],
+      uniforms: [
+        {
+          name: "texture_map",
+          glslName: "pgl_u_texture_map",
+          type: "texture",
+          source: "user",
+        },
+      ],
+      vertexLocation: location,
+      fragmentLocation: location,
+    };
+    const canvas = document.createElement("canvas");
+    canvas.width = 4;
+    canvas.height = 4;
+    document.body.append(canvas);
+    const handle = await runtime.start(
+      {
+        __polyglShaderBundle: {
+          debug: true,
+          shaderAbi: runtime.shaderAbi,
+          shaders: [shader],
+        },
+        setup() {
+          runtime.size(4, 4);
+          const texture = runtime.textureLoad("red.svg");
+          const node = runtime.nodeAdd(
+            runtime.meshPlane(2, 2, 1, 1),
+            runtime.materialShader("texture_framebuffer"),
+          );
+          runtime.shaderSet(node, "texture_map", texture);
+        },
+      },
+      { canvas },
+    );
+    const gl = canvas.getContext("webgl2");
+    gl.finish();
+    const value = new Uint8Array(4);
+    gl.readPixels(2, 2, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, value);
+    handle.stop();
+    return Array.from(value);
+  });
+  expect(pixel).toEqual([255, 0, 0, 255]);
+});
+
 async function routeBuild(page) {
   await page.route("http://polygl.test/**", async (route) => {
     const url = new URL(route.request().url());
@@ -261,6 +363,8 @@ function contentType(file) {
       return "text/javascript; charset=utf-8";
     case ".map":
       return "application/json";
+    case ".svg":
+      return "image/svg+xml";
     default:
       return "application/octet-stream";
   }
