@@ -1566,6 +1566,9 @@ fn invalid_asset_path_reason(path: &str) -> Option<&'static str> {
     if path.contains(':') {
         return Some("URL schemes and drive prefixes are not allowed");
     }
+    if path.contains(['#', '?', '%']) {
+        return Some("URL fragment, query, and percent-escape delimiters are not allowed");
+    }
     if path
         .split('/')
         .any(|component| component.is_empty() || component == "." || component == "..")
@@ -1899,6 +1902,7 @@ mod tests {
             string("assets/brick.png"),
             string("assets/brick.png"),
             string("terrain/height map.png"),
+            string("textures/日本語 café.png"),
         ]));
         let program = split(&valid).expect("portable literal assets should be collected");
         assert_eq!(
@@ -1907,7 +1911,11 @@ mod tests {
                 .iter()
                 .map(|asset| asset.path.as_str())
                 .collect::<Vec<_>>(),
-            ["assets/brick.png", "terrain/height map.png"]
+            [
+                "assets/brick.png",
+                "terrain/height map.png",
+                "textures/日本語 café.png"
+            ]
         );
 
         let mut dynamic = valid_pair(vec![return_vector4()]);
@@ -1924,6 +1932,9 @@ mod tests {
             "../outside.png",
             "assets\\windows.png",
             "https://example.test/a.png",
+            "assets/query?.png",
+            "assets/fragment#.png",
+            "assets/percent%20.png",
             "polygl-manifest.json",
             "runtime.js",
         ] {

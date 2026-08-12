@@ -3148,6 +3148,28 @@ sub setup {
             texture_bytes
         );
 
+        let unicode_asset = asset_directory.join("日本語 café.bin");
+        fs::write(&unicode_asset, b"unicode asset").unwrap();
+        fs::write(
+            &source,
+            "def setup\n  texture_load(\"assets/日本語 café.bin\")\nend\n",
+        )
+        .unwrap();
+        run(
+            arguments([
+                "build",
+                source.to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+            ]),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(output.join("assets/日本語 café.bin")).unwrap(),
+            b"unicode asset"
+        );
+
         let missing = temporary.join("missing.rb");
         fs::write(
             &missing,
@@ -3197,6 +3219,26 @@ sub setup {
         .to_string();
         assert!(error.contains("E0501"));
         assert!(error.contains("not portable"));
+
+        for path in [
+            "assets/query?.png",
+            "assets/fragment#.png",
+            "assets/percent%20.png",
+        ] {
+            fs::write(
+                &unsafe_path,
+                format!("def setup\n  texture_load(\"{path}\")\nend\n"),
+            )
+            .unwrap();
+            let error = run(
+                arguments(["check", unsafe_path.to_str().unwrap()]),
+                &mut Vec::new(),
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains("E0501"), "{path}: {error}");
+            assert!(error.contains("not portable"), "{path}: {error}");
+        }
         fs::remove_dir_all(temporary).unwrap();
     }
 
