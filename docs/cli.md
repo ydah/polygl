@@ -73,7 +73,8 @@ max_texture_bytes = 67108864
 A custom template must contain exactly one `<!-- polygl:app -->` marker. The
 bootstrap replaces that marker without interpreting the rest of the HTML.
 `base_url` begins and ends with `/` and uses only ASCII unreserved path
-characters, without dot segments. `public_dir` is copied recursively; symlinks
+characters, without dot segments or a protocol-relative `//` prefix.
+`public_dir` is copied recursively; symlinks
 and non-regular entries are rejected, then its paths enter the same portable
 collision validation as generated and source-declared assets.
 

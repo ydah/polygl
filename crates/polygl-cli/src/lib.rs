@@ -1253,6 +1253,7 @@ pub(crate) fn resolve_build_request(request: BuildRequest) -> Result<BuildPlan, 
 
 fn normalize_base_url(value: &str) -> Result<String, CliError> {
     if !value.starts_with('/')
+        || value.starts_with("//")
         || !value.ends_with('/')
         || value
             .chars()
@@ -3512,6 +3513,21 @@ max_meshes = 4
         )
         .unwrap_err();
         assert!(error.to_string().contains("without dot segments"));
+        assert!(!output.exists());
+
+        let error = run(
+            arguments([
+                "build",
+                source.to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap(),
+                "--base-url",
+                "//attacker.example/",
+            ]),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("absolute URL path"));
         assert!(!output.exists());
 
         let template = temporary.join("ambiguous.html");
