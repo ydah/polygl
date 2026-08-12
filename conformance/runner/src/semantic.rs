@@ -302,4 +302,64 @@ process.stdout.write(JSON.stringify(new SourceMap(payload).findEntry(line, colum
             original_prefix.encode_utf16().count()
         );
     }
+
+    #[test]
+    fn generated_integer_programs_preserve_safe_metamorphic_relations() {
+        let mut state = 0x6d2b_79f5_u32;
+        let mut ruby = String::from("def setup\n");
+        let mut expected = Vec::new();
+        for _ in 0..128 {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let left = state as i32;
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let mut right = state as i32;
+            if right == 0 || (left == i32::MIN && right == -1) {
+                right = 1;
+            }
+            ruby.push_str(&format!(
+                "  background(({left} + {right}) - {right}, ({left} / {right}) * {right} + ({left} % {right}), {left})\n"
+            ));
+            expected.push(serde_json::json!(["background", left, left, left]));
+        }
+        ruby.push_str("end\n");
+
+        let source = SourceFile::new(SourceId::new(0), "generated-property.rb", ruby);
+        let compiled = Compiler::standard()
+            .compile(
+                &source,
+                "ruby",
+                CompileOptions {
+                    mode: BuildMode::Release,
+                    source_map: SourceMapMode::None,
+                    sources_content: false,
+                    budget: CompileBudget::standard(),
+                },
+            )
+            .unwrap();
+        let temporary = TemporaryDirectory::new().unwrap();
+        fs::write(
+            temporary.path.join("app.js"),
+            compiled.javascript.javascript,
+        )
+        .unwrap();
+        fs::write(temporary.path.join("runtime.js"), super::RUNTIME_MOCK).unwrap();
+        fs::write(temporary.path.join("runner.mjs"), super::NODE_RUNNER).unwrap();
+        fs::write(
+            temporary.path.join("package.json"),
+            "{\"private\":true,\"type\":\"module\"}\n",
+        )
+        .unwrap();
+        let output = Command::new("node")
+            .arg("runner.mjs")
+            .current_dir(&temporary.path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let actual: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(actual, serde_json::Value::Array(expected));
+    }
 }
