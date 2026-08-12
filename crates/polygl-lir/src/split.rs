@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use polygl_builtins::{BuiltinTable, Domain as BuiltinDomain};
-use polygl_span::{Diagnostic, Diagnostics, Label, Severity, Suggestion};
+use polygl_span::{Diagnostic, DiagnosticCode, Diagnostics, Label, Severity, Suggestion};
 use polygl_types::Type;
 
 use crate::{
@@ -1202,11 +1202,12 @@ impl<'module> Validator<'module> {
 
     fn error(
         &mut self,
-        code: &str,
+        code: impl Into<DiagnosticCode>,
         message: impl Into<String>,
         span: polygl_span::Span,
         suggestion: impl Into<String>,
     ) {
+        let code = code.into();
         self.diagnostics.push(
             Diagnostic::new(Severity::Error, code, message, span)
                 .with_suggestion(Suggestion::rewrite(span, suggestion)),

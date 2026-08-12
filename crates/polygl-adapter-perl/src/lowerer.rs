@@ -12,7 +12,9 @@ use polygl_hir::{
     FieldDef, FieldInit, Function, Item, Literal, MapEntry, Module, Param, Place, PlaceKind,
     RangeExpr, Stmt, StmtKind, StructDef, Symbol, TypeExpr, TypeKind, UnOp,
 };
-use polygl_span::{Diagnostic, Diagnostics, Severity, SourceFile, Span, Suggestion};
+use polygl_span::{
+    Diagnostic, DiagnosticCode, Diagnostics, Severity, SourceFile, Span, Suggestion,
+};
 use tree_sitter::Node;
 
 use crate::annotation::Annotations;
@@ -1418,11 +1420,12 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
     fn unsupported_with_code(
         &mut self,
         node: Node<'_>,
-        code: &str,
+        code: impl Into<DiagnosticCode>,
         message: &str,
         suggestion: &str,
     ) {
         let span = node_span(self.source, node);
+        let code = code.into();
         self.diagnostics.push(
             Diagnostic::new(Severity::Error, code, message, span)
                 .with_suggestion(Suggestion::rewrite(span, suggestion)),

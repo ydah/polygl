@@ -8,6 +8,11 @@ tests do not need to match prose. Error messages may become more specific
 without changing a code. A code changes only when the category or required
 source rewrite changes.
 
+`polygl_span::DiagnosticCode` and its metadata are the normative registry.
+Every diagnostic stores that closed enum rather than an arbitrary string; the
+registry fixes severity, title, producer, fixability, and introduction version.
+Conformance manifests reject expected codes that are not in the registry.
+
 ## Code ranges
 
 | Range | Owner |

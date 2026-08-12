@@ -81,7 +81,7 @@ fn rejects_labels_from_another_source_and_tracks_error_severity() {
     let mut diagnostics = Diagnostics::new();
     diagnostics.push(Diagnostic::new(
         Severity::Warning,
-        "W0300",
+        "W0401",
         "warning",
         source.span(0, 0).unwrap(),
     ));

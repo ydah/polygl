@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use polygl_adapter_api::LowerCtx;
 use polygl_hir::{Block, Module};
-use polygl_span::{Diagnostic, Diagnostics, Severity, SourceFile, Span, Suggestion};
+use polygl_span::{
+    Diagnostic, DiagnosticCode, Diagnostics, Severity, SourceFile, Span, Suggestion,
+};
 use ruby_prism::{Location, Node, ProgramNode, StatementsNode};
 
 use crate::annotation::Annotations;
@@ -185,11 +187,12 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
     pub(crate) fn unsupported_with_code(
         &mut self,
         node: &Node<'_>,
-        code: &str,
+        code: impl Into<DiagnosticCode>,
         message: &str,
         suggestion: &str,
     ) {
         let span = self.span(node.location());
+        let code = code.into();
         self.diagnostics.push(
             Diagnostic::new(Severity::Error, code, message, span)
                 .with_suggestion(Suggestion::rewrite(span, suggestion)),

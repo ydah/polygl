@@ -1,4 +1,4 @@
-use crate::{Diagnostic, RenderError, Severity, SourceFile};
+use crate::{Diagnostic, Fixability, RenderError, Severity, SourceFile};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Diagnostics {
@@ -14,6 +14,13 @@ impl Diagnostics {
     }
 
     pub fn push(&mut self, diagnostic: Diagnostic) {
+        debug_assert_eq!(diagnostic.severity, diagnostic.code.metadata().severity);
+        debug_assert!(
+            diagnostic.code.metadata().fixability != Fixability::Required
+                || diagnostic.suggestion.is_some(),
+            "{} requires a rewrite suggestion",
+            diagnostic.code
+        );
         if !self.entries.contains(&diagnostic) {
             self.entries.push(diagnostic);
         }

@@ -492,7 +492,7 @@ impl Analyzer {
         left: InferType,
         right: InferType,
         span: polygl_span::Span,
-        code: &str,
+        code: impl Into<polygl_span::DiagnosticCode>,
     ) -> InferType {
         match self.solver.join(left, right) {
             Ok(ty) => ty,

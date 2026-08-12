@@ -1,11 +1,17 @@
-use polygl_span::{Diagnostic, Severity, Span, Suggestion};
+use polygl_span::{Diagnostic, DiagnosticCode, Severity, Span, Suggestion};
 
 use crate::solver::{InferType, SolveError};
 
 use super::Analyzer;
 
 impl Analyzer {
-    pub(super) fn solve_error(&mut self, error: SolveError, span: Span, code: &str) {
+    pub(super) fn solve_error(
+        &mut self,
+        error: SolveError,
+        span: Span,
+        code: impl Into<DiagnosticCode>,
+    ) {
+        let code = code.into();
         match error {
             SolveError::Mismatch { expected, actual } => self.diagnostics.push(
                 Diagnostic::new(

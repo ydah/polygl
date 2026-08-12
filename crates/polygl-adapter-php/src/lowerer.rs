@@ -5,7 +5,9 @@ use mago_syntax::cst::{Block as PhpBlock, DirectVariable, Program, Statement};
 use mago_syntax::walker::Walker;
 use polygl_adapter_api::LowerCtx;
 use polygl_hir::{Block, Module};
-use polygl_span::{Diagnostic, Diagnostics, Severity, SourceFile, Span, Suggestion};
+use polygl_span::{
+    Diagnostic, DiagnosticCode, Diagnostics, Severity, SourceFile, Span, Suggestion,
+};
 
 use crate::annotation::Annotations;
 
@@ -149,11 +151,12 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
     pub(crate) fn unsupported_with_code(
         &mut self,
         span: MagoSpan,
-        code: &str,
+        code: impl Into<DiagnosticCode>,
         message: &str,
         suggestion: &str,
     ) {
         let span = self.span(span);
+        let code = code.into();
         self.diagnostics.push(
             Diagnostic::new(Severity::Error, code, message, span)
                 .with_suggestion(Suggestion::rewrite(span, suggestion)),

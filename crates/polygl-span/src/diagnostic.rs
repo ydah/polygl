@@ -1,7 +1,7 @@
 use ariadne::{Config, IndexType, Label as AriadneLabel, Report, ReportKind, sources};
 use std::ops::Range;
 
-use crate::{RenderError, SourceFile, Span};
+use crate::{DiagnosticCode, RenderError, SourceFile, Span};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Severity {
@@ -59,7 +59,7 @@ impl Suggestion {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
     pub severity: Severity,
-    pub code: String,
+    pub code: DiagnosticCode,
     pub message: String,
     pub primary_span: Span,
     pub labels: Vec<Label>,
@@ -71,13 +71,15 @@ impl Diagnostic {
     #[must_use]
     pub fn new(
         severity: Severity,
-        code: impl Into<String>,
+        code: impl Into<DiagnosticCode>,
         message: impl Into<String>,
         primary_span: Span,
     ) -> Self {
+        let code = code.into();
+        debug_assert_eq!(severity, code.metadata().severity);
         Self {
             severity,
-            code: code.into(),
+            code,
             message: message.into(),
             primary_span,
             labels: Vec::new(),
@@ -122,7 +124,7 @@ impl Diagnostic {
         let render_range = |span| Self::render_range(span, source, needs_eof_sentinel);
         let name = source.name().to_owned();
         let mut builder = Report::build(kind, (name.clone(), render_range(self.primary_span)))
-            .with_code(&self.code)
+            .with_code(self.code)
             .with_message(&self.message)
             .with_config(
                 Config::default()
