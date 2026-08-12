@@ -227,8 +227,12 @@ export function requireNonNil(value) {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::{fs, process::Command};
 
-    use super::verify_host_semantics;
+    use polygl_core::{BuildMode, CompileBudget, CompileOptions, Compiler, SourceMapMode};
+    use polygl_span::{SourceFile, SourceId};
+
+    use super::{TemporaryDirectory, verify_host_semantics};
 
     #[test]
     fn declarative_host_semantics_pass() {
@@ -237,5 +241,65 @@ mod tests {
             .parent()
             .expect("runner lives directly under conformance");
         assert_eq!(verify_host_semantics(root).unwrap(), 9);
+    }
+
+    #[test]
+    fn standard_source_map_consumer_resolves_unicode_columns() {
+        let text = "def setup\n  text(\"😀\", 0.0, 0.0); background(1.0, 0.0, 0.0)\nend\n";
+        let source = SourceFile::new(SourceId::new(0), "unicode.rb", text);
+        let compiled = Compiler::standard()
+            .compile(
+                &source,
+                "ruby",
+                CompileOptions {
+                    mode: BuildMode::Debug,
+                    source_map: SourceMapMode::External,
+                    sources_content: true,
+                    budget: CompileBudget::standard(),
+                },
+            )
+            .unwrap();
+        let temporary = TemporaryDirectory::new().unwrap();
+        fs::write(
+            temporary.path.join("app.js"),
+            compiled.javascript.javascript,
+        )
+        .unwrap();
+        fs::write(
+            temporary.path.join("app.js.map"),
+            compiled.javascript.source_map.unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            temporary.path.join("consume.mjs"),
+            r#"
+import { readFileSync } from "node:fs";
+import { SourceMap } from "node:module";
+const generated = readFileSync("app.js", "utf8").split("\n");
+const line = generated.findIndex((value) => value.includes("__pglRuntime.background"));
+const column = generated[line].indexOf("__pglRuntime.background");
+const payload = JSON.parse(readFileSync("app.js.map", "utf8"));
+process.stdout.write(JSON.stringify(new SourceMap(payload).findEntry(line, column)));
+"#,
+        )
+        .unwrap();
+        let output = Command::new("node")
+            .arg("consume.mjs")
+            .current_dir(&temporary.path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let entry: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let original_prefix = "  text(\"😀\", 0.0, 0.0); ";
+        assert_eq!(entry["originalSource"], "unicode.rb");
+        assert_eq!(entry["originalLine"], 1);
+        assert_eq!(
+            entry["originalColumn"],
+            original_prefix.encode_utf16().count()
+        );
     }
 }

@@ -42,6 +42,18 @@ test.beforeAll(async ({}, testInfo) => {
       ]);
     }
   }
+  run(executable, [
+    "build",
+    path.join(
+      conformanceRoot,
+      "semantic-cases",
+      "ruby",
+      "array-bounds.rb",
+    ),
+    "-o",
+    path.join(buildRoot, "source-location", "ruby"),
+    "--debug",
+  ]);
 });
 
 test.afterAll(async () => {
@@ -195,6 +207,18 @@ test("text overlay follows and restores a custom canvas", async ({ page }) => {
   });
   expect(result.wrapperTag).toBe("DIV");
   expect(result.restored).toBe(true);
+});
+
+test("debug runtime overlay reports the generated source location", async ({
+  page,
+}) => {
+  await routeBuild(page);
+  await page.goto("http://polygl.test/source-location/ruby/index.html");
+  const overlay = page.locator("#polygl-error-overlay");
+  await expect(overlay).toBeVisible();
+  await expect(overlay).toContainText(
+    /array-bounds\.rb:3:14: index 1 is outside 0\.\.0/,
+  );
 });
 
 async function routeBuild(page) {
