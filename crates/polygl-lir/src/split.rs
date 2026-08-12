@@ -34,6 +34,7 @@ enum Dependency<'module> {
 pub fn split(module: &Module) -> Result<SplitProgram, Diagnostics> {
     let mut validator = Validator::new(module);
     validator.validate_shader_pairs();
+    validator.resolve_host_reachability();
     validator.validate_material_references();
     validator.validate_asset_references();
     validator.validate_host_graph();
@@ -42,7 +43,7 @@ pub fn split(module: &Module) -> Result<SplitProgram, Diagnostics> {
         return Err(validator.diagnostics);
     }
 
-    let host = filtered_host_module(module);
+    let host = filtered_host_module(module, &validator.host_functions, &validator.host_constants);
     let gpu = filtered_gpu_module(
         module,
         &validator.gpu_functions,
@@ -57,19 +58,23 @@ pub fn split(module: &Module) -> Result<SplitProgram, Diagnostics> {
     })
 }
 
-fn filtered_host_module(module: &Module) -> Module {
+fn filtered_host_module(
+    module: &Module,
+    functions: &HashSet<&str>,
+    constants: &HashSet<&str>,
+) -> Module {
     Module {
         functions: module
             .functions
             .iter()
-            .filter(|function| function.domain != Domain::Gpu)
+            .filter(|function| functions.contains(function.name.as_str()))
             .cloned()
             .collect(),
         structs: module.structs.clone(),
         constants: module
             .constants
             .iter()
-            .filter(|constant| constant.domain != Domain::Gpu)
+            .filter(|constant| constants.contains(constant.name.as_str()))
             .cloned()
             .collect(),
         entries: module
@@ -125,6 +130,8 @@ struct Validator<'module> {
     gpu_functions: HashSet<&'module str>,
     gpu_constants: HashSet<&'module str>,
     gpu_structs: HashSet<&'module str>,
+    host_functions: HashSet<&'module str>,
+    host_constants: HashSet<&'module str>,
     assets: Vec<AssetReference>,
     validating_structs: HashSet<&'module str>,
     validated_structs: HashSet<&'module str>,
@@ -148,6 +155,8 @@ impl<'module> Validator<'module> {
             gpu_functions: HashSet::new(),
             gpu_constants: HashSet::new(),
             gpu_structs: HashSet::new(),
+            host_functions: HashSet::new(),
+            host_constants: HashSet::new(),
             assets: Vec::new(),
             validating_structs: HashSet::new(),
             validated_structs: HashSet::new(),
@@ -339,6 +348,40 @@ impl<'module> Validator<'module> {
         }
     }
 
+    fn resolve_host_reachability(&mut self) {
+        let mut pending = self
+            .module
+            .entries
+            .iter()
+            .filter(|entry| entry.domain == Domain::Host)
+            .flat_map(|entry| self.block_dependencies(&entry.body))
+            .collect::<Vec<_>>();
+
+        while let Some(dependency) = pending.pop() {
+            let newly_reachable = match dependency {
+                Dependency::Function(name) => {
+                    self.functions
+                        .get(name)
+                        .is_some_and(|function| function.domain != Domain::Gpu)
+                        && self.host_functions.insert(name)
+                }
+                Dependency::Constant(name) => {
+                    self.constants
+                        .get(name)
+                        .is_some_and(|constant| constant.domain != Domain::Gpu)
+                        && self.host_constants.insert(name)
+                }
+            };
+            if newly_reachable {
+                pending.extend(self.dependencies(dependency));
+            }
+        }
+    }
+
+    fn block_dependencies(&self, block: &Block) -> Vec<Dependency<'module>> {
+        self.named_dependencies(function_calls(block), block_constant_refs(block))
+    }
+
     fn validate_material_references(&mut self) {
         let material_operation = BuiltinTable::find("material_shader")
             .expect("material_shader is a canonical builtin")
@@ -358,21 +401,36 @@ impl<'module> Validator<'module> {
         available.sort_unstable();
 
         let mut references = Vec::new();
-        for entry in &self.module.entries {
+        for entry in self
+            .module
+            .entries
+            .iter()
+            .filter(|entry| entry.domain == Domain::Host)
+        {
             collect_string_runtime_references_block(
                 &entry.body,
                 material_operation,
                 &mut references,
             );
         }
-        for function in &self.module.functions {
+        for function in self
+            .module
+            .functions
+            .iter()
+            .filter(|function| self.host_functions.contains(function.name.as_str()))
+        {
             collect_string_runtime_references_block(
                 &function.body,
                 material_operation,
                 &mut references,
             );
         }
-        for constant in &self.module.constants {
+        for constant in self
+            .module
+            .constants
+            .iter()
+            .filter(|constant| self.host_constants.contains(constant.name.as_str()))
+        {
             collect_string_runtime_references_expr(
                 &constant.value,
                 material_operation,
@@ -414,21 +472,36 @@ impl<'module> Validator<'module> {
             .expect("texture_load is a canonical builtin")
             .runtime_op;
         let mut references = Vec::new();
-        for entry in &self.module.entries {
+        for entry in self
+            .module
+            .entries
+            .iter()
+            .filter(|entry| entry.domain == Domain::Host)
+        {
             collect_string_runtime_references_block(
                 &entry.body,
                 texture_operation,
                 &mut references,
             );
         }
-        for function in &self.module.functions {
+        for function in self
+            .module
+            .functions
+            .iter()
+            .filter(|function| self.host_functions.contains(function.name.as_str()))
+        {
             collect_string_runtime_references_block(
                 &function.body,
                 texture_operation,
                 &mut references,
             );
         }
-        for constant in &self.module.constants {
+        for constant in self
+            .module
+            .constants
+            .iter()
+            .filter(|constant| self.host_constants.contains(constant.name.as_str()))
+        {
             collect_string_runtime_references_expr(
                 &constant.value,
                 texture_operation,
@@ -471,21 +544,25 @@ impl<'module> Validator<'module> {
         {
             self.inspect_host_block(&entry.body);
         }
-        for function in self
+        let function_bodies = self
             .module
             .functions
             .iter()
-            .filter(|function| function.domain != Domain::Gpu)
-        {
-            self.inspect_host_block(&function.body);
+            .filter(|function| self.host_functions.contains(function.name.as_str()))
+            .map(|function| function.body.clone())
+            .collect::<Vec<_>>();
+        for body in &function_bodies {
+            self.inspect_host_block(body);
         }
-        for constant in self
+        let constant_values = self
             .module
             .constants
             .iter()
-            .filter(|constant| constant.domain != Domain::Gpu)
-        {
-            self.inspect_host_expr(&constant.value);
+            .filter(|constant| self.host_constants.contains(constant.name.as_str()))
+            .map(|constant| constant.value.clone())
+            .collect::<Vec<_>>();
+        for value in &constant_values {
+            self.inspect_host_expr(value);
         }
     }
 
@@ -663,7 +740,7 @@ impl<'module> Validator<'module> {
                 for parameter in &function.params {
                     self.validate_type(&parameter.ty, parameter.span);
                 }
-                if function.domain == Domain::Shared {
+                if function.domain == Domain::Shared && self.host_functions.contains(name) {
                     self.diagnostics.push(
                         Diagnostic::new(
                             Severity::Warning,
@@ -805,6 +882,14 @@ impl<'module> Validator<'module> {
             }
         };
 
+        self.named_dependencies(function_names, constant_names)
+    }
+
+    fn named_dependencies(
+        &self,
+        function_names: Vec<String>,
+        constant_names: Vec<String>,
+    ) -> Vec<Dependency<'module>> {
         function_names
             .into_iter()
             .filter_map(|name| {
@@ -1833,6 +1918,61 @@ mod tests {
             let diagnostics = split(&invalid).expect_err("unsafe asset paths must be rejected");
             assert!(codes(&diagnostics).contains("E0501"), "{unsafe_path}");
         }
+
+        let asset_function = |name: &str, argument: Expr| Function {
+            name: name.to_owned(),
+            params: Vec::new(),
+            result: Type::Unit,
+            body: Block {
+                statements: setup_with(vec![argument]).body.statements,
+                span: span(),
+            },
+            domain: Domain::Host,
+            span: span(),
+        };
+        let mut unreachable = valid_pair(vec![return_vector4()]);
+        unreachable.functions.push(asset_function(
+            "unused_asset",
+            expression(ExprKind::Variable("dynamic_path".to_owned()), Type::Str),
+        ));
+        let program = split(&unreachable).expect("unreachable assets must not affect packaging");
+        assert!(program.assets.is_empty());
+        assert!(program.host.functions.is_empty());
+
+        let mut reachable = valid_pair(vec![return_vector4()]);
+        reachable
+            .functions
+            .push(asset_function("load_asset", string("reachable.png")));
+        reachable.entries.push(EntryPoint {
+            kind: EntryKind::Setup,
+            params: Vec::new(),
+            result: Type::Unit,
+            body: Block {
+                statements: vec![Statement::new(
+                    StatementKind::Expr(expression(
+                        ExprKind::Call {
+                            target: CallTarget::Function("load_asset".to_owned()),
+                            args: Vec::new(),
+                        },
+                        Type::Unit,
+                    )),
+                    span(),
+                )],
+                span: span(),
+            },
+            domain: Domain::Host,
+            span: span(),
+        });
+        let program = split(&reachable).expect("reachable helper assets must be packaged");
+        assert_eq!(
+            program
+                .assets
+                .iter()
+                .map(|asset| asset.path.as_str())
+                .collect::<Vec<_>>(),
+            ["reachable.png"]
+        );
+        assert_eq!(program.host.functions[0].name, "load_asset");
     }
 
     #[test]
@@ -1954,7 +2094,7 @@ mod tests {
             span: span(),
         };
         let mut module = valid_pair(vec![
-            Statement::new(StatementKind::Expr(helper_call), span()),
+            Statement::new(StatementKind::Expr(helper_call.clone()), span()),
             Statement::new(
                 StatementKind::For {
                     variable: "i".to_owned(),
@@ -1994,11 +2134,22 @@ mod tests {
             domain: Domain::Shared,
             span: span(),
         });
+        module.entries.push(EntryPoint {
+            kind: EntryKind::Setup,
+            params: Vec::new(),
+            result: Type::Unit,
+            body: Block {
+                statements: vec![Statement::new(StatementKind::Expr(helper_call), span())],
+                span: span(),
+            },
+            domain: Domain::Host,
+            span: span(),
+        });
         let split = split(&module).expect("warnings do not block splitting");
         let warning_codes = codes(&split.warnings);
         assert!(warning_codes.contains("W0401"));
         assert!(warning_codes.contains("W0402"));
-        assert_eq!(split.host.functions.len(), 2);
+        assert_eq!(split.host.functions.len(), 1);
         assert_eq!(split.gpu.functions.len(), 1);
         assert_eq!(split.gpu.functions[0].name, "shared_helper");
     }
