@@ -91,19 +91,28 @@ const IDENTITY_MATRIX = new Float32Array([
 
 export class WebGL2ShaderRegistry {
   private readonly shaders = new Map<string, LinkedShader>();
+  private readonly materials = new WeakMap<object, LinkedShader>();
 
   public constructor(
     private readonly gl: WebGL2RenderingContext,
     private readonly debug: boolean,
     artifacts: readonly ShaderArtifact[],
+    maxPrograms?: number,
   ) {
     if (typeof debug !== "boolean") {
       throw new TypeError("shader debug flag must be a boolean");
     }
     const validatedArtifacts = validateShaderArtifacts(artifacts);
+    if (maxPrograms !== undefined && validatedArtifacts.length > maxPrograms) {
+      throw new RangeError(
+        `shader program budget exceeded: ${validatedArtifacts.length} > ${maxPrograms}`,
+      );
+    }
     try {
       for (const artifact of validatedArtifacts) {
-        this.shaders.set(artifact.name, this.link(artifact));
+        const shader = this.link(artifact);
+        this.shaders.set(artifact.name, shader);
+        this.materials.set(shader.material, shader);
       }
     } catch (error) {
       this.dispose();
@@ -115,6 +124,7 @@ export class WebGL2ShaderRegistry {
     gl: WebGL2RenderingContext,
     bundle?: unknown,
     requireShaderAbi = false,
+    maxPrograms?: number,
   ): WebGL2ShaderRegistry {
     const validatedBundle = bundle === undefined
       ? undefined
@@ -132,6 +142,7 @@ export class WebGL2ShaderRegistry {
       gl,
       validatedBundle?.debug ?? false,
       validatedBundle?.shaders ?? [],
+      maxPrograms,
     );
   }
 
@@ -175,7 +186,7 @@ export class WebGL2ShaderRegistry {
   }
 
   public owns(material: ShaderMaterial): boolean {
-    return this.shaders.get(material.shaderName)?.material === material;
+    return this.materials.has(material);
   }
 
   public nodeUniform(
@@ -451,8 +462,8 @@ export class WebGL2ShaderRegistry {
   }
 
   private requireMaterial(material: ShaderMaterial): LinkedShader {
-    const shader = this.shaders.get(material.shaderName);
-    if (shader === undefined || shader.material !== material) {
+    const shader = this.materials.get(material);
+    if (shader === undefined) {
       throw new Error("shader material belongs to another runtime session");
     }
     return shader;

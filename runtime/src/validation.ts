@@ -11,6 +11,7 @@ import type {
   ShaderUniform,
   ShaderValueType,
 } from "./shader.js";
+import type { RuntimeResourceLimits } from "./scene.js";
 import { runtimeError } from "./errors.js";
 import type { SourceLocation } from "./errors.js";
 
@@ -67,6 +68,10 @@ export function validateRuntimeOptions(value: unknown): RuntimeOptions {
     properties,
     "imageLoader",
   );
+  const resourceLimitsValue = properties.get("resourceLimits");
+  const resourceLimits = resourceLimitsValue === undefined
+    ? undefined
+    : validateResourceLimits(resourceLimitsValue);
   const onError = optionalFunction<(reason: unknown) => void>(
     properties,
     "onError",
@@ -112,6 +117,7 @@ export function validateRuntimeOptions(value: unknown): RuntimeOptions {
     ...(seed === undefined ? {} : { seed }),
     ...(shaderBundle === undefined ? {} : { shaderBundle }),
     ...(imageLoader === undefined ? {} : { imageLoader }),
+    ...(resourceLimits === undefined ? {} : { resourceLimits }),
     ...(onError === undefined ? {} : { onError }),
     ...(requireRuntimeAbi === undefined ? {} : { requireRuntimeAbi }),
     ...(maxDeltaSeconds === undefined ? {} : { maxDeltaSeconds }),
@@ -124,6 +130,64 @@ export function validateRuntimeOptions(value: unknown): RuntimeOptions {
     ...(focusOnPointerDown === undefined ? {} : { focusOnPointerDown }),
     ...(preventDefaultInput === undefined ? {} : { preventDefaultInput }),
   } satisfies RuntimeOptions);
+}
+
+function validateResourceLimits(value: unknown): RuntimeResourceLimits {
+  const properties = dataProperties(value, "runtime options.resourceLimits");
+  const known = [
+    "maxMeshes",
+    "maxMeshBytes",
+    "maxNodes",
+    "maxTextures",
+    "maxTextureDimension",
+    "maxShaderPrograms",
+  ] as const;
+  for (const name of properties.keys()) {
+    if (!known.includes(name as typeof known[number])) {
+      throw new TypeError(`unknown runtime resource limit \`${name}\``);
+    }
+  }
+  const maxMeshes = optionalResourceLimit(properties, "maxMeshes");
+  const maxMeshBytes = optionalResourceLimit(properties, "maxMeshBytes");
+  const maxNodes = optionalResourceLimit(properties, "maxNodes");
+  const maxTextures = optionalResourceLimit(properties, "maxTextures");
+  const maxTextureDimension = optionalResourceLimit(
+    properties,
+    "maxTextureDimension",
+  );
+  const maxShaderPrograms = optionalResourceLimit(
+    properties,
+    "maxShaderPrograms",
+  );
+  return Object.freeze({
+    ...(maxMeshes === undefined ? {} : { maxMeshes }),
+    ...(maxMeshBytes === undefined
+      ? {}
+      : { maxMeshBytes }),
+    ...(maxNodes === undefined ? {} : { maxNodes }),
+    ...(maxTextures === undefined
+      ? {}
+      : { maxTextures }),
+    ...(maxTextureDimension === undefined
+      ? {}
+      : { maxTextureDimension }),
+    ...(maxShaderPrograms === undefined
+      ? {}
+      : { maxShaderPrograms }),
+  } satisfies RuntimeResourceLimits);
+}
+
+function optionalResourceLimit(
+  properties: DataProperties,
+  name: string,
+): number | undefined {
+  const value = properties.get(name);
+  return value === undefined
+    ? undefined
+    : positiveSafeInteger(
+      value,
+      `runtime options.resourceLimits.${name}`,
+    );
 }
 
 export function validateProgramSource(value: unknown): PolyglProgramSource {

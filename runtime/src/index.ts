@@ -22,6 +22,8 @@ export {
 } from "./records.js";
 export type { PolyglRecord } from "./records.js";
 export { WebGL2BatchRenderer } from "./renderer.js";
+export { readRuntimeCapabilities } from "./capabilities.js";
+export type { RuntimeCapabilities } from "./capabilities.js";
 export { WebGL2SceneRenderer } from "./scene.js";
 export type {
   BasicMaterial,
@@ -29,8 +31,11 @@ export type {
   MeshHandle,
   NodeHandle,
   RuntimeImageLoader,
+  RuntimeImageRequest,
+  RuntimeResourceLimits,
   SceneShaderValue,
   TextureHandle,
+  TextureOptions,
 } from "./scene.js";
 export { WebGL2ShaderRegistry } from "./shader.js";
 export type {
@@ -73,7 +78,9 @@ import type {
   NodeHandle,
   SceneShaderValue,
   TextureHandle,
+  TextureOptions,
 } from "./scene.js";
+import type { RuntimeCapabilities } from "./capabilities.js";
 import {
   validateProgramSource,
   validateRuntimeOptions,
@@ -337,8 +344,8 @@ export function lightDirectional(
   session().lightDirectional(direction, color);
 }
 
-export function textureLoad(path: string): TextureHandle {
-  return session().textureLoad(path);
+export function textureLoad(path: string, options?: TextureOptions): TextureHandle {
+  return session().textureLoad(path, options);
 }
 
 export function textureDispose(texture: TextureHandle): void {
@@ -351,6 +358,10 @@ export function shaderSet(
   value: SceneShaderValue,
 ): void {
   session().shaderSet(node, name, value);
+}
+
+export function runtimeCapabilities(): RuntimeCapabilities {
+  return session().capabilities();
 }
 
 export function floorToInt(value: number): number {

@@ -222,6 +222,50 @@ function defineEntry(record, key, value) {
         writable: true,
     });
 }
+export function readRuntimeCapabilities(gl) {
+    return Object.freeze({
+        webglVersion: stringParameter(gl, gl.VERSION, "WebGL version"),
+        shadingLanguageVersion: stringParameter(gl, gl.SHADING_LANGUAGE_VERSION, "shading language version"),
+        maxTextureSize: positiveIntegerParameter(gl, gl.MAX_TEXTURE_SIZE, "maximum texture size"),
+        maxCombinedTextureImageUnits: positiveIntegerParameter(gl, gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS, "combined texture-unit limit"),
+        maxFragmentTextureImageUnits: positiveIntegerParameter(gl, gl.MAX_TEXTURE_IMAGE_UNITS, "fragment texture-unit limit"),
+        maxVertexTextureImageUnits: nonNegativeIntegerParameter(gl, gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS, "vertex texture-unit limit"),
+        maxVertexAttributes: positiveIntegerParameter(gl, gl.MAX_VERTEX_ATTRIBS, "vertex attribute limit"),
+        maxVertexUniformVectors: positiveIntegerParameter(gl, gl.MAX_VERTEX_UNIFORM_VECTORS, "vertex uniform-vector limit"),
+        maxFragmentUniformVectors: positiveIntegerParameter(gl, gl.MAX_FRAGMENT_UNIFORM_VECTORS, "fragment uniform-vector limit"),
+        supportedExtensions: supportedExtensions(gl),
+    });
+}
+function stringParameter(gl, parameter, label) {
+    const value = gl.getParameter(parameter);
+    if (typeof value !== "string" || value.length === 0) {
+        throw new Error(`WebGL returned an invalid ${label}`);
+    }
+    return value;
+}
+function positiveIntegerParameter(gl, parameter, label) {
+    const value = nonNegativeIntegerParameter(gl, parameter, label);
+    if (value === 0)
+        throw new Error(`WebGL returned an invalid ${label}`);
+    return value;
+}
+function nonNegativeIntegerParameter(gl, parameter, label) {
+    const value = gl.getParameter(parameter);
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+        throw new Error(`WebGL returned an invalid ${label}`);
+    }
+    return value;
+}
+function supportedExtensions(gl) {
+    const extensions = gl.getSupportedExtensions();
+    if (extensions === null)
+        return Object.freeze([]);
+    if (!Array.isArray(extensions) ||
+        extensions.some((value) => typeof value !== "string")) {
+        throw new Error("WebGL returned an invalid supported-extension list");
+    }
+    return Object.freeze([...extensions].sort());
+}
 const MAX_SHADER_ENTRIES = 4096;
 const GLSL_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const VALIDATED_STANDARD_ATTRIBUTES = Object.freeze({
@@ -250,6 +294,10 @@ export function validateRuntimeOptions(value) {
         ? undefined
         : validateShaderBundle(shaderBundleValue);
     const imageLoader = optionalFunction(properties, "imageLoader");
+    const resourceLimitsValue = properties.get("resourceLimits");
+    const resourceLimits = resourceLimitsValue === undefined
+        ? undefined
+        : validateResourceLimits(resourceLimitsValue);
     const onError = optionalFunction(properties, "onError");
     const requireRuntimeAbi = optionalBoolean(properties, "requireRuntimeAbi");
     const maxDeltaSeconds = optionalPositiveFiniteNumber(properties, "maxDeltaSeconds");
@@ -270,6 +318,7 @@ export function validateRuntimeOptions(value) {
         ...(seed === undefined ? {} : { seed }),
         ...(shaderBundle === undefined ? {} : { shaderBundle }),
         ...(imageLoader === undefined ? {} : { imageLoader }),
+        ...(resourceLimits === undefined ? {} : { resourceLimits }),
         ...(onError === undefined ? {} : { onError }),
         ...(requireRuntimeAbi === undefined ? {} : { requireRuntimeAbi }),
         ...(maxDeltaSeconds === undefined ? {} : { maxDeltaSeconds }),
@@ -282,6 +331,50 @@ export function validateRuntimeOptions(value) {
         ...(focusOnPointerDown === undefined ? {} : { focusOnPointerDown }),
         ...(preventDefaultInput === undefined ? {} : { preventDefaultInput }),
     });
+}
+function validateResourceLimits(value) {
+    const properties = dataProperties(value, "runtime options.resourceLimits");
+    const known = [
+        "maxMeshes",
+        "maxMeshBytes",
+        "maxNodes",
+        "maxTextures",
+        "maxTextureDimension",
+        "maxShaderPrograms",
+    ];
+    for (const name of properties.keys()) {
+        if (!known.includes(name)) {
+            throw new TypeError(`unknown runtime resource limit \`${name}\``);
+        }
+    }
+    const maxMeshes = optionalResourceLimit(properties, "maxMeshes");
+    const maxMeshBytes = optionalResourceLimit(properties, "maxMeshBytes");
+    const maxNodes = optionalResourceLimit(properties, "maxNodes");
+    const maxTextures = optionalResourceLimit(properties, "maxTextures");
+    const maxTextureDimension = optionalResourceLimit(properties, "maxTextureDimension");
+    const maxShaderPrograms = optionalResourceLimit(properties, "maxShaderPrograms");
+    return Object.freeze({
+        ...(maxMeshes === undefined ? {} : { maxMeshes }),
+        ...(maxMeshBytes === undefined
+            ? {}
+            : { maxMeshBytes }),
+        ...(maxNodes === undefined ? {} : { maxNodes }),
+        ...(maxTextures === undefined
+            ? {}
+            : { maxTextures }),
+        ...(maxTextureDimension === undefined
+            ? {}
+            : { maxTextureDimension }),
+        ...(maxShaderPrograms === undefined
+            ? {}
+            : { maxShaderPrograms }),
+    });
+}
+function optionalResourceLimit(properties, name) {
+    const value = properties.get(name);
+    return value === undefined
+        ? undefined
+        : positiveSafeInteger(value, `runtime options.resourceLimits.${name}`);
 }
 export function validateProgramSource(value) {
     return typeof value === "function"
@@ -1291,17 +1384,23 @@ const IDENTITY_MATRIX = new Float32Array([
     0, 0, 0, 1,
 ]);
 export class WebGL2ShaderRegistry {
-    constructor(gl, debug, artifacts) {
+    constructor(gl, debug, artifacts, maxPrograms) {
         this.gl = gl;
         this.debug = debug;
         this.shaders = new Map();
+        this.materials = new WeakMap();
         if (typeof debug !== "boolean") {
             throw new TypeError("shader debug flag must be a boolean");
         }
         const validatedArtifacts = validateShaderArtifacts(artifacts);
+        if (maxPrograms !== undefined && validatedArtifacts.length > maxPrograms) {
+            throw new RangeError(`shader program budget exceeded: ${validatedArtifacts.length} > ${maxPrograms}`);
+        }
         try {
             for (const artifact of validatedArtifacts) {
-                this.shaders.set(artifact.name, this.link(artifact));
+                const shader = this.link(artifact);
+                this.shaders.set(artifact.name, shader);
+                this.materials.set(shader.material, shader);
             }
         }
         catch (error) {
@@ -1309,7 +1408,7 @@ export class WebGL2ShaderRegistry {
             throw error;
         }
     }
-    static fromBundle(gl, bundle, requireShaderAbi = false) {
+    static fromBundle(gl, bundle, requireShaderAbi = false, maxPrograms) {
         const validatedBundle = bundle === undefined
             ? undefined
             : validateShaderBundle(bundle);
@@ -1318,7 +1417,7 @@ export class WebGL2ShaderRegistry {
             validatedBundle.shaderAbi !== shaderAbi) {
             throw new Error(`generated shader bundle requires shader ABI ${String(validatedBundle.shaderAbi ?? "missing")}; this runtime provides shader ABI ${shaderAbi}`);
         }
-        return new WebGL2ShaderRegistry(gl, validatedBundle?.debug ?? false, validatedBundle?.shaders ?? []);
+        return new WebGL2ShaderRegistry(gl, validatedBundle?.debug ?? false, validatedBundle?.shaders ?? [], maxPrograms);
     }
     setUniform(shaderName, uniformName, value) {
         const shader = this.shaders.get(shaderName);
@@ -1341,7 +1440,7 @@ export class WebGL2ShaderRegistry {
         return shader.material;
     }
     owns(material) {
-        return this.shaders.get(material.shaderName)?.material === material;
+        return this.materials.has(material);
     }
     nodeUniform(material, uniformName, value) {
         const shader = this.requireMaterial(material);
@@ -1538,8 +1637,8 @@ export class WebGL2ShaderRegistry {
         }
     }
     requireMaterial(material) {
-        const shader = this.shaders.get(material.shaderName);
-        if (shader === undefined || shader.material !== material) {
+        const shader = this.materials.get(material);
+        if (shader === undefined) {
             throw new Error("shader material belongs to another runtime session");
         }
         return shader;
@@ -1706,22 +1805,26 @@ function isNumericSequence(value) {
     return Array.isArray(value) || value instanceof Float32Array;
 }
 const sceneOwnerBrand = Symbol("SceneOwner");
+const sceneHandleInfo = new WeakMap();
 export class WebGL2SceneRenderer {
-    constructor(gl, shaderRegistry, documentObject, imageLoader = defaultImageLoader, onAsyncError = () => { }) {
+    constructor(gl, shaderRegistry, documentObject, imageLoader = defaultImageLoader, onAsyncError = () => { }, resourceLimits = {}) {
         this.gl = gl;
         this.documentObject = documentObject;
         this.imageLoader = imageLoader;
         this.onAsyncError = onAsyncError;
+        this.resourceLimits = resourceLimits;
         this.owner = {};
         this.meshes = new Set();
         this.nodes = new Set();
         this.textures = new Map();
+        this.basicMaterials = new WeakSet();
         this.meshHandles = new WeakMap();
         this.nodeHandles = new WeakMap();
         this.textureHandles = new WeakMap();
         this.pendingSetupAssets = new Set();
         this.startupPhase = true;
         this.disposed = false;
+        this.meshBytes = 0;
         this.camera = {
             verticalFov: Math.PI / 4,
             near: 0.1,
@@ -1756,12 +1859,14 @@ export class WebGL2SceneRenderer {
         const material = brand({
             kind: "basic",
             color: Object.freeze([...safeColor]),
-        }, this.owner);
+        }, this.owner, "material");
+        this.basicMaterials.add(material);
         return Object.freeze(material);
     }
     nodeAdd(mesh, material) {
+        this.assertResourceCount("scene nodes", this.nodes.size, this.resourceLimits.maxNodes);
         const resource = this.requireMesh(mesh);
-        if (material.kind === "basic") {
+        if (this.basicMaterials.has(material)) {
             this.requireOwned(material, "material");
         }
         else if (!this.shaderRegistry.owns(material)) {
@@ -1799,6 +1904,7 @@ export class WebGL2SceneRenderer {
             throw new Error(`mesh is still referenced by ${resource.references} scene node(s)`);
         }
         this.meshes.delete(resource);
+        this.meshBytes -= resource.byteLength;
         this.gl.deleteBuffer(resource.vertexBuffer);
         this.gl.deleteBuffer(resource.indexBuffer);
     }
@@ -1851,21 +1957,21 @@ export class WebGL2SceneRenderer {
             color: safeColor,
         };
     }
-    textureLoad(path) {
+    textureLoad(path, options) {
         const safePath = validateAssetPath(path);
-        const cached = this.textures.get(safePath);
+        const safeOptions = validateTextureOptions(options);
+        const cacheKey = textureCacheKey(safePath, safeOptions);
+        const cached = this.textures.get(cacheKey);
         if (cached !== undefined) {
             return cached.handle;
         }
+        this.assertResourceCount("textures", this.textures.size, this.resourceLimits.maxTextures);
         const texture = this.gl.createTexture();
         if (texture === null) {
             throw new Error(`failed to create texture for \`${safePath}\``);
         }
         this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
-        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.LINEAR);
-        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.LINEAR);
-        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
-        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
+        this.applyTextureParameters(safeOptions);
         this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, 1, 1, 0, this.gl.RGBA, this.gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
         let resource;
         const handle = brand({
@@ -1874,17 +1980,20 @@ export class WebGL2SceneRenderer {
             get loaded() {
                 return resource.loaded;
             },
-        }, this.owner);
+        }, this.owner, "texture");
         Object.freeze(handle);
         resource = {
             handle,
             path: safePath,
+            cacheKey,
             texture,
+            options: safeOptions,
+            controller: new AbortController(),
             loaded: false,
             disposed: false,
             references: 0,
         };
-        this.textures.set(safePath, resource);
+        this.textures.set(cacheKey, resource);
         this.textureHandles.set(handle, resource);
         const load = this.loadTexture(resource);
         if (this.startupPhase) {
@@ -1901,7 +2010,8 @@ export class WebGL2SceneRenderer {
             throw new Error(`texture is still referenced by ${resource.references} scene node uniform(s)`);
         }
         resource.disposed = true;
-        this.textures.delete(resource.path);
+        resource.controller.abort();
+        this.textures.delete(resource.cacheKey);
         this.gl.deleteTexture(resource.texture);
     }
     shaderSet(node, uniformName, value) {
@@ -1911,9 +2021,18 @@ export class WebGL2SceneRenderer {
         }
         let uploadValue;
         let textureResource;
-        if (isTextureHandle(value)) {
-            textureResource = this.requireTexture(value);
+        const knownTexture = typeof value === "object" && value !== null
+            ? this.textureHandles.get(value)
+            : undefined;
+        if (knownTexture !== undefined) {
+            textureResource = this.requireTexture(knownTexture.handle);
             uploadValue = textureResource.texture;
+        }
+        else if (typeof value === "object" &&
+            value !== null &&
+            !Array.isArray(value) &&
+            !(value instanceof Float32Array)) {
+            throw new Error("invalid texture handle");
         }
         else {
             uploadValue = value;
@@ -1981,6 +2100,7 @@ export class WebGL2SceneRenderer {
         }
         for (const texture of this.textures.values()) {
             texture.disposed = true;
+            texture.controller.abort();
             this.gl.deleteTexture(texture.texture);
         }
         if (this.basicProgram !== undefined) {
@@ -1992,6 +2112,12 @@ export class WebGL2SceneRenderer {
         this.pendingSetupAssets.clear();
     }
     createMesh(data) {
+        this.assertResourceCount("meshes", this.meshes.size, this.resourceLimits.maxMeshes);
+        const byteLength = data.vertices.byteLength + data.indices.byteLength;
+        const meshLimit = this.resourceLimits.maxMeshBytes;
+        if (meshLimit !== undefined && this.meshBytes + byteLength > meshLimit) {
+            throw new RangeError(`mesh byte budget exceeded: ${this.meshBytes + byteLength} > ${meshLimit}`);
+        }
         const vertexBuffer = this.gl.createBuffer();
         const indexBuffer = this.gl.createBuffer();
         if (vertexBuffer === null || indexBuffer === null) {
@@ -2011,9 +2137,11 @@ export class WebGL2SceneRenderer {
             vertexBuffer,
             indexBuffer,
             indexCount: data.indices.length,
+            byteLength,
             references: 0,
         };
         this.meshes.add(mesh);
+        this.meshBytes += byteLength;
         this.meshHandles.set(handle, mesh);
         return handle;
     }
@@ -2067,24 +2195,85 @@ export class WebGL2SceneRenderer {
         const url = resolveAssetUrl(handle.path, this.documentObject);
         let image;
         try {
-            image = await this.imageLoader(url);
+            image = await this.imageLoader(url, {
+                signal: handle.controller.signal,
+            });
         }
         catch (error) {
             if (this.disposed ||
                 handle.disposed ||
-                this.textures.get(handle.path) !== handle) {
+                handle.controller.signal.aborted ||
+                this.textures.get(handle.cacheKey) !== handle) {
                 return;
             }
             throw new Error(`failed to load texture \`${handle.path}\`: ${errorMessage(error)}`);
         }
         if (this.disposed ||
             handle.disposed ||
-            this.textures.get(handle.path) !== handle) {
+            handle.controller.signal.aborted ||
+            this.textures.get(handle.cacheKey) !== handle) {
             return;
         }
+        const dimensions = imageDimensions(image, handle.path);
+        const dimensionLimit = this.textureDimensionLimit();
+        if (dimensions.width > dimensionLimit ||
+            dimensions.height > dimensionLimit) {
+            throw new RangeError(`texture \`${handle.path}\` is ${dimensions.width}x${dimensions.height}, exceeding the ${dimensionLimit}px texture limit`);
+        }
         this.gl.bindTexture(this.gl.TEXTURE_2D, handle.texture);
-        this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, image);
+        this.withTextureUnpackState(handle.options, () => {
+            this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, image);
+        });
+        if (handle.options.mipmaps) {
+            this.gl.generateMipmap(this.gl.TEXTURE_2D);
+        }
         handle.loaded = true;
+    }
+    applyTextureParameters(options) {
+        const gl = this.gl;
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, textureMinFilter(gl, options.minFilter));
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, options.magFilter === "nearest" ? gl.NEAREST : gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, textureWrap(gl, options.wrapS));
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, textureWrap(gl, options.wrapT));
+    }
+    withTextureUnpackState(options, upload) {
+        const gl = this.gl;
+        const states = [
+            [gl.UNPACK_FLIP_Y_WEBGL, options.flipY],
+            [gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, options.premultiplyAlpha],
+            [
+                gl.UNPACK_COLORSPACE_CONVERSION_WEBGL,
+                options.colorSpaceConversion === "none" ? gl.NONE : gl.BROWSER_DEFAULT_WEBGL,
+            ],
+        ];
+        const previous = states.map(([parameter]) => gl.getParameter(parameter));
+        try {
+            for (const [parameter, value] of states)
+                gl.pixelStorei(parameter, value);
+            upload();
+        }
+        finally {
+            for (let index = 0; index < states.length; index += 1) {
+                const state = states[index];
+                if (state !== undefined)
+                    gl.pixelStorei(state[0], previous[index]);
+            }
+        }
+    }
+    textureDimensionLimit() {
+        const configured = this.resourceLimits.maxTextureDimension ?? Infinity;
+        const reported = this.gl.getParameter(this.gl.MAX_TEXTURE_SIZE);
+        if (typeof reported !== "number" ||
+            !Number.isSafeInteger(reported) ||
+            reported <= 0) {
+            throw new Error("WebGL returned an invalid maximum texture dimension");
+        }
+        return Math.min(configured, reported);
+    }
+    assertResourceCount(label, current, maximum) {
+        if (maximum !== undefined && current >= maximum) {
+            throw new RangeError(`${label} budget of ${maximum} has been reached`);
+        }
     }
     requireMesh(mesh) {
         this.requireOwned(mesh, "mesh");
@@ -2107,13 +2296,16 @@ export class WebGL2SceneRenderer {
         const resource = this.textureHandles.get(texture);
         if (resource === undefined ||
             resource.disposed ||
-            this.textures.get(resource.path) !== resource) {
+            this.textures.get(resource.cacheKey) !== resource) {
             throw new Error("texture handle is no longer valid");
         }
         return resource;
     }
     requireOwned(handle, kind) {
-        if (handle[sceneOwnerBrand] !== this.owner) {
+        const info = sceneHandleInfo.get(handle);
+        if (info?.owner !== this.owner) {
+            if (info === undefined)
+                throw new Error(`invalid ${kind} handle`);
             throw new Error(`${kind} belongs to another runtime session`);
         }
     }
@@ -2246,12 +2438,13 @@ function requiredUniform(gl, program, name) {
     }
     return location;
 }
-function brand(value, owner) {
+function brand(value, owner, kind) {
     Object.defineProperty(value, sceneOwnerBrand, { value: owner });
+    sceneHandleInfo.set(value, { owner, kind });
     return value;
 }
 function opaqueHandle(kind, owner) {
-    return Object.freeze(brand({ kind }, owner));
+    return Object.freeze(brand({ kind }, owner, kind));
 }
 function fixedVector(value, length, label) {
     const components = Array.from(value);
@@ -2271,7 +2464,8 @@ function finiteVec3(value, label) {
     return value;
 }
 function validateAssetPath(path) {
-    if (path.length === 0 ||
+    if (typeof path !== "string" ||
+        path.length === 0 ||
         path.startsWith("/") ||
         path.includes("\\") ||
         path.includes("://") ||
@@ -2284,20 +2478,193 @@ function resolveAssetUrl(path, documentObject) {
     const base = documentObject?.baseURI ?? globalThis.location?.href;
     return base === undefined ? path : new URL(path, base).href;
 }
-async function defaultImageLoader(url) {
+const DEFAULT_TEXTURE_OPTIONS = Object.freeze({
+    minFilter: "linear",
+    magFilter: "linear",
+    wrapS: "clamp-to-edge",
+    wrapT: "clamp-to-edge",
+    mipmaps: false,
+    flipY: false,
+    premultiplyAlpha: false,
+    colorSpaceConversion: "browser-default",
+});
+function validateTextureOptions(value) {
+    if (value === undefined)
+        return DEFAULT_TEXTURE_OPTIONS;
+    if (typeof value !== "object" || value === null) {
+        throw new TypeError("texture options must be a plain object");
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+        throw new TypeError("texture options must not use a custom prototype");
+    }
+    const properties = new Map();
+    for (const key of Reflect.ownKeys(value)) {
+        if (typeof key !== "string") {
+            throw new TypeError("texture options must not contain symbol properties");
+        }
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (descriptor === undefined || !("value" in descriptor)) {
+            throw new TypeError(`texture options.${key} must be a data property`);
+        }
+        properties.set(key, descriptor.value);
+    }
+    const known = new Set([
+        "minFilter",
+        "magFilter",
+        "wrapS",
+        "wrapT",
+        "mipmaps",
+        "flipY",
+        "premultiplyAlpha",
+        "colorSpaceConversion",
+    ]);
+    for (const name of properties.keys()) {
+        if (!known.has(name))
+            throw new TypeError(`unknown texture option \`${name}\``);
+    }
+    const minFilter = textureChoice(properties, "minFilter", [
+        "nearest",
+        "linear",
+        "nearest-mipmap-nearest",
+        "linear-mipmap-nearest",
+        "nearest-mipmap-linear",
+        "linear-mipmap-linear",
+    ], DEFAULT_TEXTURE_OPTIONS.minFilter);
+    const mipmaps = textureBoolean(properties, "mipmaps", DEFAULT_TEXTURE_OPTIONS.mipmaps);
+    if (minFilter.includes("mipmap") && !mipmaps) {
+        throw new TypeError("texture options.mipmaps must be true for a mipmap minFilter");
+    }
+    return Object.freeze({
+        minFilter,
+        magFilter: textureChoice(properties, "magFilter", ["nearest", "linear"], DEFAULT_TEXTURE_OPTIONS.magFilter),
+        wrapS: textureChoice(properties, "wrapS", ["clamp-to-edge", "repeat", "mirrored-repeat"], DEFAULT_TEXTURE_OPTIONS.wrapS),
+        wrapT: textureChoice(properties, "wrapT", ["clamp-to-edge", "repeat", "mirrored-repeat"], DEFAULT_TEXTURE_OPTIONS.wrapT),
+        mipmaps,
+        flipY: textureBoolean(properties, "flipY", DEFAULT_TEXTURE_OPTIONS.flipY),
+        premultiplyAlpha: textureBoolean(properties, "premultiplyAlpha", DEFAULT_TEXTURE_OPTIONS.premultiplyAlpha),
+        colorSpaceConversion: textureChoice(properties, "colorSpaceConversion", ["browser-default", "none"], DEFAULT_TEXTURE_OPTIONS.colorSpaceConversion),
+    });
+}
+function textureChoice(properties, name, choices, fallback) {
+    const value = properties.get(name);
+    if (value === undefined)
+        return fallback;
+    if (typeof value !== "string" || !choices.includes(value)) {
+        throw new TypeError(`texture options.${name} must be ${choices.join(" or ")}`);
+    }
+    return value;
+}
+function textureBoolean(properties, name, fallback) {
+    const value = properties.get(name);
+    if (value === undefined)
+        return fallback;
+    if (typeof value !== "boolean") {
+        throw new TypeError(`texture options.${name} must be a boolean`);
+    }
+    return value;
+}
+function textureCacheKey(path, options) {
+    return [
+        path,
+        options.minFilter,
+        options.magFilter,
+        options.wrapS,
+        options.wrapT,
+        options.mipmaps ? "1" : "0",
+        options.flipY ? "1" : "0",
+        options.premultiplyAlpha ? "1" : "0",
+        options.colorSpaceConversion,
+    ].join("\u0000");
+}
+function textureMinFilter(gl, value) {
+    switch (value) {
+        case "nearest": return gl.NEAREST;
+        case "linear": return gl.LINEAR;
+        case "nearest-mipmap-nearest": return gl.NEAREST_MIPMAP_NEAREST;
+        case "linear-mipmap-nearest": return gl.LINEAR_MIPMAP_NEAREST;
+        case "nearest-mipmap-linear": return gl.NEAREST_MIPMAP_LINEAR;
+        case "linear-mipmap-linear": return gl.LINEAR_MIPMAP_LINEAR;
+    }
+}
+function textureWrap(gl, value) {
+    switch (value) {
+        case "clamp-to-edge": return gl.CLAMP_TO_EDGE;
+        case "repeat": return gl.REPEAT;
+        case "mirrored-repeat": return gl.MIRRORED_REPEAT;
+    }
+}
+function imageDimensions(source, path) {
+    if (typeof source !== "object" || source === null) {
+        throw new TypeError(`image loader returned an invalid source for \`${path}\``);
+    }
+    const width = firstPositiveDimension(source, [
+        "displayWidth",
+        "videoWidth",
+        "naturalWidth",
+        "width",
+    ]);
+    const height = firstPositiveDimension(source, [
+        "displayHeight",
+        "videoHeight",
+        "naturalHeight",
+        "height",
+    ]);
+    if (width === undefined || height === undefined) {
+        throw new TypeError(`image loader returned a source without positive dimensions for \`${path}\``);
+    }
+    return { width, height };
+}
+function firstPositiveDimension(source, names) {
+    for (const name of names) {
+        let value;
+        try {
+            value = Reflect.get(source, name);
+        }
+        catch (error) {
+            throw new TypeError(`image source.${name} could not be read: ${errorMessage(error)}`);
+        }
+        if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
+            return value;
+        }
+    }
+    return undefined;
+}
+async function defaultImageLoader(url, request) {
     if (typeof globalThis.Image !== "function") {
         throw new Error("image loading is unavailable outside a browser");
     }
     return await new Promise((resolve, reject) => {
         const image = new globalThis.Image();
-        image.addEventListener("load", () => resolve(image), { once: true });
-        image.addEventListener("error", () => reject(new Error(`browser could not decode ${url}`)), { once: true });
+        const cleanup = () => {
+            image.removeEventListener("load", handleLoad);
+            image.removeEventListener("error", handleError);
+            request.signal.removeEventListener("abort", handleAbort);
+        };
+        const handleLoad = () => {
+            cleanup();
+            resolve(image);
+        };
+        const handleError = () => {
+            cleanup();
+            reject(new Error(`browser could not decode ${url}`));
+        };
+        const handleAbort = () => {
+            cleanup();
+            image.src = "";
+            const error = new Error(`image load aborted for ${url}`);
+            error.name = "AbortError";
+            reject(error);
+        };
+        if (request.signal.aborted) {
+            handleAbort();
+            return;
+        }
+        image.addEventListener("load", handleLoad);
+        image.addEventListener("error", handleError);
+        request.signal.addEventListener("abort", handleAbort, { once: true });
         image.src = url;
     });
-}
-function isTextureHandle(value) {
-    return typeof value === "object" && value !== null && "kind" in value &&
-        value.kind === "texture";
 }
 function errorMessage(error) {
     return error instanceof Error ? error.message : String(error);
@@ -2496,8 +2863,9 @@ export class RuntimeSession {
         this.documentObject = options.document ?? globalThis.document;
         this.windowObject = this.documentObject?.defaultView ?? undefined;
         this.renderer = new WebGL2BatchRenderer(canvas, options.context, this.documentObject);
-        this.shaderRegistry = WebGL2ShaderRegistry.fromBundle(this.renderer.context);
-        this.scene = new WebGL2SceneRenderer(this.renderer.context, this.shaderRegistry, this.documentObject, options.imageLoader, (reason) => this.fail(reason));
+        this.shaderRegistry = WebGL2ShaderRegistry.fromBundle(this.renderer.context, undefined, false, options.resourceLimits?.maxShaderPrograms);
+        this.scene = new WebGL2SceneRenderer(this.renderer.context, this.shaderRegistry, this.documentObject, options.imageLoader, (reason) => this.fail(reason), options.resourceLimits);
+        this.resourceLimits = options.resourceLimits ?? {};
         this.initialShaderBundle = options.shaderBundle;
         this.requireRuntimeAbi = options.requireRuntimeAbi ?? false;
         this.randomSource = new SeededRandom(options.seed);
@@ -2593,6 +2961,10 @@ export class RuntimeSession {
     setStopHandler(handler) {
         this.onStop = handler;
     }
+    capabilities() {
+        this.runtimeCapabilities ?? (this.runtimeCapabilities = readRuntimeCapabilities(this.renderer.context));
+        return this.runtimeCapabilities;
+    }
     setShaderUniform(shaderName, uniformName, value) {
         this.shaderRegistry.setUniform(shaderName, uniformName, value);
     }
@@ -2641,8 +3013,8 @@ export class RuntimeSession {
     lightDirectional(direction, color) {
         this.scene.lightDirectional(direction, color);
     }
-    textureLoad(path) {
-        return this.scene.textureLoad(path);
+    textureLoad(path, options) {
+        return this.scene.textureLoad(path, options);
     }
     textureDispose(texture) {
         this.scene.textureDispose(texture);
@@ -2807,7 +3179,7 @@ export class RuntimeSession {
     }
     replaceShaderBundle(bundle, requireShaderAbi = false) {
         this.shaderRegistry.dispose();
-        this.shaderRegistry = WebGL2ShaderRegistry.fromBundle(this.renderer.context, bundle, requireShaderAbi);
+        this.shaderRegistry = WebGL2ShaderRegistry.fromBundle(this.renderer.context, bundle, requireShaderAbi, this.resourceLimits.maxShaderPrograms);
         this.scene.replaceShaderRegistry(this.shaderRegistry);
     }
     fail(reason) {
@@ -3020,14 +3392,17 @@ export function cameraLookAt(eye, target, up) {
 export function lightDirectional(direction, color) {
     session().lightDirectional(direction, color);
 }
-export function textureLoad(path) {
-    return session().textureLoad(path);
+export function textureLoad(path, options) {
+    return session().textureLoad(path, options);
 }
 export function textureDispose(texture) {
     session().textureDispose(texture);
 }
 export function shaderSet(node, name, value) {
     session().shaderSet(node, name, value);
+}
+export function runtimeCapabilities() {
+    return session().capabilities();
 }
 export function floorToInt(value) {
     return saturatingInt(Math.floor(value));

@@ -1,4 +1,6 @@
 import { showRuntimeError } from "./errors.js";
+import { readRuntimeCapabilities } from "./capabilities.js";
+import type { RuntimeCapabilities } from "./capabilities.js";
 import { runtimeAbi } from "./generated/abi.js";
 import { SeededRandom } from "./random.js";
 import { WebGL2BatchRenderer } from "./renderer.js";
@@ -9,7 +11,9 @@ import type {
   MeshHandle,
   NodeHandle,
   RuntimeImageLoader,
+  RuntimeResourceLimits,
   SceneShaderValue,
+  TextureOptions,
   TextureHandle,
 } from "./scene.js";
 import { WebGL2ShaderRegistry } from "./shader.js";
@@ -76,6 +80,7 @@ export interface RuntimeOptions {
   readonly seed?: number;
   readonly shaderBundle?: ShaderBundle;
   readonly imageLoader?: RuntimeImageLoader;
+  readonly resourceLimits?: RuntimeResourceLimits;
   readonly onError?: (reason: unknown) => void;
   readonly requireRuntimeAbi?: boolean;
   readonly maxDeltaSeconds?: number;
@@ -93,6 +98,8 @@ export interface RuntimeOptions {
 
 export interface RuntimeHandle {
   readonly canvas: HTMLCanvasElement;
+  readonly state: RuntimeSessionState;
+  capabilities(): RuntimeCapabilities;
   stop(): void;
 }
 
@@ -129,6 +136,8 @@ export class RuntimeSession implements RuntimeHandle {
   private shaderRegistry: WebGL2ShaderRegistry;
   private readonly initialShaderBundle: ShaderBundle | undefined;
   private readonly requireRuntimeAbi: boolean;
+  private readonly resourceLimits: RuntimeResourceLimits;
+  private runtimeCapabilities: RuntimeCapabilities | undefined;
 
   public get state(): RuntimeSessionState {
     return this.sessionState;
@@ -161,6 +170,9 @@ export class RuntimeSession implements RuntimeHandle {
     );
     this.shaderRegistry = WebGL2ShaderRegistry.fromBundle(
       this.renderer.context,
+      undefined,
+      false,
+      options.resourceLimits?.maxShaderPrograms,
     );
     this.scene = new WebGL2SceneRenderer(
       this.renderer.context,
@@ -168,7 +180,9 @@ export class RuntimeSession implements RuntimeHandle {
       this.documentObject,
       options.imageLoader,
       (reason) => this.fail(reason),
+      options.resourceLimits,
     );
+    this.resourceLimits = options.resourceLimits ?? {};
     this.initialShaderBundle = options.shaderBundle;
     this.requireRuntimeAbi = options.requireRuntimeAbi ?? false;
     this.randomSource = new SeededRandom(options.seed);
@@ -284,6 +298,11 @@ export class RuntimeSession implements RuntimeHandle {
     this.onStop = handler;
   }
 
+  public capabilities(): RuntimeCapabilities {
+    this.runtimeCapabilities ??= readRuntimeCapabilities(this.renderer.context);
+    return this.runtimeCapabilities;
+  }
+
   public setShaderUniform(
     shaderName: string,
     uniformName: string,
@@ -386,8 +405,8 @@ export class RuntimeSession implements RuntimeHandle {
     this.scene.lightDirectional(direction, color);
   }
 
-  public textureLoad(path: string): TextureHandle {
-    return this.scene.textureLoad(path);
+  public textureLoad(path: string, options?: TextureOptions): TextureHandle {
+    return this.scene.textureLoad(path, options);
   }
 
   public textureDispose(texture: TextureHandle): void {
@@ -782,6 +801,7 @@ export class RuntimeSession implements RuntimeHandle {
       this.renderer.context,
       bundle,
       requireShaderAbi,
+      this.resourceLimits.maxShaderPrograms,
     );
     this.scene.replaceShaderRegistry(this.shaderRegistry);
   }

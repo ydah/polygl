@@ -42,6 +42,7 @@ const {
   random,
   rect,
   rotate,
+  runtimeCapabilities,
   roundToInt,
   runtimeOps,
   runtimeAbi,
@@ -123,6 +124,26 @@ test("validates runtime options without invoking accessors", async () => {
   );
   await assert.rejects(start({}, { seed: Number.NaN }), /seed.*finite number/);
   await assert.rejects(start({}, { autoResize: "yes" }), /autoResize.*boolean/);
+  const accessorLimits = {};
+  Object.defineProperty(accessorLimits, "maxMeshes", {
+    get() {
+      getterCalls += 1;
+      return 1;
+    },
+  });
+  await assert.rejects(
+    start({}, { resourceLimits: accessorLimits }),
+    /resourceLimits\.maxMeshes.*data property/,
+  );
+  assert.equal(getterCalls, 0);
+  await assert.rejects(
+    start({}, { resourceLimits: { maxMeshes: 0 } }),
+    /maxMeshes.*positive safe integer/,
+  );
+  await assert.rejects(
+    start({}, { resourceLimits: { unexpected: 1 } }),
+    /unknown runtime resource limit/,
+  );
 
   const { context } = fakeWebGl2();
   await assert.rejects(
@@ -1304,6 +1325,7 @@ test("uploads custom shader uniforms independently for each node", async () => {
 
 test("keeps GPU resources alive while referenced and invalidates disposed handles", async () => {
   const gl = fakeWebGl2();
+  let forgedGetterCalls = 0;
   let mesh;
   let node;
   let texture;
@@ -1314,6 +1336,14 @@ test("keeps GPU resources alive while referenced and invalidates disposed handle
         texture = textureLoad("assets/albedo.png");
         node = nodeAdd(mesh, materialShader("textured"));
         shaderSet(node, "albedo", texture);
+        const forged = {};
+        Object.defineProperty(forged, "kind", {
+          get() {
+            forgedGetterCalls += 1;
+            return "texture";
+          },
+        });
+        assert.throws(() => shaderSet(node, "albedo", forged), /invalid texture handle/);
       },
     },
     {
@@ -1336,6 +1366,7 @@ test("keeps GPU resources alive while referenced and invalidates disposed handle
   assert.equal(Object.isFrozen(mesh), true);
   assert.equal(Object.isFrozen(node), true);
   assert.equal(Object.isFrozen(texture), true);
+  assert.equal(forgedGetterCalls, 0);
   assert.throws(() => { mesh.kind = "forged"; }, TypeError);
   assert.throws(() => meshDispose(mesh), /referenced by 1 scene node/);
   assert.throws(() => textureDispose(texture), /referenced by 1 scene node uniform/);
@@ -1352,9 +1383,136 @@ test("keeps GPU resources alive while referenced and invalidates disposed handle
   assert.equal(gl.deletedTextures.length, 1);
 });
 
+test("enforces configured GPU resource budgets before allocation", async () => {
+  const gl = fakeWebGl2();
+  let mesh;
+  let material;
+  const handle = await start({
+    setup() {
+      mesh = meshBox(1, 1, 1);
+      assert.throws(() => meshBox(1, 1, 1), /meshes budget of 1/);
+      material = materialBasic([1, 1, 1, 1]);
+      let getterCalls = 0;
+      const forgedMaterial = {};
+      Object.defineProperty(forgedMaterial, "kind", {
+        get() {
+          getterCalls += 1;
+          return "basic";
+        },
+      });
+      assert.throws(
+        () => nodeAdd(mesh, forgedMaterial),
+        /another runtime session/,
+      );
+      assert.equal(getterCalls, 0);
+      nodeAdd(mesh, material);
+      assert.throws(() => nodeAdd(mesh, material), /scene nodes budget of 1/);
+      textureLoad("assets/one.png");
+      assert.throws(
+        () => textureLoad("assets/two.png"),
+        /textures budget of 1/,
+      );
+    },
+  }, {
+    canvas: fakeCanvas(),
+    context: gl.context,
+    resourceLimits: {
+      maxMeshes: 1,
+      maxNodes: 1,
+      maxTextures: 1,
+    },
+    imageLoader: async () => ({ width: 1, height: 1 }),
+    onError() {},
+  });
+  handle.stop();
+
+  const bytes = fakeWebGl2();
+  await assert.rejects(start({
+    setup() { meshBox(1, 1, 1); },
+  }, {
+    canvas: fakeCanvas(),
+    context: bytes.context,
+    resourceLimits: { maxMeshBytes: 1 },
+    onError() {},
+  }), /mesh byte budget exceeded/);
+
+  const shaders = fakeWebGl2();
+  await assert.rejects(start({}, {
+    canvas: fakeCanvas(),
+    context: shaders.context,
+    resourceLimits: { maxShaderPrograms: 1 },
+    shaderBundle: shaderBundle([{ name: "one" }, { name: "two" }]),
+    onError() {},
+  }), /shader program budget exceeded: 2 > 1/);
+});
+
+test("normalizes texture options and reports WebGL capabilities", async () => {
+  const gl = fakeWebGl2({
+    maxTextureSize: 2048,
+    supportedExtensions: ["EXT_two", "EXT_one"],
+  });
+  let texture;
+  const handle = await start({
+    setup() {
+      const accessorOptions = {};
+      Object.defineProperty(accessorOptions, "flipY", {
+        get() { throw new Error("must not execute"); },
+      });
+      assert.throws(
+        () => textureLoad("assets/bad.png", accessorOptions),
+        /flipY.*data property/,
+      );
+      assert.throws(
+        () => textureLoad("assets/bad.png", { minFilter: "nearest-mipmap-linear" }),
+        /mipmaps must be true/,
+      );
+      texture = textureLoad("assets/configured.png", {
+        minFilter: "linear-mipmap-linear",
+        magFilter: "nearest",
+        wrapS: "repeat",
+        wrapT: "mirrored-repeat",
+        mipmaps: true,
+        flipY: true,
+        premultiplyAlpha: true,
+        colorSpaceConversion: "none",
+      });
+    },
+  }, {
+    canvas: fakeCanvas(),
+    context: gl.context,
+    imageLoader: async () => ({ width: 16, height: 8 }),
+    onError() {},
+  });
+  assert.equal(texture.loaded, true);
+  assert.equal(gl.mipmaps.length, 1);
+  assert.ok(gl.textureParameters.some((entry) => entry[2] === gl.context.REPEAT));
+  assert.ok(gl.pixelStores.some((entry) => entry[1] === true));
+  const capabilities = runtimeCapabilities();
+  assert.equal(capabilities.maxTextureSize, 2048);
+  assert.deepEqual(capabilities.supportedExtensions, ["EXT_one", "EXT_two"]);
+  assert.equal(Object.isFrozen(capabilities), true);
+  assert.equal(Object.isFrozen(capabilities.supportedExtensions), true);
+  handle.stop();
+});
+
+test("rejects oversized decoded textures before uploading them", async () => {
+  const gl = fakeWebGl2({ maxTextureSize: 1024 });
+  await assert.rejects(start({
+    setup() { textureLoad("assets/large.png"); },
+  }, {
+    canvas: fakeCanvas(),
+    context: gl.context,
+    resourceLimits: { maxTextureDimension: 32 },
+    imageLoader: async () => ({ width: 64, height: 16 }),
+    onError() {},
+  }), /exceeding the 32px texture limit/);
+  assert.equal(gl.textureUploads.length, 1);
+});
+
 test("cancels a pending texture upload when its handle is disposed", async () => {
   const gl = fakeWebGl2();
   let rejectImage;
+  let requestSignal;
   let texture;
   const started = start(
     {
@@ -1366,13 +1524,15 @@ test("cancels a pending texture upload when its handle is disposed", async () =>
     {
       canvas: fakeCanvas(),
       context: gl.context,
-      imageLoader() {
+      imageLoader(_url, request) {
+        requestSignal = request.signal;
         return new Promise((_resolve, reject) => { rejectImage = reject; });
       },
       onError() {},
     },
   );
   await Promise.resolve();
+  assert.equal(requestSignal.aborted, true);
   rejectImage(new Error("late network failure"));
   const handle = await started;
   assert.equal(texture.loaded, false);
@@ -1750,6 +1910,9 @@ function fakeWebGl2(options = {}) {
   const clears = [];
   const uploads = [];
   const textureUploads = [];
+  const textureParameters = [];
+  const pixelStores = [];
+  const mipmaps = [];
   const uniform1fValues = [];
   const uniform3fvValues = [];
   const uniformMatrix4Values = [];
@@ -1785,15 +1948,30 @@ function fakeWebGl2(options = {}) {
     FRAGMENT_SHADER: 0x8b30,
     LEQUAL: 0x0203,
     LINEAR: 0x2601,
+    LINEAR_MIPMAP_LINEAR: 0x2703,
+    LINEAR_MIPMAP_NEAREST: 0x2701,
     LINK_STATUS: 0x8b82,
     INT: 0x1404,
+    MAX_COMBINED_TEXTURE_IMAGE_UNITS: 0x8b4d,
+    MAX_FRAGMENT_UNIFORM_VECTORS: 0x8dfd,
     MAX_TEXTURE_IMAGE_UNITS: 0x8872,
+    MAX_TEXTURE_SIZE: 0x0d33,
+    MAX_VERTEX_ATTRIBS: 0x8869,
+    MAX_VERTEX_TEXTURE_IMAGE_UNITS: 0x8b4c,
+    MAX_VERTEX_UNIFORM_VECTORS: 0x8dfb,
+    MIRRORED_REPEAT: 0x8370,
+    NEAREST: 0x2600,
+    NEAREST_MIPMAP_LINEAR: 0x2702,
+    NEAREST_MIPMAP_NEAREST: 0x2700,
     NO_ERROR: 0,
+    NONE: 0,
     ONE_MINUS_SRC_ALPHA: 0x0303,
     RGBA: 0x1908,
+    REPEAT: 0x2901,
     SAMPLER_2D: 0x8b5e,
     SRC_ALPHA: 0x0302,
     STATIC_DRAW: 0x88e4,
+    SHADING_LANGUAGE_VERSION: 0x8b8c,
     TEXTURE_MAG_FILTER: 0x2800,
     TEXTURE_MIN_FILTER: 0x2801,
     TEXTURE_WRAP_S: 0x2802,
@@ -1803,7 +1981,12 @@ function fakeWebGl2(options = {}) {
     TEXTURE_2D: 0x0de1,
     UNSIGNED_BYTE: 0x1401,
     UNSIGNED_INT: 0x1405,
+    UNPACK_COLORSPACE_CONVERSION_WEBGL: 0x9243,
+    UNPACK_FLIP_Y_WEBGL: 0x9240,
+    UNPACK_PREMULTIPLY_ALPHA_WEBGL: 0x9241,
+    BROWSER_DEFAULT_WEBGL: 0x9244,
     VERTEX_SHADER: 0x8b31,
+    VERSION: 0x1f02,
     activeTexture() {},
     attachShader() {},
     bindBuffer() {},
@@ -1867,7 +2050,20 @@ function fakeWebGl2(options = {}) {
     },
     getParameter(parameter) {
       if (parameter === 0x8872) return options.maxTextureUnits ?? 16;
+      if (parameter === 0x0d33) return options.maxTextureSize ?? 4096;
+      if (parameter === 0x8b4d) return options.maxCombinedTextureUnits ?? 32;
+      if (parameter === 0x8dfd) return options.maxFragmentUniformVectors ?? 224;
+      if (parameter === 0x8869) return options.maxVertexAttributes ?? 16;
+      if (parameter === 0x8b4c) return options.maxVertexTextureUnits ?? 16;
+      if (parameter === 0x8dfb) return options.maxVertexUniformVectors ?? 256;
+      if (parameter === 0x8b8c) return options.shadingLanguageVersion ?? "WebGL GLSL ES 3.00";
+      if (parameter === 0x1f02) return options.webglVersion ?? "WebGL 2.0";
+      if (parameter === 0x9240 || parameter === 0x9241) return false;
+      if (parameter === 0x9243) return 0x9244;
       return null;
+    },
+    getSupportedExtensions() {
+      return options.supportedExtensions ?? [];
     },
     getProgramInfoLog() {
       return "";
@@ -1894,11 +2090,15 @@ function fakeWebGl2(options = {}) {
       return value?.texture === true;
     },
     linkProgram() {},
+    generateMipmap(target) { mipmaps.push(target); },
+    pixelStorei(parameter, value) { pixelStores.push([parameter, value]); },
     shaderSource() {},
     texImage2D(...args) {
       textureUploads.push(args);
     },
-    texParameteri() {},
+    texParameteri(target, parameter, value) {
+      textureParameters.push([target, parameter, value]);
+    },
     uniform2f() {},
     uniform1f(_location, value) {
       uniform1fValues.push(value);
@@ -1928,6 +2128,9 @@ function fakeWebGl2(options = {}) {
     clears,
     uploads,
     textureUploads,
+    textureParameters,
+    pixelStores,
+    mipmaps,
     uniform1fValues,
     uniform3fvValues,
     uniformMatrix4Values,
