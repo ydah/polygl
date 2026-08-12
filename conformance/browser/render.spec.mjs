@@ -26,7 +26,8 @@ const languageFiles = {
 
 let buildRoot;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({}, testInfo) => {
+  testInfo.setTimeout(180_000);
   run("cargo", ["build", "--quiet", "-p", "polygl-cli"]);
   buildRoot = await mkdtemp(path.join(tmpdir(), "polygl-conformance-"));
   for (const item of browserCases) {
