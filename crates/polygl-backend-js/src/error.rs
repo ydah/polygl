@@ -8,6 +8,7 @@ pub enum EmitError {
     DuplicateSource(SourceId),
     MissingSource(SourceId),
     InvalidSpan(SpanError),
+    InvalidProgram(&'static str),
 }
 
 impl fmt::Display for EmitError {
@@ -20,6 +21,7 @@ impl fmt::Display for EmitError {
                 write!(formatter, "source id {} is not registered", source.raw())
             }
             Self::InvalidSpan(error) => error.fmt(formatter),
+            Self::InvalidProgram(reason) => write!(formatter, "invalid Host LIR: {reason}"),
         }
     }
 }
@@ -28,7 +30,7 @@ impl Error for EmitError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::InvalidSpan(error) => Some(error),
-            Self::DuplicateSource(_) | Self::MissingSource(_) => None,
+            Self::DuplicateSource(_) | Self::MissingSource(_) | Self::InvalidProgram(_) => None,
         }
     }
 }

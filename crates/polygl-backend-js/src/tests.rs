@@ -522,6 +522,36 @@ fn reports_missing_and_duplicate_source_ids() {
 }
 
 #[test]
+fn rejects_malformed_host_lir_without_panicking() {
+    let source = source();
+    let mut uniform_module = sample_module(&source);
+    let module_span = uniform_module.span;
+    uniform_module.entries[0].body.statements.push(statement(
+        StatementKind::Expr(expression(
+            ExprKind::Uniform("time".to_owned()),
+            Type::Float,
+            module_span,
+        )),
+        module_span,
+    ));
+    assert_eq!(
+        JavaScriptBackend::default().generate(&uniform_module, std::slice::from_ref(&source)),
+        Err(EmitError::InvalidProgram(
+            "Host programs cannot contain shader uniforms"
+        ))
+    );
+
+    let mut shader_entry = sample_module(&source);
+    shader_entry.entries[0].kind = EntryKind::Vertex("main".to_owned());
+    assert_eq!(
+        JavaScriptBackend::default().generate(&shader_entry, std::slice::from_ref(&source)),
+        Err(EmitError::InvalidProgram(
+            "shader entries cannot have the Host domain"
+        ))
+    );
+}
+
+#[test]
 fn configures_external_inline_and_omitted_source_maps() {
     let source = source();
     let module = sample_module(&source);

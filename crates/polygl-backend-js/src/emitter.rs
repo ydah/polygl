@@ -164,7 +164,7 @@ impl<'source> Emitter<'source> {
             self.indent();
             self.mark(entry.span)?;
             self.write("export function ");
-            self.write(entry_name(&entry.kind));
+            self.write(entry_name(&entry.kind)?);
             self.begin_callable();
             self.push_scope();
             self.parameters(entry.params.iter().map(|parameter| parameter.name.as_str()));
@@ -481,7 +481,11 @@ impl<'source> Emitter<'source> {
             ExprKind::Literal(literal) => self.literal(literal),
             ExprKind::Variable(name) => self.write(&self.binding(name)),
             ExprKind::Constant(name) => self.write(&constant_identifier(name)),
-            ExprKind::Uniform(_) => unreachable!("Host programs cannot contain shader uniforms"),
+            ExprKind::Uniform(_) => {
+                return Err(EmitError::InvalidProgram(
+                    "Host programs cannot contain shader uniforms",
+                ));
+            }
             ExprKind::Binary { op, left, right } => {
                 self.binary(*op, left, right, &expression.ty, expression.span)?;
             }
@@ -857,14 +861,14 @@ impl<'source> Emitter<'source> {
     }
 }
 
-fn entry_name(kind: &EntryKind) -> &str {
+fn entry_name(kind: &EntryKind) -> Result<&str, EmitError> {
     match kind {
-        EntryKind::Setup => "setup",
-        EntryKind::Frame => "frame",
-        EntryKind::OnEvent => "on_event",
-        EntryKind::Vertex(_) | EntryKind::Fragment(_) => {
-            unreachable!("the JavaScript backend emits only Host entries")
-        }
+        EntryKind::Setup => Ok("setup"),
+        EntryKind::Frame => Ok("frame"),
+        EntryKind::OnEvent => Ok("on_event"),
+        EntryKind::Vertex(_) | EntryKind::Fragment(_) => Err(EmitError::InvalidProgram(
+            "shader entries cannot have the Host domain",
+        )),
     }
 }
 
