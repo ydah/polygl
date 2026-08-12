@@ -92,8 +92,10 @@ gh run download RUN_ID --name release-preflight
 ```
 
 `workflow_dispatch` is publish-free. It validates the version contract, builds
-all five native targets, checks `polygl --version`, validates the archives and
-legal files, builds and tests the complete Cargo workspace, assembles every
+all five native targets, checks `polygl --version`, enforces macOS 11.0 and
+glibc 2.39 compatibility floors, validates byte-reproducible archives and
+legal files, installs each launcher/native tarball pair in an empty project,
+builds and tests the complete Cargo workspace, assembles every
 publishable `.crate`, runs the npm tests, and verifies the name, version, exact
 file set, native executable, legal files, platform `os`/`cpu`, and launcher
 `bin.polygl` mapping in every packed npm tarball. It retains checksummed
@@ -136,11 +138,15 @@ gh run watch RUN_ID --exit-status
 
 After approval in the `release` environment, the workflow:
 
-1. publishes Rust crates in the dependency stages from ADR 0029;
-2. publishes five native npm packages, waits for them, then publishes the
+1. generates a CycloneDX 1.6 SBOM, signs its association with all five native
+   archives through GitHub OIDC/Sigstore attestations, and publishes both the
+   SBOM and checksums;
+2. publishes Rust crates in the dependency stages from ADR 0029;
+3. publishes five native npm packages, waits for them, then publishes the
    launcher with `next` for prereleases or `latest` for stable versions;
-3. creates the GitHub Release only after both registries succeed, marking
-   prereleases and attaching the verified archives and `SHA256SUMS`.
+4. creates the GitHub Release only after both registries succeed, marking
+   prereleases and attaching the verified archives, SBOM, subject checksums,
+   and complete `SHA256SUMS`.
 
 ## Recover a partial release
 

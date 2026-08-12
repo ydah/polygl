@@ -81,24 +81,31 @@ jobs:
             target: x86_64-unknown-linux-gnu
             package: linux-x64
             binary: polygl
+            platform: linux
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             package: linux-arm64
             binary: polygl
+            platform: linux
           - runner: macos-15-intel
             target: x86_64-apple-darwin
             package: darwin-x64
             binary: polygl
+            platform: macos
           - runner: macos-14
             target: aarch64-apple-darwin
             package: darwin-arm64
             binary: polygl
+            platform: macos
           - runner: windows-2025
             target: x86_64-pc-windows-msvc
             package: win32-x64
             binary: polygl.exe
+            platform: windows
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -108,6 +115,11 @@ jobs:
 
       - name: Add release target
         run: rustup target add ${{ matrix.target }}
+
+      - name: Install Node.js for deterministic packaging
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
 
       - name: Build native executable
         run: cargo build --locked --release --target ${{ matrix.target }} -p polygl-cli
@@ -123,7 +135,14 @@ jobs:
             exit 1
           fi
 
-      - name: Stage npm and release artifacts
+      - name: Verify platform compatibility floor
+        shell: bash
+        run: >-
+          scripts/check-platform-minimum.sh
+          "target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          "${{ matrix.platform }}"
+
+      - name: Stage npm and reproducible release artifacts
         shell: bash
         run: |
           mkdir -p "bundle/${{ matrix.package }}" release/stage
@@ -132,12 +151,12 @@ jobs:
           cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" \
             "release/stage/${{ matrix.binary }}"
           cp LICENSE-MIT LICENSE-APACHE THIRD_PARTY_LICENSES.txt release/stage/
-          tar -C release/stage -czf \
+          node npm/scripts/create-release-archive.mjs \
             "release/polygl-${{ needs.validate.outputs.version }}-${{ matrix.target }}.tar.gz" \
-            "${{ matrix.binary }}" \
-            LICENSE-MIT \
-            LICENSE-APACHE \
-            THIRD_PARTY_LICENSES.txt
+            "release/stage/${{ matrix.binary }}" \
+            release/stage/LICENSE-MIT \
+            release/stage/LICENSE-APACHE \
+            release/stage/THIRD_PARTY_LICENSES.txt
 
       - name: Upload native artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -180,11 +199,35 @@ jobs:
           artifacts
           .
 
-      - name: Generate archive checksums
+      - name: Install checksum-verified OSV-Scanner 2.4.0
+        shell: bash
+        run: |
+          curl --fail --location --silent --show-error \
+            --output osv-scanner \
+            https://github.com/google/osv-scanner/releases/download/v2.4.0/osv-scanner_linux_amd64
+          echo "15314940c10d26af9c6649f150b8a47c1262e8fc7e17b1d1029b0e479e8ed8a0  osv-scanner" \
+            | sha256sum --check --strict
+          chmod 0755 osv-scanner
+
+      - name: Generate release SBOM
+        run: >-
+          ./osv-scanner scan source
+          --config osv-scanner.toml
+          --lockfile Cargo.lock
+          --format cyclonedx-1-6
+          --all-packages
+          --output-file
+          "artifacts/release/polygl-${{ needs.validate.outputs.version }}.cdx.json"
+
+      - name: Validate SBOM and generate checksums
         shell: bash
         run: |
           cd artifacts/release
-          sha256sum ./*.tar.gz > SHA256SUMS
+          jq -e \
+            '.bomFormat == "CycloneDX" and .specVersion == "1.6" and (.components | length > 0)' \
+            "polygl-${{ needs.validate.outputs.version }}.cdx.json"
+          sha256sum ./*.tar.gz | LC_ALL=C sort > ARTIFACT_SHA256SUMS
+          sha256sum ./*.tar.gz ./*.cdx.json | LC_ALL=C sort > SHA256SUMS
           sha256sum --check SHA256SUMS
 
       - name: Build the complete Cargo workspace
@@ -251,10 +294,82 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  install-test:
+    name: Install packed npm CLI / ${{ matrix.package }}
+    needs: [validate, preflight]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            package: linux-x64
+          - runner: ubuntu-24.04-arm
+            package: linux-arm64
+          - runner: macos-15-intel
+            package: darwin-x64
+          - runner: macos-14
+            package: darwin-arm64
+          - runner: windows-2025
+            package: win32-x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download verified packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-preflight
+          path: release-preflight
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: Install both local tarballs into an empty project
+        shell: bash
+        run: |
+          project="$(mktemp -d)"
+          cd "$project"
+          npm init --yes
+          npm install --ignore-scripts --no-audit --no-fund \
+            "$GITHUB_WORKSPACE/release-preflight/preflight/npm-packages/polygl-cli.tgz" \
+            "$GITHUB_WORKSPACE/release-preflight/preflight/npm-packages/polygl-cli-${{ matrix.package }}.tgz"
+          ./node_modules/.bin/polygl --version \
+            | grep -Fx "polygl ${{ needs.validate.outputs.version }}"
+          ./node_modules/.bin/polygl build \
+            "$GITHUB_WORKSPACE/examples/triangle.rb" --release -o dist
+          test -f dist/polygl-manifest.json
+
+  attest:
+    name: Attest native archives and SBOM
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [validate, preflight, install-test]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Download verified release payloads
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-preflight
+          path: release-preflight
+
+      - name: Generate signed SBOM attestations
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-checksums: release-preflight/artifacts/release/ARTIFACT_SHA256SUMS
+          sbom-path: release-preflight/artifacts/release/polygl-${{ needs.validate.outputs.version }}.cdx.json
+
   crates-publish:
     name: Publish crates.io packages
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [validate, preflight]
+    needs: [validate, preflight, attest]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     environment: release
@@ -272,7 +387,7 @@ jobs:
   npm-publish:
     name: Publish npm packages
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [validate, preflight]
+    needs: [validate, preflight, attest]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: release
@@ -328,10 +443,12 @@ jobs:
           PRERELEASE: ${{ needs.validate.outputs.prerelease }}
         run: |
           archives=(release-preflight/artifacts/release/*.tar.gz)
+          sbom=release-preflight/artifacts/release/polygl-${{ needs.validate.outputs.version }}.cdx.json
           checksums=release-preflight/artifacts/release/SHA256SUMS
+          artifact_checksums=release-preflight/artifacts/release/ARTIFACT_SHA256SUMS
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" \
-              "${archives[@]}" "$checksums" \
+              "${archives[@]}" "$sbom" "$checksums" "$artifact_checksums" \
               --clobber \
               --repo "$GITHUB_REPOSITORY"
             if [[ "$PRERELEASE" == "true" ]]; then
@@ -353,7 +470,7 @@ jobs:
             prerelease+=(--prerelease)
           fi
           gh release create "$GITHUB_REF_NAME" \
-            "${archives[@]}" "$checksums" \
+            "${archives[@]}" "$sbom" "$checksums" "$artifact_checksums" \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "$GITHUB_REF_NAME" \
