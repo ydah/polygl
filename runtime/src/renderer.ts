@@ -1,3 +1,5 @@
+import { WebGLStateCache } from "./webgl-state.js";
+
 type Color = readonly [number, number, number, number];
 type Matrix2D = readonly [
   number,
@@ -13,6 +15,8 @@ export type StrokeJoin = "miter" | "bevel" | "round";
 
 export interface BatchRendererStats {
   readonly drawCalls: number;
+  readonly flushes: number;
+  readonly vertices: number;
   readonly triangles: number;
   readonly uploadedBytes: number;
   readonly bufferGrowths: number;
@@ -46,6 +50,7 @@ const MIN_CIRCLE_SEGMENTS = 8;
 const MAX_CIRCLE_SEGMENTS = 512;
 
 export class WebGL2BatchRenderer {
+  public readonly stateCache: WebGLStateCache;
   private readonly gl: WebGL2RenderingContext;
   private readonly program: WebGLProgram;
   private readonly buffer: WebGLBuffer;
@@ -86,6 +91,7 @@ export class WebGL2BatchRenderer {
       throw new Error("WebGL2 is not available");
     }
     this.gl = gl;
+    this.stateCache = new WebGLStateCache(gl);
     this.program = createProgram(gl);
     const buffer = gl.createBuffer();
     if (buffer === null) {
@@ -114,11 +120,10 @@ export class WebGL2BatchRenderer {
     this.colorAttribute = color;
     this.resolution = resolution;
 
-    gl.useProgram(this.program);
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    gl.bindVertexArray(this.vertexArray);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+    this.stateCache.useProgram(this.program);
+    this.stateCache.enableBlend();
+    this.stateCache.bindVertexArray(this.vertexArray);
+    this.stateCache.bindArrayBuffer(this.buffer);
     gl.enableVertexAttribArray(this.positionAttribute);
     gl.vertexAttribPointer(
       this.positionAttribute,
@@ -137,7 +142,7 @@ export class WebGL2BatchRenderer {
       FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT,
       2 * Float32Array.BYTES_PER_ELEMENT,
     );
-    gl.bindVertexArray(null);
+    this.stateCache.bindVertexArray(null);
     let overlay: Canvas2DTextOverlay | undefined;
     try {
       overlay = Canvas2DTextOverlay.attach(canvas, documentObject);
@@ -209,6 +214,8 @@ export class WebGL2BatchRenderer {
   public stats(): BatchRendererStats {
     return Object.freeze({
       drawCalls: this.drawCalls,
+      flushes: this.drawCalls,
+      vertices: this.triangles * 3,
       triangles: this.triangles,
       uploadedBytes: this.uploadedBytes,
       bufferGrowths: this.bufferGrowths,
@@ -345,10 +352,11 @@ export class WebGL2BatchRenderer {
       return;
     }
     const gl = this.gl;
-    gl.disable(gl.DEPTH_TEST);
-    gl.bindVertexArray(this.vertexArray);
-    gl.useProgram(this.program);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+    this.stateCache.setDepthTest(false);
+    this.stateCache.enableBlend();
+    this.stateCache.bindVertexArray(this.vertexArray);
+    this.stateCache.useProgram(this.program);
+    this.stateCache.bindArrayBuffer(this.buffer);
     const byteLength = this.vertexFloatCount * Float32Array.BYTES_PER_ELEMENT;
     if (byteLength > this.bufferCapacityBytes) {
       this.bufferCapacityBytes = geometricCapacity(
@@ -373,7 +381,7 @@ export class WebGL2BatchRenderer {
     this.triangles += this.vertexFloatCount / (FLOATS_PER_VERTEX * 3);
     this.uploadedBytes += byteLength;
     this.vertexFloatCount = 0;
-    gl.bindVertexArray(null);
+    this.stateCache.bindVertexArray(null);
   }
 
   public dispose(): void {

@@ -283,6 +283,8 @@ function isDenseIndex(key, length) {
 }
 export function readRuntimeCapabilities(gl) {
     return Object.freeze({
+        vendor: stringParameter(gl, gl.VENDOR, "WebGL vendor"),
+        renderer: stringParameter(gl, gl.RENDERER, "WebGL renderer"),
         webglVersion: stringParameter(gl, gl.VERSION, "WebGL version"),
         shadingLanguageVersion: stringParameter(gl, gl.SHADING_LANGUAGE_VERSION, "shading language version"),
         maxTextureSize: positiveIntegerParameter(gl, gl.MAX_TEXTURE_SIZE, "maximum texture size"),
@@ -370,6 +372,7 @@ export function validateRuntimeOptions(value) {
     const createResizeObserver = optionalFunction(properties, "createResizeObserver");
     const focusOnPointerDown = optionalBoolean(properties, "focusOnPointerDown");
     const preventDefaultInput = optionalBoolean(properties, "preventDefaultInput");
+    const externalWebGLPolicy = optionalStringChoice(properties, "externalWebGLPolicy", ["exclusive", "reset"]);
     return Object.freeze({
         ...(canvas === undefined ? {} : { canvas }),
         ...(context === undefined ? {} : { context }),
@@ -393,6 +396,7 @@ export function validateRuntimeOptions(value) {
         ...(createResizeObserver === undefined ? {} : { createResizeObserver }),
         ...(focusOnPointerDown === undefined ? {} : { focusOnPointerDown }),
         ...(preventDefaultInput === undefined ? {} : { preventDefaultInput }),
+        ...(externalWebGLPolicy === undefined ? {} : { externalWebGLPolicy }),
     });
 }
 function validateResourceLimits(value) {
@@ -1082,6 +1086,109 @@ function boundedSegments(value, label, minimum = 3) {
     }
     return value;
 }
+export class WebGLStateCache {
+    constructor(gl) {
+        this.gl = gl;
+        this.blendAlphaConfigured = false;
+        this.textures2d = new Map();
+        this.changeCount = 0;
+        this.switchCount = 0;
+    }
+    useProgram(program) {
+        if (this.program === program)
+            return;
+        this.gl.useProgram(program);
+        this.program = program;
+        this.changeCount += 1;
+        this.switchCount += 1;
+    }
+    bindArrayBuffer(buffer) {
+        if (this.arrayBuffer === buffer)
+            return;
+        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, buffer);
+        this.arrayBuffer = buffer;
+        this.changeCount += 1;
+    }
+    bindElementArrayBuffer(buffer) {
+        if (this.elementArrayBuffer === buffer)
+            return;
+        this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, buffer);
+        this.elementArrayBuffer = buffer;
+        this.changeCount += 1;
+    }
+    bindVertexArray(vertexArray) {
+        if (this.vertexArray === vertexArray)
+            return;
+        this.gl.bindVertexArray(vertexArray);
+        this.vertexArray = vertexArray;
+        this.changeCount += 1;
+        this.elementArrayBuffer = undefined;
+    }
+    enableBlend() {
+        if (this.blendEnabled !== true) {
+            this.gl.enable(this.gl.BLEND);
+            this.blendEnabled = true;
+            this.changeCount += 1;
+        }
+        if (!this.blendAlphaConfigured) {
+            this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
+            this.blendAlphaConfigured = true;
+            this.changeCount += 1;
+        }
+    }
+    setDepthTest(enabled) {
+        if (this.depthEnabled === enabled)
+            return;
+        if (enabled)
+            this.gl.enable(this.gl.DEPTH_TEST);
+        else
+            this.gl.disable(this.gl.DEPTH_TEST);
+        this.depthEnabled = enabled;
+        this.changeCount += 1;
+    }
+    setDepthFunction(value) {
+        if (this.depthFunction === value)
+            return;
+        this.gl.depthFunc(value);
+        this.depthFunction = value;
+        this.changeCount += 1;
+    }
+    activateTexture(unit) {
+        if (this.activeTextureUnit === unit)
+            return;
+        this.gl.activeTexture(unit);
+        this.activeTextureUnit = unit;
+        this.changeCount += 1;
+    }
+    bindTexture2d(texture) {
+        const unit = this.activeTextureUnit ?? this.gl.TEXTURE0;
+        if (this.activeTextureUnit === undefined)
+            this.activateTexture(unit);
+        if (this.textures2d.get(unit) === texture)
+            return;
+        this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
+        this.textures2d.set(unit, texture);
+        this.changeCount += 1;
+    }
+    invalidate() {
+        this.program = undefined;
+        this.arrayBuffer = undefined;
+        this.elementArrayBuffer = undefined;
+        this.vertexArray = undefined;
+        this.blendEnabled = undefined;
+        this.depthEnabled = undefined;
+        this.blendAlphaConfigured = false;
+        this.depthFunction = undefined;
+        this.activeTextureUnit = undefined;
+        this.textures2d.clear();
+    }
+    stats() {
+        return Object.freeze({
+            stateChanges: this.changeCount,
+            programSwitches: this.switchCount,
+        });
+    }
+}
 const FLOATS_PER_VERTEX = 6;
 const IDENTITY_TRANSFORM = [1, 0, 0, 1, 0, 0];
 const MAX_FLOAT32 = 3.4028234663852886e38;
@@ -1115,6 +1222,7 @@ export class WebGL2BatchRenderer {
             throw new Error("WebGL2 is not available");
         }
         this.gl = gl;
+        this.stateCache = new WebGLStateCache(gl);
         this.program = createProgram(gl);
         const buffer = gl.createBuffer();
         if (buffer === null) {
@@ -1141,16 +1249,15 @@ export class WebGL2BatchRenderer {
         this.positionAttribute = position;
         this.colorAttribute = color;
         this.resolution = resolution;
-        gl.useProgram(this.program);
-        gl.enable(gl.BLEND);
-        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-        gl.bindVertexArray(this.vertexArray);
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+        this.stateCache.useProgram(this.program);
+        this.stateCache.enableBlend();
+        this.stateCache.bindVertexArray(this.vertexArray);
+        this.stateCache.bindArrayBuffer(this.buffer);
         gl.enableVertexAttribArray(this.positionAttribute);
         gl.vertexAttribPointer(this.positionAttribute, 2, gl.FLOAT, false, FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT, 0);
         gl.enableVertexAttribArray(this.colorAttribute);
         gl.vertexAttribPointer(this.colorAttribute, 4, gl.FLOAT, false, FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT, 2 * Float32Array.BYTES_PER_ELEMENT);
-        gl.bindVertexArray(null);
+        this.stateCache.bindVertexArray(null);
         let overlay;
         try {
             overlay = Canvas2DTextOverlay.attach(canvas, documentObject);
@@ -1213,6 +1320,8 @@ export class WebGL2BatchRenderer {
     stats() {
         return Object.freeze({
             drawCalls: this.drawCalls,
+            flushes: this.drawCalls,
+            vertices: this.triangles * 3,
             triangles: this.triangles,
             uploadedBytes: this.uploadedBytes,
             bufferGrowths: this.bufferGrowths,
@@ -1298,10 +1407,11 @@ export class WebGL2BatchRenderer {
             return;
         }
         const gl = this.gl;
-        gl.disable(gl.DEPTH_TEST);
-        gl.bindVertexArray(this.vertexArray);
-        gl.useProgram(this.program);
-        gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
+        this.stateCache.setDepthTest(false);
+        this.stateCache.enableBlend();
+        this.stateCache.bindVertexArray(this.vertexArray);
+        this.stateCache.useProgram(this.program);
+        this.stateCache.bindArrayBuffer(this.buffer);
         const byteLength = this.vertexFloatCount * Float32Array.BYTES_PER_ELEMENT;
         if (byteLength > this.bufferCapacityBytes) {
             this.bufferCapacityBytes = geometricCapacity(Math.max(Float32Array.BYTES_PER_ELEMENT, this.bufferCapacityBytes), byteLength);
@@ -1315,7 +1425,7 @@ export class WebGL2BatchRenderer {
         this.triangles += this.vertexFloatCount / (FLOATS_PER_VERTEX * 3);
         this.uploadedBytes += byteLength;
         this.vertexFloatCount = 0;
-        gl.bindVertexArray(null);
+        this.stateCache.bindVertexArray(null);
     }
     dispose() {
         this.vertexFloatCount = 0;
@@ -1798,9 +1908,10 @@ const IDENTITY_MATRIX = new Float32Array([
     0, 0, 0, 1,
 ]);
 export class WebGL2ShaderRegistry {
-    constructor(gl, debug, artifacts, maxPrograms) {
+    constructor(gl, debug, artifacts, maxPrograms, stateCache = new WebGLStateCache(gl)) {
         this.gl = gl;
         this.debug = debug;
+        this.stateCache = stateCache;
         this.shaders = new Map();
         this.materials = new WeakMap();
         this.compileLinkMilliseconds = 0;
@@ -1826,7 +1937,7 @@ export class WebGL2ShaderRegistry {
             throw error;
         }
     }
-    static fromBundle(gl, bundle, requireShaderAbi = false, maxPrograms) {
+    static fromBundle(gl, bundle, requireShaderAbi = false, maxPrograms, stateCache) {
         const validatedBundle = bundle === undefined
             ? undefined
             : validateShaderBundle(bundle);
@@ -1835,7 +1946,7 @@ export class WebGL2ShaderRegistry {
             validatedBundle.shaderAbi !== shaderAbi) {
             throw new Error(`generated shader bundle requires shader ABI ${String(validatedBundle.shaderAbi ?? "missing")}; this runtime provides shader ABI ${shaderAbi}`);
         }
-        return new WebGL2ShaderRegistry(gl, validatedBundle?.debug ?? false, validatedBundle?.shaders ?? [], maxPrograms);
+        return new WebGL2ShaderRegistry(gl, validatedBundle?.debug ?? false, validatedBundle?.shaders ?? [], maxPrograms, stateCache);
     }
     setUniform(shaderName, uniformName, value) {
         const shader = this.shaders.get(shaderName);
@@ -1862,6 +1973,15 @@ export class WebGL2ShaderRegistry {
             uniformUploads: this.uniformUploads,
         });
     }
+    invalidateUniformState() {
+        for (const shader of this.shaders.values()) {
+            shader.lastGlobalAutomatic = undefined;
+            shader.drawValues.clear();
+            for (const name of shader.userValues.keys()) {
+                shader.globalDirty.add(name);
+            }
+        }
+    }
     material(shaderName) {
         const shader = this.shaders.get(shaderName);
         if (shader === undefined) {
@@ -1883,7 +2003,7 @@ export class WebGL2ShaderRegistry {
     }
     bindForDraw(material, userValues, automatic) {
         const shader = this.requireMaterial(material);
-        this.gl.useProgram(shader.program);
+        this.stateCache.useProgram(shader.program);
         let textureUnit = 0;
         for (const binding of shader.artifact.uniforms) {
             const location = shader.uniforms.get(binding.name);
@@ -1933,7 +2053,7 @@ export class WebGL2ShaderRegistry {
                         continue;
                     }
                     if (!programBound) {
-                        this.gl.useProgram(shader.program);
+                        this.stateCache.useProgram(shader.program);
                         programBound = true;
                     }
                     this.beginUploadScope(shader, binding);
@@ -1955,7 +2075,7 @@ export class WebGL2ShaderRegistry {
                     continue;
                 }
                 if (!programBound) {
-                    this.gl.useProgram(shader.program);
+                    this.stateCache.useProgram(shader.program);
                     programBound = true;
                 }
                 this.beginUploadScope(shader, binding);
@@ -2091,8 +2211,8 @@ export class WebGL2ShaderRegistry {
                 this.gl.uniformMatrix4fv(location, false, value);
                 return textureUnit;
             case "texture":
-                this.gl.activeTexture(this.gl.TEXTURE0 + textureUnit);
-                this.gl.bindTexture(this.gl.TEXTURE_2D, value);
+                this.stateCache.activateTexture(this.gl.TEXTURE0 + textureUnit);
+                this.stateCache.bindTexture2d(value);
                 this.gl.uniform1i(location, textureUnit);
                 return textureUnit + 1;
         }
@@ -2334,7 +2454,7 @@ function monotonicMilliseconds() {
 const sceneOwnerBrand = Symbol("SceneOwner");
 const sceneHandleInfo = new WeakMap();
 export class WebGL2SceneRenderer {
-    constructor(gl, shaderRegistry, documentObject, imageLoader = defaultImageLoader, onAsyncError = () => { }, resourceLimits = {}, textureFailurePolicy = "stop", onTextureError = () => { }) {
+    constructor(gl, shaderRegistry, documentObject, imageLoader = defaultImageLoader, onAsyncError = () => { }, resourceLimits = {}, textureFailurePolicy = "stop", onTextureError = () => { }, stateCache = new WebGLStateCache(gl)) {
         this.gl = gl;
         this.documentObject = documentObject;
         this.imageLoader = imageLoader;
@@ -2342,6 +2462,7 @@ export class WebGL2SceneRenderer {
         this.resourceLimits = resourceLimits;
         this.textureFailurePolicy = textureFailurePolicy;
         this.onTextureError = onTextureError;
+        this.stateCache = stateCache;
         this.owner = {};
         this.meshes = new Set();
         this.nodes = new Set();
@@ -2516,7 +2637,8 @@ export class WebGL2SceneRenderer {
         if (texture === null) {
             throw new Error(`failed to create texture for \`${safePath}\``);
         }
-        this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
+        this.stateCache.activateTexture(this.gl.TEXTURE0);
+        this.stateCache.bindTexture2d(texture);
         this.applyTextureParameters(safeOptions);
         this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, 1, 1, 0, this.gl.RGBA, this.gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
         let resource;
@@ -2611,8 +2733,8 @@ export class WebGL2SceneRenderer {
         }
         const view = lookAt4(this.camera.eye, this.camera.target, this.camera.up);
         const projection = perspective4(this.camera.verticalFov, Math.max(1, width) / Math.max(1, height), this.camera.near, this.camera.far);
-        this.gl.enable(this.gl.DEPTH_TEST);
-        this.gl.depthFunc(this.gl.LEQUAL);
+        this.stateCache.setDepthTest(true);
+        this.stateCache.setDepthFunction(this.gl.LEQUAL);
         this.gl.clear(this.gl.DEPTH_BUFFER_BIT);
         const opaque = [];
         const transparent = [];
@@ -2637,16 +2759,15 @@ export class WebGL2SceneRenderer {
         }
         if (transparent.length > 0) {
             transparent.sort((left, right) => right.depth - left.depth);
-            this.gl.enable(this.gl.BLEND);
-            this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
+            this.stateCache.enableBlend();
             this.gl.depthMask(false);
             for (const item of transparent) {
                 this.drawItem(item, view, projection, elapsedSeconds, width, height);
             }
             this.gl.depthMask(true);
         }
-        this.gl.bindVertexArray(null);
-        this.gl.disable(this.gl.DEPTH_TEST);
+        this.stateCache.bindVertexArray(null);
+        this.stateCache.setDepthTest(false);
     }
     dispose() {
         if (this.disposed) {
@@ -2689,9 +2810,10 @@ export class WebGL2SceneRenderer {
                 this.gl.deleteBuffer(indexBuffer);
             throw new Error("failed to create mesh buffers");
         }
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, vertexBuffer);
+        this.stateCache.bindVertexArray(null);
+        this.stateCache.bindArrayBuffer(vertexBuffer);
         this.gl.bufferData(this.gl.ARRAY_BUFFER, data.vertices, this.gl.STATIC_DRAW);
-        this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+        this.stateCache.bindElementArrayBuffer(indexBuffer);
         this.gl.bufferData(this.gl.ELEMENT_ARRAY_BUFFER, data.indices, this.gl.STATIC_DRAW);
         const handle = opaqueHandle("mesh", this.owner);
         const mesh = {
@@ -2715,16 +2837,16 @@ export class WebGL2SceneRenderer {
             .join("|");
         const cached = mesh.vertexArrays.get(layoutKey);
         if (cached !== undefined) {
-            this.gl.bindVertexArray(cached);
+            this.stateCache.bindVertexArray(cached);
             return;
         }
         const vertexArray = this.gl.createVertexArray();
         if (vertexArray === null) {
             throw new Error("failed to create a mesh vertex array");
         }
-        this.gl.bindVertexArray(vertexArray);
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, mesh.vertexBuffer);
-        this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, mesh.indexBuffer);
+        this.stateCache.bindVertexArray(vertexArray);
+        this.stateCache.bindArrayBuffer(mesh.vertexBuffer);
+        this.stateCache.bindElementArrayBuffer(mesh.indexBuffer);
         const stride = FLOATS_PER_MESH_VERTEX * Float32Array.BYTES_PER_ELEMENT;
         for (const attribute of attributes) {
             const layout = ATTRIBUTE_LAYOUT[attribute.name];
@@ -2775,7 +2897,7 @@ export class WebGL2SceneRenderer {
     bindBasic(material, model, view, projection) {
         const basic = this.basicProgram ?? this.createBasicProgram();
         this.basicProgram = basic;
-        this.gl.useProgram(basic.program);
+        this.stateCache.useProgram(basic.program);
         this.gl.uniformMatrix4fv(basic.model, false, model);
         this.gl.uniformMatrix4fv(basic.view, false, view);
         this.gl.uniformMatrix4fv(basic.projection, false, projection);
@@ -2839,7 +2961,8 @@ export class WebGL2SceneRenderer {
             dimensions.height > dimensionLimit) {
             throw new RangeError(`texture \`${handle.path}\` is ${dimensions.width}x${dimensions.height}, exceeding the ${dimensionLimit}px texture limit`);
         }
-        this.gl.bindTexture(this.gl.TEXTURE_2D, handle.texture);
+        this.stateCache.activateTexture(this.gl.TEXTURE0);
+        this.stateCache.bindTexture2d(handle.texture);
         this.withTextureUnpackState(handle.options, () => {
             this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, this.gl.RGBA, this.gl.UNSIGNED_BYTE, image);
         });
@@ -3498,6 +3621,7 @@ export class RuntimeSession {
         this.visibilityPolicy = options.visibilityPolicy ?? "continue";
         this.focusOnPointerDown = options.focusOnPointerDown ?? false;
         this.preventDefaultInput = options.preventDefaultInput ?? false;
+        this.externalWebGLPolicy = options.externalWebGLPolicy ?? "exclusive";
         this.configuredDevicePixelRatio = options.devicePixelRatio === undefined
             ? undefined
             : positiveFinite(options.devicePixelRatio, "devicePixelRatio");
@@ -3505,8 +3629,8 @@ export class RuntimeSession {
         this.documentObject = options.document ?? globalThis.document;
         this.windowObject = this.documentObject?.defaultView ?? undefined;
         this.renderer = new WebGL2BatchRenderer(canvas, options.context, this.documentObject);
-        this.shaderRegistry = WebGL2ShaderRegistry.fromBundle(this.renderer.context, undefined, false, options.resourceLimits?.maxShaderPrograms);
-        this.scene = new WebGL2SceneRenderer(this.renderer.context, this.shaderRegistry, this.documentObject, options.imageLoader, (reason) => this.fail(reason), options.resourceLimits, options.textureFailurePolicy, options.onTextureError);
+        this.shaderRegistry = WebGL2ShaderRegistry.fromBundle(this.renderer.context, undefined, false, options.resourceLimits?.maxShaderPrograms, this.renderer.stateCache);
+        this.scene = new WebGL2SceneRenderer(this.renderer.context, this.shaderRegistry, this.documentObject, options.imageLoader, (reason) => this.fail(reason), options.resourceLimits, options.textureFailurePolicy, options.onTextureError, this.renderer.stateCache);
         this.resourceLimits = options.resourceLimits ?? {};
         this.initialShaderBundle = options.shaderBundle;
         this.requireRuntimeAbi = options.requireRuntimeAbi ?? false;
@@ -3615,7 +3739,12 @@ export class RuntimeSession {
             batch: this.renderer.stats(),
             scene: this.scene.stats(),
             shaders: this.shaderRegistry.stats(),
+            state: this.renderer.stateCache.stats(),
         });
+    }
+    invalidateWebGLState() {
+        this.renderer.stateCache.invalidate();
+        this.shaderRegistry.invalidateUniformState();
     }
     setShaderUniform(shaderName, uniformName, value) {
         this.shaderRegistry.setUniform(shaderName, uniformName, value);
@@ -3829,6 +3958,9 @@ export class RuntimeSession {
         this.shaderRegistry.updateAutomaticUniforms(this.elapsedSeconds, this.canvas.width, this.canvas.height);
     }
     render() {
+        if (this.externalWebGLPolicy === "reset") {
+            this.invalidateWebGLState();
+        }
         this.updateShaderUniforms();
         this.scene.render(this.elapsedSeconds, this.canvas.width, this.canvas.height);
         this.renderer.flush();
@@ -3836,7 +3968,7 @@ export class RuntimeSession {
     }
     replaceShaderBundle(bundle, requireShaderAbi = false) {
         this.shaderRegistry.dispose();
-        this.shaderRegistry = WebGL2ShaderRegistry.fromBundle(this.renderer.context, bundle, requireShaderAbi, this.resourceLimits.maxShaderPrograms);
+        this.shaderRegistry = WebGL2ShaderRegistry.fromBundle(this.renderer.context, bundle, requireShaderAbi, this.resourceLimits.maxShaderPrograms, this.renderer.stateCache);
         this.scene.replaceShaderRegistry(this.shaderRegistry);
     }
     fail(reason) {
@@ -4072,6 +4204,9 @@ export function runtimeCapabilities() {
 }
 export function runtimeStats() {
     return session().stats();
+}
+export function invalidateWebGLState() {
+    session().invalidateWebGLState();
 }
 export function floorToInt(value) {
     return saturatingInt(Math.floor(value));

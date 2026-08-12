@@ -116,6 +116,11 @@ export function validateRuntimeOptions(value: unknown): RuntimeOptions {
     properties,
     "preventDefaultInput",
   );
+  const externalWebGLPolicy = optionalStringChoice(
+    properties,
+    "externalWebGLPolicy",
+    ["exclusive", "reset"] as const,
+  );
 
   return Object.freeze({
     ...(canvas === undefined ? {} : { canvas }),
@@ -140,6 +145,7 @@ export function validateRuntimeOptions(value: unknown): RuntimeOptions {
     ...(createResizeObserver === undefined ? {} : { createResizeObserver }),
     ...(focusOnPointerDown === undefined ? {} : { focusOnPointerDown }),
     ...(preventDefaultInput === undefined ? {} : { preventDefaultInput }),
+    ...(externalWebGLPolicy === undefined ? {} : { externalWebGLPolicy }),
   } satisfies RuntimeOptions);
 }
 

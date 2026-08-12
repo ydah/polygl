@@ -18,6 +18,7 @@ const inputs = [
   "dist/validation.js",
   "dist/math3d.js",
   "dist/mesh.js",
+  "dist/webgl-state.js",
   "dist/renderer.js",
   "dist/shader.js",
   "dist/scene.js",

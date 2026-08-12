@@ -14,6 +14,7 @@ const {
   fill,
   floorToInt,
   formatRuntimeError,
+  invalidateWebGLState,
   keyDown,
   line,
   mapFromEntries,
@@ -151,6 +152,10 @@ test("validates runtime options without invoking accessors", async () => {
   await assert.rejects(
     start({}, { resourceLimits: { unexpected: 1 } }),
     /unknown runtime resource limit/,
+  );
+  await assert.rejects(
+    start({}, { externalWebGLPolicy: "preserve" }),
+    /externalWebGLPolicy.*"exclusive" or "reset"/,
   );
 
   const { context } = fakeWebGl2();
@@ -703,13 +708,75 @@ test("reuses geometric vertex buffers and exposes cumulative frame stats", async
   assert.deepEqual(
     {
       drawCalls: stats.batch.drawCalls,
+      flushes: stats.batch.flushes,
+      vertices: stats.batch.vertices,
       triangles: stats.batch.triangles,
       uploadedBytes: stats.batch.uploadedBytes,
       bufferGrowths: stats.batch.bufferGrowths,
     },
-    { drawCalls: 2, triangles: 2, uploadedBytes: 144, bufferGrowths: 1 },
+    {
+      drawCalls: 2,
+      flushes: 2,
+      vertices: 6,
+      triangles: 2,
+      uploadedBytes: 144,
+      bufferGrowths: 1,
+    },
   );
+  assert.ok(stats.state.stateChanges > 0);
+  assert.ok(stats.state.programSwitches > 0);
+  assert.equal(Object.isFrozen(stats.state), true);
   assert.equal(Object.isFrozen(stats), true);
+  handle.stop();
+});
+
+test("invalidates cached WebGL and uniform state at explicit boundaries", async () => {
+  const gl = fakeWebGl2();
+  const frames = [];
+  const handle = await start({
+    frame() { triangle(0, 0, 1, 0, 0, 1); },
+  }, {
+    canvas: fakeCanvas(),
+    context: gl.context,
+    requestAnimationFrame(callback) {
+      frames.push(callback);
+      return frames.length;
+    },
+    cancelAnimationFrame() {},
+    onError() {},
+  });
+  frames[0](1_000);
+  const cachedProgramUses = gl.programUses.length;
+  frames[1](1_016);
+  assert.equal(gl.programUses.length, cachedProgramUses);
+
+  invalidateWebGLState();
+  frames[2](1_032);
+  assert.equal(gl.programUses.length, cachedProgramUses + 1);
+  assert.equal(handle.stats().state.programSwitches, cachedProgramUses + 1);
+  handle.stop();
+});
+
+test("can reset owned WebGL state before every rendered frame", async () => {
+  const gl = fakeWebGl2();
+  const frames = [];
+  const handle = await start({
+    frame() { triangle(0, 0, 1, 0, 0, 1); },
+  }, {
+    canvas: fakeCanvas(),
+    context: gl.context,
+    externalWebGLPolicy: "reset",
+    requestAnimationFrame(callback) {
+      frames.push(callback);
+      return frames.length;
+    },
+    cancelAnimationFrame() {},
+    onError() {},
+  });
+  const programUsesAtStart = gl.programUses.length;
+  frames[0](1_000);
+  frames[1](1_016);
+  assert.equal(gl.programUses.length, programUsesAtStart + 2);
   handle.stop();
 });
 
@@ -1921,6 +1988,8 @@ test("normalizes texture options and reports WebGL capabilities", async () => {
   assert.ok(gl.textureParameters.some((entry) => entry[2] === gl.context.REPEAT));
   assert.ok(gl.pixelStores.some((entry) => entry[1] === true));
   const capabilities = runtimeCapabilities();
+  assert.equal(capabilities.vendor, "Test Vendor");
+  assert.equal(capabilities.renderer, "Test Renderer");
   assert.equal(capabilities.maxTextureSize, 2048);
   assert.deepEqual(capabilities.supportedExtensions, ["EXT_one", "EXT_two"]);
   assert.equal(Object.isFrozen(capabilities), true);
@@ -2408,6 +2477,7 @@ function fakeWebGl2(options = {}) {
   const deletedVertexArrays = [];
   const createdPrograms = [];
   const deletedPrograms = [];
+  const programUses = [];
   let shaderChecks = 0;
   const webglErrors = [...(options.webglErrors ?? [])];
   const attributeLocationCalls = new Map();
@@ -2456,6 +2526,7 @@ function fakeWebGl2(options = {}) {
     ONE_MINUS_SRC_ALPHA: 0x0303,
     RGBA: 0x1908,
     REPEAT: 0x2901,
+    RENDERER: 0x1f01,
     SAMPLER_2D: 0x8b5e,
     SRC_ALPHA: 0x0302,
     STATIC_DRAW: 0x88e4,
@@ -2475,6 +2546,7 @@ function fakeWebGl2(options = {}) {
     BROWSER_DEFAULT_WEBGL: 0x9244,
     VERTEX_SHADER: 0x8b31,
     VERSION: 0x1f02,
+    VENDOR: 0x1f00,
     activeTexture() {},
     attachShader() {},
     bindBuffer() {},
@@ -2556,6 +2628,8 @@ function fakeWebGl2(options = {}) {
       if (parameter === 0x8dfb) return options.maxVertexUniformVectors ?? 256;
       if (parameter === 0x8b8c) return options.shadingLanguageVersion ?? "WebGL GLSL ES 3.00";
       if (parameter === 0x1f02) return options.webglVersion ?? "WebGL 2.0";
+      if (parameter === 0x1f00) return options.vendor ?? "Test Vendor";
+      if (parameter === 0x1f01) return options.renderer ?? "Test Renderer";
       if (parameter === 0x9240 || parameter === 0x9241) return false;
       if (parameter === 0x9243) return 0x9244;
       return null;
@@ -2615,7 +2689,7 @@ function fakeWebGl2(options = {}) {
         value: [...value],
       });
     },
-    useProgram() {},
+    useProgram(program) { programUses.push(program); },
     vertexAttribPointer() {},
     viewport() {},
   };
@@ -2641,5 +2715,6 @@ function fakeWebGl2(options = {}) {
     deletedVertexArrays,
     createdPrograms,
     deletedPrograms,
+    programUses,
   };
 }

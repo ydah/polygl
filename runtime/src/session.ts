@@ -27,6 +27,7 @@ import type {
   ShaderUniformValue,
   ShaderRegistryStats,
 } from "./shader.js";
+import type { WebGLStateStats } from "./webgl-state.js";
 import {
   validateProgram,
   validateResizeObserver,
@@ -100,6 +101,12 @@ export interface RuntimeOptions {
   ) => RuntimeResizeObserver;
   readonly focusOnPointerDown?: boolean;
   readonly preventDefaultInput?: boolean;
+  /**
+   * `exclusive` requires callers not to mutate the WebGL context while the
+   * session owns it. `reset` invalidates runtime caches before every render;
+   * it does not preserve or restore caller-owned WebGL state.
+   */
+  readonly externalWebGLPolicy?: "exclusive" | "reset";
 }
 
 export interface RuntimeHandle {
@@ -107,6 +114,7 @@ export interface RuntimeHandle {
   readonly state: RuntimeSessionState;
   capabilities(): RuntimeCapabilities;
   stats(): RuntimeStats;
+  invalidateWebGLState(): void;
   stop(): void;
 }
 
@@ -115,6 +123,7 @@ export interface RuntimeStats {
   readonly batch: BatchRendererStats;
   readonly scene: SceneRendererStats;
   readonly shaders: ShaderRegistryStats;
+  readonly state: WebGLStateStats;
 }
 
 export class RuntimeSession implements RuntimeHandle {
@@ -137,6 +146,7 @@ export class RuntimeSession implements RuntimeHandle {
   private readonly visibilityPolicy: "continue" | "pause";
   private readonly focusOnPointerDown: boolean;
   private readonly preventDefaultInput: boolean;
+  private readonly externalWebGLPolicy: "exclusive" | "reset";
   private readonly autoResize: boolean;
   private readonly configuredDevicePixelRatio: number | undefined;
   private animationHandle: number | undefined;
@@ -172,6 +182,7 @@ export class RuntimeSession implements RuntimeHandle {
     this.visibilityPolicy = options.visibilityPolicy ?? "continue";
     this.focusOnPointerDown = options.focusOnPointerDown ?? false;
     this.preventDefaultInput = options.preventDefaultInput ?? false;
+    this.externalWebGLPolicy = options.externalWebGLPolicy ?? "exclusive";
     this.configuredDevicePixelRatio = options.devicePixelRatio === undefined
       ? undefined
       : positiveFinite(options.devicePixelRatio, "devicePixelRatio");
@@ -188,6 +199,7 @@ export class RuntimeSession implements RuntimeHandle {
       undefined,
       false,
       options.resourceLimits?.maxShaderPrograms,
+      this.renderer.stateCache,
     );
     this.scene = new WebGL2SceneRenderer(
       this.renderer.context,
@@ -198,6 +210,7 @@ export class RuntimeSession implements RuntimeHandle {
       options.resourceLimits,
       options.textureFailurePolicy,
       options.onTextureError,
+      this.renderer.stateCache,
     );
     this.resourceLimits = options.resourceLimits ?? {};
     this.initialShaderBundle = options.shaderBundle;
@@ -327,7 +340,13 @@ export class RuntimeSession implements RuntimeHandle {
       batch: this.renderer.stats(),
       scene: this.scene.stats(),
       shaders: this.shaderRegistry.stats(),
+      state: this.renderer.stateCache.stats(),
     });
+  }
+
+  public invalidateWebGLState(): void {
+    this.renderer.stateCache.invalidate();
+    this.shaderRegistry.invalidateUniformState();
   }
 
   public setShaderUniform(
@@ -814,6 +833,9 @@ export class RuntimeSession implements RuntimeHandle {
   }
 
   private render(): void {
+    if (this.externalWebGLPolicy === "reset") {
+      this.invalidateWebGLState();
+    }
     this.updateShaderUniforms();
     this.scene.render(
       this.elapsedSeconds,
@@ -834,6 +856,7 @@ export class RuntimeSession implements RuntimeHandle {
       bundle,
       requireShaderAbi,
       this.resourceLimits.maxShaderPrograms,
+      this.renderer.stateCache,
     );
     this.scene.replaceShaderRegistry(this.shaderRegistry);
   }

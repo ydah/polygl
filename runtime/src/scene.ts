@@ -21,6 +21,7 @@ import type {
   ShaderMaterial,
   ShaderUniformValue,
 } from "./shader.js";
+import { WebGLStateCache } from "./webgl-state.js";
 import { WebGL2ShaderRegistry } from "./shader.js";
 
 const sceneOwnerBrand: unique symbol = Symbol("SceneOwner");
@@ -214,6 +215,7 @@ export class WebGL2SceneRenderer {
       reason: unknown,
       path: string,
     ) => void = () => {},
+    private readonly stateCache = new WebGLStateCache(gl),
   ) {
     this.shaderRegistry = shaderRegistry;
   }
@@ -419,7 +421,8 @@ export class WebGL2SceneRenderer {
     if (texture === null) {
       throw new Error(`failed to create texture for \`${safePath}\``);
     }
-    this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
+    this.stateCache.activateTexture(this.gl.TEXTURE0);
+    this.stateCache.bindTexture2d(texture);
     this.applyTextureParameters(safeOptions);
     this.gl.texImage2D(
       this.gl.TEXTURE_2D,
@@ -550,8 +553,8 @@ export class WebGL2SceneRenderer {
       this.camera.near,
       this.camera.far,
     );
-    this.gl.enable(this.gl.DEPTH_TEST);
-    this.gl.depthFunc(this.gl.LEQUAL);
+    this.stateCache.setDepthTest(true);
+    this.stateCache.setDepthFunction(this.gl.LEQUAL);
     this.gl.clear(this.gl.DEPTH_BUFFER_BIT);
     const opaque: SceneRenderItem[] = [];
     const transparent: SceneRenderItem[] = [];
@@ -579,16 +582,15 @@ export class WebGL2SceneRenderer {
     }
     if (transparent.length > 0) {
       transparent.sort((left, right) => right.depth - left.depth);
-      this.gl.enable(this.gl.BLEND);
-      this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
+      this.stateCache.enableBlend();
       this.gl.depthMask(false);
       for (const item of transparent) {
         this.drawItem(item, view, projection, elapsedSeconds, width, height);
       }
       this.gl.depthMask(true);
     }
-    this.gl.bindVertexArray(null);
-    this.gl.disable(this.gl.DEPTH_TEST);
+    this.stateCache.bindVertexArray(null);
+    this.stateCache.setDepthTest(false);
   }
 
   public dispose(): void {
@@ -637,9 +639,10 @@ export class WebGL2SceneRenderer {
       if (indexBuffer !== null) this.gl.deleteBuffer(indexBuffer);
       throw new Error("failed to create mesh buffers");
     }
-    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, vertexBuffer);
+    this.stateCache.bindVertexArray(null);
+    this.stateCache.bindArrayBuffer(vertexBuffer);
     this.gl.bufferData(this.gl.ARRAY_BUFFER, data.vertices, this.gl.STATIC_DRAW);
-    this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+    this.stateCache.bindElementArrayBuffer(indexBuffer);
     this.gl.bufferData(
       this.gl.ELEMENT_ARRAY_BUFFER,
       data.indices,
@@ -671,16 +674,16 @@ export class WebGL2SceneRenderer {
       .join("|");
     const cached = mesh.vertexArrays.get(layoutKey);
     if (cached !== undefined) {
-      this.gl.bindVertexArray(cached);
+      this.stateCache.bindVertexArray(cached);
       return;
     }
     const vertexArray = this.gl.createVertexArray();
     if (vertexArray === null) {
       throw new Error("failed to create a mesh vertex array");
     }
-    this.gl.bindVertexArray(vertexArray);
-    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, mesh.vertexBuffer);
-    this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, mesh.indexBuffer);
+    this.stateCache.bindVertexArray(vertexArray);
+    this.stateCache.bindArrayBuffer(mesh.vertexBuffer);
+    this.stateCache.bindElementArrayBuffer(mesh.indexBuffer);
     const stride =
       FLOATS_PER_MESH_VERTEX * Float32Array.BYTES_PER_ELEMENT;
     for (const attribute of attributes) {
@@ -769,7 +772,7 @@ export class WebGL2SceneRenderer {
   ): void {
     const basic = this.basicProgram ?? this.createBasicProgram();
     this.basicProgram = basic;
-    this.gl.useProgram(basic.program);
+    this.stateCache.useProgram(basic.program);
     this.gl.uniformMatrix4fv(basic.model, false, model);
     this.gl.uniformMatrix4fv(basic.view, false, view);
     this.gl.uniformMatrix4fv(basic.projection, false, projection);
@@ -855,7 +858,8 @@ export class WebGL2SceneRenderer {
         `texture \`${handle.path}\` is ${dimensions.width}x${dimensions.height}, exceeding the ${dimensionLimit}px texture limit`,
       );
     }
-    this.gl.bindTexture(this.gl.TEXTURE_2D, handle.texture);
+    this.stateCache.activateTexture(this.gl.TEXTURE0);
+    this.stateCache.bindTexture2d(handle.texture);
     this.withTextureUnpackState(handle.options, () => {
       this.gl.texImage2D(
         this.gl.TEXTURE_2D,

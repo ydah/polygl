@@ -30,6 +30,7 @@ export type {
 } from "./renderer.js";
 export { readRuntimeCapabilities } from "./capabilities.js";
 export type { RuntimeCapabilities } from "./capabilities.js";
+export type { WebGLStateStats } from "./webgl-state.js";
 export { WebGL2SceneRenderer } from "./scene.js";
 export type {
   BasicMaterial,
@@ -395,6 +396,10 @@ export function runtimeCapabilities(): RuntimeCapabilities {
 
 export function runtimeStats(): RuntimeStats {
   return session().stats();
+}
+
+export function invalidateWebGLState(): void {
+  session().invalidateWebGLState();
 }
 
 export function floorToInt(value: number): number {

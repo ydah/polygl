@@ -1,4 +1,6 @@
 export interface RuntimeCapabilities {
+  readonly vendor: string;
+  readonly renderer: string;
   readonly webglVersion: string;
   readonly shadingLanguageVersion: string;
   readonly maxTextureSize: number;
@@ -15,6 +17,8 @@ export function readRuntimeCapabilities(
   gl: WebGL2RenderingContext,
 ): RuntimeCapabilities {
   return Object.freeze({
+    vendor: stringParameter(gl, gl.VENDOR, "WebGL vendor"),
+    renderer: stringParameter(gl, gl.RENDERER, "WebGL renderer"),
     webglVersion: stringParameter(gl, gl.VERSION, "WebGL version"),
     shadingLanguageVersion: stringParameter(
       gl,

@@ -1,6 +1,7 @@
 import { runtimeError } from "./errors.js";
 import type { SourceLocation } from "./errors.js";
 import { copyDenseNumericSequence } from "./numeric.js";
+import { WebGLStateCache } from "./webgl-state.js";
 import { shaderAbi } from "./generated/abi.js";
 import {
   validateShaderArtifacts,
@@ -116,6 +117,7 @@ export class WebGL2ShaderRegistry {
     private readonly debug: boolean,
     artifacts: readonly ShaderArtifact[],
     maxPrograms?: number,
+    private readonly stateCache = new WebGLStateCache(gl),
   ) {
     if (typeof debug !== "boolean") {
       throw new TypeError("shader debug flag must be a boolean");
@@ -148,6 +150,7 @@ export class WebGL2ShaderRegistry {
     bundle?: unknown,
     requireShaderAbi = false,
     maxPrograms?: number,
+    stateCache?: WebGLStateCache,
   ): WebGL2ShaderRegistry {
     const validatedBundle = bundle === undefined
       ? undefined
@@ -166,6 +169,7 @@ export class WebGL2ShaderRegistry {
       validatedBundle?.debug ?? false,
       validatedBundle?.shaders ?? [],
       maxPrograms,
+      stateCache,
     );
   }
 
@@ -210,6 +214,16 @@ export class WebGL2ShaderRegistry {
     });
   }
 
+  public invalidateUniformState(): void {
+    for (const shader of this.shaders.values()) {
+      shader.lastGlobalAutomatic = undefined;
+      shader.drawValues.clear();
+      for (const name of shader.userValues.keys()) {
+        shader.globalDirty.add(name);
+      }
+    }
+  }
+
   public material(shaderName: string): ShaderMaterial {
     const shader = this.shaders.get(shaderName);
     if (shader === undefined) {
@@ -252,7 +266,7 @@ export class WebGL2ShaderRegistry {
     automatic: ShaderAutomaticUniforms,
   ): readonly ShaderAttribute[] {
     const shader = this.requireMaterial(material);
-    this.gl.useProgram(shader.program);
+    this.stateCache.useProgram(shader.program);
     let textureUnit = 0;
     for (const binding of shader.artifact.uniforms) {
       const location = shader.uniforms.get(binding.name);
@@ -318,7 +332,7 @@ export class WebGL2ShaderRegistry {
             continue;
           }
           if (!programBound) {
-            this.gl.useProgram(shader.program);
+            this.stateCache.useProgram(shader.program);
             programBound = true;
           }
           this.beginUploadScope(shader, binding);
@@ -342,7 +356,7 @@ export class WebGL2ShaderRegistry {
           continue;
         }
         if (!programBound) {
-          this.gl.useProgram(shader.program);
+          this.stateCache.useProgram(shader.program);
           programBound = true;
         }
         this.beginUploadScope(shader, binding);
@@ -518,8 +532,8 @@ export class WebGL2ShaderRegistry {
         this.gl.uniformMatrix4fv(location, false, value as readonly number[]);
         return textureUnit;
       case "texture":
-        this.gl.activeTexture(this.gl.TEXTURE0 + textureUnit);
-        this.gl.bindTexture(this.gl.TEXTURE_2D, value as WebGLTexture);
+        this.stateCache.activateTexture(this.gl.TEXTURE0 + textureUnit);
+        this.stateCache.bindTexture2d(value as WebGLTexture);
         this.gl.uniform1i(location, textureUnit);
         return textureUnit + 1;
     }
