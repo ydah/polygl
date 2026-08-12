@@ -36,6 +36,7 @@ fn independent_processes_produce_byte_identical_release_trees() {
 
 fn build_in_process(source: &Path, output: &Path, source_date_epoch: &str) {
     let result = Command::new(env!("CARGO_BIN_EXE_polygl"))
+        .current_dir(source.parent().unwrap())
         .args(["build"])
         .arg(source)
         .args(["--release", "--source-map", "none", "-o"])

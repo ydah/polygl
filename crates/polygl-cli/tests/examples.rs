@@ -38,6 +38,7 @@ fn every_example_builds_in_debug_and_release_modes() {
                 source.file_name().unwrap().to_string_lossy()
             ));
             let result = Command::new(env!("CARGO_BIN_EXE_polygl"))
+                .current_dir(temporary.path())
                 .args(["build"])
                 .arg(&source)
                 .arg(format!("--{mode}"))
