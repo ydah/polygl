@@ -73,5 +73,11 @@ entries, fields, or methods because those may expose evaluation or layout order.
 `normalized_dump` normalizes a clone and therefore does not mutate adapter
 output. Normalization is idempotent.
 
+`HIR_SCHEMA_VERSION` describes the in-memory/provenance contract needed to
+invalidate future tooling and caches. It does not turn `dump` into a stable JSON
+or persistence format. External consumers must use the public Rust model for a
+matching release or define a separately versioned serialization schema; field
+layout and wording may change while deterministic snapshot meaning remains.
+
 L2 stores ordinary language-specific dumps. L3 compares normalized dumps only
 for the Neutral subset defined by `docs/common-core.md`.

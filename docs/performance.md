@@ -50,3 +50,47 @@ See the [runtime contract]({{ '/runtime/' | relative_url }}),
 [JavaScript backend]({{ '/js-backend/' | relative_url }}), and
 [shader ABI]({{ '/shader-abi/' | relative_url }}) for the boundaries behind
 this model.
+
+## Dated baseline
+
+The 2026-08-12 development baseline used Apple arm64/macOS 26.3, Rust 1.96.1,
+Node 24.14.1, a release compiler, seven fresh output directories per case, and
+the median wall time of a new CLI process. These fixtures name workload shapes;
+`large` is the current terrain example, not a claim about production-scale input.
+
+| Compiler case | Median | Min–max |
+| --- | ---: | ---: |
+| small triangle | 11.06 ms | 6.62–37.02 ms |
+| medium rotating cubes | 8.14 ms | 7.07–11.26 ms |
+| nominal-large terrain | 9.10 ms | 7.08–11.11 ms |
+| shader-heavy plasma | 6.67 ms | 6.13–10.53 ms |
+| class-heavy conformance | 9.44 ms | 6.83–10.52 ms |
+| error-heavy diagnostics | 8.70 ms | 5.17–9.18 ms |
+
+Run `node benchmarks/compiler/run.mjs` after building `target/release/polygl`.
+Scheduled CI uploads the raw JSON as a comparison record; it is not a
+cross-machine threshold.
+
+The same machine's headless Chromium 143 software-WebGL record measured one
+instrumented sample per isolated session:
+
+| Runtime case | Setup / frame | Observable work |
+| --- | ---: | --- |
+| 10,000 immediate shapes | 25.3 / 15.7 ms | 1 draw, 60,000 vertices, 20,000 triangles, 1.44 MB upload |
+| 256 retained nodes | 9.4 / <0.1 ms | 256 draws, 3,072 triangles, one 1,296-byte mesh |
+| 32 decoded textures | 3.9 / <0.1 ms | 32 textures, 73 state changes |
+| one reflected automatic uniform | 2.3 / <0.1 ms | one program, 1.8 ms link, one upload |
+
+Run `pnpm --dir runtime build` followed by
+`node benchmarks/runtime/run.mjs`. Software timing below timer resolution is
+reported as `<0.1 ms`; the counters, not a zero duration, prove the work ran.
+
+Current raw release budgets are 190,000 bytes for `runtime.js`, 25,000 for
+`app.js`, and 30,000 for `shaders.js`. At this baseline the largest representative
+outputs were 172,524, 1,458, and 2,608 bytes. `scripts/check-size-budget.sh`
+enforces them. Recalibrate only with a documented feature/measurement change;
+do not raise a budget merely to make CI green.
+
+Peak RSS is not published yet: macOS `/usr/bin/time`, GNU time, and hosted-runner
+accounting are not directly comparable. Add it after one normalized collector
+and a stable representative runner are selected.

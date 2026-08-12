@@ -80,6 +80,21 @@ http://127.0.0.1:4173</pre>
       <h3>Performance</h3>
       <p>Separate compiler speed from generated JavaScript and rendering cost.</p>
     </a>
+    <a class="topic-card" data-search-card href="{{ '/architecture-tutorial/' | relative_url }}">
+      <span class="topic-number">10 / ARCHITECTURE</span>
+      <h3>Follow the pipeline</h3>
+      <p>Trace one program from source through typed IR, JS/GLSL, and runtime validation.</p>
+    </a>
+    <a class="topic-card" data-search-card href="{{ '/deployment/' | relative_url }}">
+      <span class="topic-number">11 / OPERATIONS</span>
+      <h3>Deploy safely</h3>
+      <p>Configure base paths, cache headers, CSP, MIME types, and Source Map privacy.</p>
+    </a>
+    <a class="topic-card" data-search-card href="{{ '/support/' | relative_url }}">
+      <span class="topic-number">12 / SUPPORT</span>
+      <h3>Check compatibility</h3>
+      <p>See native, Node, browser, WebGL, and software-renderer support evidence.</p>
+    </a>
   </div>
   <p class="search-status" data-search-status aria-live="polite">
     Browse by language or compiler topic

@@ -96,6 +96,22 @@ resources, reject resources that are still referenced, and permanently
 invalidate their handles. Disposing a pending texture also prevents a late
 image decode from uploading into a deleted WebGL texture.
 
+Texture creation normalizes filter, wrap, mipmap, flip-Y, premultiplication,
+and color-space policy before WebGL calls. Each session has explicit limits for
+mesh count/bytes, nodes, texture count/dimensions/decoded bytes, and programs,
+further bounded by live GL limits. Startup texture failure can stop or retain a
+white placeholder and report through a callback; automatic retry is not part of
+the current contract.
+
+The renderer shares a cache for program, array/element buffers, VAO, blend and
+depth state, viewport, active texture/bindings, and blend equations. Exclusive
+state ownership is the default. `invalidateWebGLState` is the boundary
+after caller GL work, while the reset policy reapplies owned state each render.
+Neither policy promises to restore arbitrary outside state. Frozen capability
+and statistics reports expose GL limits/policies plus cumulative frame, draw,
+triangle, upload, program, uniform, and state-transition work. See the
+[resource lifecycle guide](resource-lifecycle.md).
+
 GPU split warnings such as W0401 and W0402 are rendered by both `check` and
 `build`; successful compilation no longer discards non-fatal diagnostics.
 

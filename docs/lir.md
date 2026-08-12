@@ -46,6 +46,12 @@ statements are retained because they may have effects or debug checks.
 The IR remains structured rather than SSA as decided in
 [ADR 0002](decisions/0002-two-level-structured-ir.md).
 
+`LIR_SCHEMA_VERSION` is recorded in artifact provenance and invalidates any
+same-release internal consumer. Human `dump` output is deterministic test/debug
+text, not a stable serialization or plugin boundary. The public Rust data model
+may evolve under package SemVer; a future tool JSON format needs its own schema,
+fixtures, and migration policy.
+
 ## Host/GPU split
 
 `polygl_lir::split` is the checked backend boundary. It clones shared
