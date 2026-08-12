@@ -189,6 +189,54 @@ test("validates direct programs and program factory results", async () => {
   }
 });
 
+test("validates programs at the earliest lifecycle-safe boundary", async () => {
+  const directGl = fakeWebGl2();
+  await assert.rejects(
+    start({ frame: 1 }, {
+      canvas: fakeCanvas(),
+      context: directGl.context,
+      onError() {},
+    }),
+    /runtime boundary\.frame.*function/,
+  );
+  assert.equal(directGl.createdPrograms.length, 0);
+
+  const currentGl = fakeWebGl2();
+  const current = await start({}, {
+    canvas: fakeCanvas(),
+    context: currentGl.context,
+    onError() {},
+  });
+  const rejectedDirectGl = fakeWebGl2();
+  await assert.rejects(
+    start(null, {
+      canvas: fakeCanvas(),
+      context: rejectedDirectGl.context,
+      onError() {},
+    }),
+    /program must be a plain object/,
+  );
+  assert.equal(rejectedDirectGl.createdPrograms.length, 0);
+  fill(1, 1, 1);
+  current.stop();
+
+  const factoryGl = fakeWebGl2();
+  await assert.rejects(
+    start(async () => ({ setup: 1 }), {
+      canvas: fakeCanvas(),
+      context: factoryGl.context,
+      onError() {},
+    }),
+    /runtime boundary\.setup.*function/,
+  );
+  assert.ok(factoryGl.createdPrograms.length > 0);
+  assert.equal(
+    factoryGl.deletedPrograms.length,
+    factoryGl.createdPrograms.length,
+  );
+  assert.throws(() => fill(1, 1, 1), /has not been started/);
+});
+
 test("accepts a generated program loaded as an ES module namespace", async () => {
   const marker = "__polyglModuleNamespaceSetup";
   delete globalThis[marker];
@@ -403,7 +451,10 @@ test("checks shader metadata against linked program reflection", async () => {
     /unrecorded active uniform `driver_only`/,
   );
 
-  const noTextureUnits = fakeWebGl2({ maxTextureUnits: 0 });
+  const noTextureUnits = fakeWebGl2({
+    activeUniforms: [{ name: "pgl_u_albedo", size: 1, type: 0x8b5e }],
+    maxTextureUnits: 0,
+  });
   await assert.rejects(
     start({}, {
       canvas: fakeCanvas(),
@@ -419,8 +470,25 @@ test("checks shader metadata against linked program reflection", async () => {
       }]),
       onError() {},
     }),
-    /requires 1 texture units.*supports 0/,
+    /requires 1 active texture units.*supports 0/,
   );
+
+  const optimizedSampler = fakeWebGl2({ maxTextureUnits: 0 });
+  const optimizedSamplerHandle = await start({}, {
+    canvas: fakeCanvas(),
+    context: optimizedSampler.context,
+    shaderBundle: shaderBundle([{
+      name: "optimized_sampler",
+      uniforms: [{
+        name: "albedo",
+        glslName: "pgl_u_albedo",
+        type: "texture",
+        source: "user",
+      }],
+    }]),
+    onError() {},
+  });
+  optimizedSamplerHandle.stop();
 });
 
 test("seeded random sequences are reproducible", () => {
@@ -1593,6 +1661,8 @@ function fakeWebGl2(options = {}) {
   const deletedShaders = [];
   const deletedBuffers = [];
   const deletedTextures = [];
+  const createdPrograms = [];
+  const deletedPrograms = [];
   let shaderChecks = 0;
   const attributeLocationCalls = new Map();
   const activeAttributes = options.activeAttributes ?? [];
@@ -1659,13 +1729,15 @@ function fakeWebGl2(options = {}) {
       return {};
     },
     createProgram() {
-      return {};
+      const program = {};
+      createdPrograms.push(program);
+      return program;
     },
     createShader() {
       return {};
     },
     deleteBuffer(buffer) { deletedBuffers.push(buffer); },
-    deleteProgram() {},
+    deleteProgram(program) { deletedPrograms.push(program); },
     deleteShader(shader) {
       deletedShaders.push(shader);
     },
@@ -1767,5 +1839,7 @@ function fakeWebGl2(options = {}) {
     deletedShaders,
     deletedBuffers,
     deletedTextures,
+    createdPrograms,
+    deletedPrograms,
   };
 }

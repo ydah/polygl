@@ -552,10 +552,7 @@ function validateProgramReflection(
     if (binding.type === "texture") activeSamplers += 1;
   }
 
-  const declaredSamplers = artifact.uniforms.filter(
-    (uniform) => uniform.type === "texture",
-  ).length;
-  if (declaredSamplers > 0) {
+  if (activeSamplers > 0) {
     const textureLimit: unknown = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
     if (
       typeof textureLimit !== "number" ||
@@ -567,9 +564,9 @@ function validateProgramReflection(
         artifact.fragmentLocation,
       );
     }
-    if (declaredSamplers > textureLimit || activeSamplers > textureLimit) {
+    if (activeSamplers > textureLimit) {
       throw runtimeError(
-        `shader \`${artifact.name}\` requires ${declaredSamplers} texture units, but the device supports ${textureLimit}`,
+        `shader \`${artifact.name}\` requires ${activeSamplers} active texture units, but the device supports ${textureLimit}`,
         artifact.fragmentLocation,
       );
     }
