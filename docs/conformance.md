@@ -45,6 +45,9 @@ and L2, not L3.
 ## Feature tags
 
 `polygl-adapter-api::FeatureTag` is a closed, versioned capability vocabulary.
-Core/Tier1, arrays, maps, classes, block sugars, truthiness sugar, and shaders
-have separate v1 tags. Adding or versioning a tag requires at least one
-manifest case and adapter documentation.
+Core/Tier1, arrays, maps, classes, meshes, scene nodes, cameras, textures,
+block sugars, truthiness sugar, and shaders have separate v1 tags. Adding or
+versioning a tag requires at least one manifest case and adapter documentation.
+The [generated capability matrix](capabilities.md) is derived from the standard
+adapter registry; update and verify it with `cargo xtask capabilities` and
+`cargo xtask capabilities --check`.

@@ -71,6 +71,10 @@ fn advertises_php_capabilities() {
             FeatureTag::Arrays,
             FeatureTag::Maps,
             FeatureTag::Classes,
+            FeatureTag::Meshes,
+            FeatureTag::SceneNodes,
+            FeatureTag::Cameras,
+            FeatureTag::Textures,
             FeatureTag::Shaders,
         ]
     );

@@ -21,6 +21,10 @@ fn advertises_the_static_perl_capabilities() {
         FeatureTag::Arrays,
         FeatureTag::Maps,
         FeatureTag::Classes,
+        FeatureTag::Meshes,
+        FeatureTag::SceneNodes,
+        FeatureTag::Cameras,
+        FeatureTag::Textures,
         FeatureTag::Shaders,
     ] {
         assert!(PerlAdapter.capabilities().contains(&capability));

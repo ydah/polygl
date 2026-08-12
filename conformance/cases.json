@@ -38,7 +38,13 @@
     "id": "lit-cubes",
     "layers": ["l1-render"],
     "languages": ["ruby", "php", "perl"],
-    "required_features": ["core-v1", "tier2-v1"],
+    "required_features": [
+      "core-v1",
+      "tier2-v1",
+      "meshes-v1",
+      "scene-nodes-v1",
+      "cameras-v1"
+    ],
     "browser": true
   },
   {
@@ -76,6 +82,13 @@
     "layers": ["l2-hir-snapshot"],
     "languages": ["ruby", "php", "perl"],
     "required_features": ["core-v1", "classes-v1"],
+    "browser": false
+  },
+  {
+    "id": "texture-api",
+    "layers": ["l2-hir-snapshot"],
+    "languages": ["ruby", "php", "perl"],
+    "required_features": ["core-v1", "textures-v1"],
     "browser": false
   },
   {

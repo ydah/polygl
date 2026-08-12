@@ -9,6 +9,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+polygl-adapter-api = { path = "../crates/polygl-adapter-api", version = "=0.1.0" }
 polygl-conformance = { path = "../conformance/runner", version = "=0.1.0" }
 polygl-backend-js = { path = "../crates/polygl-backend-js", version = "=0.1.0" }
 polygl-backend-glsl = { path = "../crates/polygl-backend-glsl", version = "=0.1.0" }

@@ -24,6 +24,10 @@ const CAPABILITIES: &[FeatureTag] = &[
     FeatureTag::Arrays,
     FeatureTag::Maps,
     FeatureTag::Classes,
+    FeatureTag::Meshes,
+    FeatureTag::SceneNodes,
+    FeatureTag::Cameras,
+    FeatureTag::Textures,
     FeatureTag::Shaders,
 ];
 

@@ -6,6 +6,10 @@ pub enum FeatureTag {
     Arrays,
     Maps,
     Classes,
+    Meshes,
+    SceneNodes,
+    Cameras,
+    Textures,
     TimesBlockSugar,
     EachBlockSugar,
     TruthinessSugar,
@@ -13,13 +17,17 @@ pub enum FeatureTag {
 }
 
 impl FeatureTag {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 14] = [
         Self::Core,
         Self::Tier1,
         Self::Tier2,
         Self::Arrays,
         Self::Maps,
         Self::Classes,
+        Self::Meshes,
+        Self::SceneNodes,
+        Self::Cameras,
+        Self::Textures,
         Self::TimesBlockSugar,
         Self::EachBlockSugar,
         Self::TruthinessSugar,
@@ -35,6 +43,10 @@ impl FeatureTag {
             Self::Arrays => "arrays-v1",
             Self::Maps => "maps-v1",
             Self::Classes => "classes-v1",
+            Self::Meshes => "meshes-v1",
+            Self::SceneNodes => "scene-nodes-v1",
+            Self::Cameras => "cameras-v1",
+            Self::Textures => "textures-v1",
             Self::TimesBlockSugar => "times-block-sugar-v1",
             Self::EachBlockSugar => "each-block-sugar-v1",
             Self::TruthinessSugar => "truthiness-sugar-v1",

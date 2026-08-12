@@ -1,0 +1,8 @@
+module
+{
+  const TEXTURE: Texture = builtin#38("textures/checker.png");
+  entry setup() [host]
+  {
+    builtin#43(TEXTURE);
+  }
+}
