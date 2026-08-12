@@ -19,6 +19,11 @@ import type {
   ShaderMaterial,
   ShaderUniformValue,
 } from "./shader.js";
+import {
+  validateProgram,
+  validateResizeObserver,
+  validateRuntimeOptions,
+} from "./validation.js";
 
 export interface RuntimeEvent {
   readonly kind: string;
@@ -98,6 +103,7 @@ export class RuntimeSession implements RuntimeHandle {
     public readonly canvas: HTMLCanvasElement,
     options: RuntimeOptions,
   ) {
+    options = validateRuntimeOptions(options);
     this.maxDeltaSeconds = positiveFinite(
       options.maxDeltaSeconds ?? 0.1,
       "maxDeltaSeconds",
@@ -148,7 +154,9 @@ export class RuntimeSession implements RuntimeHandle {
   public async run(source: PolyglProgramSource): Promise<void> {
     try {
       this.replaceShaderBundle(this.initialShaderBundle, this.requireRuntimeAbi);
-      const program = typeof source === "function" ? await source() : source;
+      const program = validateProgram(
+        typeof source === "function" ? await source() : source,
+      );
       if (this.stopped) {
         return;
       }
@@ -397,7 +405,7 @@ export class RuntimeSession implements RuntimeHandle {
         "autoResize requires ResizeObserver support or createResizeObserver",
       );
     }
-    this.resizeObserver = factory(this.handleResize);
+    this.resizeObserver = validateResizeObserver(factory(this.handleResize));
     this.resizeObserver.observe(this.canvas);
   }
 

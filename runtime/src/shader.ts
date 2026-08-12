@@ -1,6 +1,10 @@
 import { runtimeError } from "./errors.js";
 import type { SourceLocation } from "./errors.js";
 import { shaderAbi } from "./generated/abi.js";
+import {
+  validateShaderArtifacts,
+  validateShaderBundle,
+} from "./validation.js";
 
 export type ShaderValueType =
   | "int"
@@ -93,14 +97,12 @@ export class WebGL2ShaderRegistry {
     private readonly debug: boolean,
     artifacts: readonly ShaderArtifact[],
   ) {
+    if (typeof debug !== "boolean") {
+      throw new TypeError("shader debug flag must be a boolean");
+    }
+    const validatedArtifacts = validateShaderArtifacts(artifacts);
     try {
-      for (const artifact of artifacts) {
-        if (this.shaders.has(artifact.name)) {
-          throw runtimeError(
-            `shader pair \`${artifact.name}\` is registered more than once`,
-            artifact.vertexLocation,
-          );
-        }
+      for (const artifact of validatedArtifacts) {
         this.shaders.set(artifact.name, this.link(artifact));
       }
     } catch (error) {
@@ -111,22 +113,25 @@ export class WebGL2ShaderRegistry {
 
   public static fromBundle(
     gl: WebGL2RenderingContext,
-    bundle?: ShaderBundle,
+    bundle?: unknown,
     requireShaderAbi = false,
   ): WebGL2ShaderRegistry {
+    const validatedBundle = bundle === undefined
+      ? undefined
+      : validateShaderBundle(bundle);
     if (
-      bundle !== undefined &&
-      (requireShaderAbi || bundle.shaderAbi !== undefined) &&
-      bundle.shaderAbi !== shaderAbi
+      validatedBundle !== undefined &&
+      (requireShaderAbi || validatedBundle.shaderAbi !== undefined) &&
+      validatedBundle.shaderAbi !== shaderAbi
     ) {
       throw new Error(
-        `generated shader bundle requires shader ABI ${String(bundle.shaderAbi ?? "missing")}; this runtime provides shader ABI ${shaderAbi}`,
+        `generated shader bundle requires shader ABI ${String(validatedBundle.shaderAbi ?? "missing")}; this runtime provides shader ABI ${shaderAbi}`,
       );
     }
     return new WebGL2ShaderRegistry(
       gl,
-      bundle?.debug ?? false,
-      bundle?.shaders ?? [],
+      validatedBundle?.debug ?? false,
+      validatedBundle?.shaders ?? [],
     );
   }
 
@@ -310,6 +315,8 @@ export class WebGL2ShaderRegistry {
         );
       }
 
+      validateProgramReflection(this.gl, program, artifact);
+
       const uniforms = new Map<string, WebGLUniformLocation>();
       for (const uniform of artifact.uniforms) {
         const location = this.gl.getUniformLocation(program, uniform.glslName);
@@ -449,6 +456,155 @@ export class WebGL2ShaderRegistry {
       throw new Error("shader material belongs to another runtime session");
     }
     return shader;
+  }
+}
+
+function validateProgramReflection(
+  gl: WebGL2RenderingContext,
+  program: WebGLProgram,
+  artifact: ShaderArtifact,
+): void {
+  for (const binding of artifact.attributes) {
+    const actualLocation = gl.getAttribLocation(program, binding.glslName);
+    if (actualLocation !== binding.location) {
+      throw runtimeError(
+        `shader \`${artifact.name}\` attribute \`${binding.name}\` declares location ${binding.location}, but the linked program reports ${actualLocation}`,
+        artifact.vertexLocation,
+      );
+    }
+  }
+
+  const activeAttributes = reflectedCount(
+    gl.getProgramParameter(program, gl.ACTIVE_ATTRIBUTES),
+    "attribute",
+    artifact,
+  );
+  const seenAttributes = new Set<string>();
+  for (let index = 0; index < activeAttributes; index += 1) {
+    const reflected = gl.getActiveAttrib(program, index);
+    if (reflected === null) {
+      throw runtimeError(
+        `shader \`${artifact.name}\` returned no reflection for active attribute ${index}`,
+        artifact.vertexLocation,
+      );
+    }
+    const binding = artifact.attributes.find(
+      (candidate) => candidate.glslName === reflected.name,
+    );
+    if (binding === undefined) {
+      throw runtimeError(
+        `shader \`${artifact.name}\` has unrecorded active attribute \`${reflected.name}\``,
+        artifact.vertexLocation,
+      );
+    }
+    if (seenAttributes.has(reflected.name) || reflected.size !== 1) {
+      throw runtimeError(
+        `shader \`${artifact.name}\` has invalid reflection for attribute \`${reflected.name}\``,
+        artifact.vertexLocation,
+      );
+    }
+    seenAttributes.add(reflected.name);
+    if (reflected.type !== webGlType(gl, binding.type)) {
+      throw runtimeError(
+        `shader \`${artifact.name}\` attribute \`${binding.name}\` type does not match the linked program`,
+        artifact.vertexLocation,
+      );
+    }
+  }
+
+  const activeUniforms = reflectedCount(
+    gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS),
+    "uniform",
+    artifact,
+  );
+  const seenUniforms = new Set<string>();
+  let activeSamplers = 0;
+  for (let index = 0; index < activeUniforms; index += 1) {
+    const reflected = gl.getActiveUniform(program, index);
+    if (reflected === null) {
+      throw runtimeError(
+        `shader \`${artifact.name}\` returned no reflection for active uniform ${index}`,
+        artifact.fragmentLocation,
+      );
+    }
+    const binding = artifact.uniforms.find(
+      (candidate) => candidate.glslName === reflected.name,
+    );
+    if (binding === undefined) {
+      throw runtimeError(
+        `shader \`${artifact.name}\` has unrecorded active uniform \`${reflected.name}\``,
+        artifact.fragmentLocation,
+      );
+    }
+    if (seenUniforms.has(reflected.name) || reflected.size !== 1) {
+      throw runtimeError(
+        `shader \`${artifact.name}\` has invalid reflection for uniform \`${reflected.name}\``,
+        artifact.fragmentLocation,
+      );
+    }
+    seenUniforms.add(reflected.name);
+    if (reflected.type !== webGlType(gl, binding.type)) {
+      throw runtimeError(
+        `shader \`${artifact.name}\` uniform \`${binding.name}\` type does not match the linked program`,
+        artifact.fragmentLocation,
+      );
+    }
+    if (binding.type === "texture") activeSamplers += 1;
+  }
+
+  const declaredSamplers = artifact.uniforms.filter(
+    (uniform) => uniform.type === "texture",
+  ).length;
+  if (declaredSamplers > 0) {
+    const textureLimit: unknown = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
+    if (
+      typeof textureLimit !== "number" ||
+      !Number.isInteger(textureLimit) ||
+      textureLimit < 0
+    ) {
+      throw runtimeError(
+        `shader \`${artifact.name}\` could not determine the fragment texture-unit limit`,
+        artifact.fragmentLocation,
+      );
+    }
+    if (declaredSamplers > textureLimit || activeSamplers > textureLimit) {
+      throw runtimeError(
+        `shader \`${artifact.name}\` requires ${declaredSamplers} texture units, but the device supports ${textureLimit}`,
+        artifact.fragmentLocation,
+      );
+    }
+  }
+}
+
+function reflectedCount(
+  value: unknown,
+  kind: string,
+  artifact: ShaderArtifact,
+): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw runtimeError(
+      `shader \`${artifact.name}\` returned an invalid active ${kind} count`,
+      artifact.vertexLocation,
+    );
+  }
+  return value;
+}
+
+function webGlType(
+  gl: WebGL2RenderingContext,
+  type: ShaderValueType,
+): number {
+  switch (type) {
+    case "int": return gl.INT;
+    case "float": return gl.FLOAT;
+    case "bool": return gl.BOOL;
+    case "vec2": return gl.FLOAT_VEC2;
+    case "vec3": return gl.FLOAT_VEC3;
+    case "vec4": return gl.FLOAT_VEC4;
+    case "mat2": return gl.FLOAT_MAT2;
+    case "mat3": return gl.FLOAT_MAT3;
+    case "mat4": return gl.FLOAT_MAT4;
+    case "texture": return gl.SAMPLER_2D;
   }
 }
 

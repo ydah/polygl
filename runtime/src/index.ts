@@ -73,6 +73,10 @@ import type {
   SceneShaderValue,
   TextureHandle,
 } from "./scene.js";
+import {
+  validateProgramSource,
+  validateRuntimeOptions,
+} from "./validation.js";
 
 let activeSession: RuntimeSession | undefined;
 let startInProgress = false;
@@ -86,17 +90,21 @@ export async function start(
   }
   startInProgress = true;
   try {
+    const validatedSource = validateProgramSource(source);
+    const validatedOptions = validateRuntimeOptions(options);
     activeSession?.stop();
     const canvas =
-      options.canvas ?? createCanvas(options.document ?? globalThis.document);
-    const newSession = new RuntimeSession(canvas, options);
+      validatedOptions.canvas ?? createCanvas(
+        validatedOptions.document ?? globalThis.document,
+      );
+    const newSession = new RuntimeSession(canvas, validatedOptions);
     activeSession = newSession;
     newSession.setStopHandler(() => {
       if (activeSession === newSession) {
         activeSession = undefined;
       }
     });
-    await newSession.run(source);
+    await newSession.run(validatedSource);
     return newSession;
   } finally {
     startInProgress = false;

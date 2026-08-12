@@ -102,6 +102,267 @@ test("rejects a generated shader bundle with a missing or mismatched ABI", async
   }
 });
 
+test("validates runtime options without invoking accessors", async () => {
+  let getterCalls = 0;
+  const accessorOptions = {};
+  Object.defineProperty(accessorOptions, "canvas", {
+    enumerable: true,
+    get() {
+      getterCalls += 1;
+      return fakeCanvas();
+    },
+  });
+
+  await assert.rejects(start({}, accessorOptions), /canvas.*data property/);
+  assert.equal(getterCalls, 0);
+  await assert.rejects(start({}, null), /runtime options must be a plain object/);
+  await assert.rejects(
+    start({}, Object.create({ canvas: fakeCanvas() })),
+    /runtime options must not use a custom prototype/,
+  );
+  await assert.rejects(start({}, { seed: Number.NaN }), /seed.*finite number/);
+  await assert.rejects(start({}, { autoResize: "yes" }), /autoResize.*boolean/);
+
+  const { context } = fakeWebGl2();
+  await assert.rejects(
+    start({}, {
+      canvas: fakeCanvas(),
+      context,
+      autoResize: true,
+      createResizeObserver: () => ({}),
+      onError() {},
+    }),
+    /resize observer\.observe.*function/,
+  );
+});
+
+test("validates direct programs and program factory results", async () => {
+  let getterCalls = 0;
+  const accessorProgram = {};
+  Object.defineProperty(accessorProgram, "setup", {
+    enumerable: true,
+    get() {
+      getterCalls += 1;
+      return () => {};
+    },
+  });
+  await assert.rejects(start(accessorProgram), /program\.setup.*data property/);
+  assert.equal(getterCalls, 0);
+  await assert.rejects(start(null), /program must be a plain object/);
+  await assert.rejects(
+    start(Object.create({ setup() {} })),
+    /program must not use a custom prototype/,
+  );
+
+  for (const result of [undefined, { frame: 1 }, { __polyglRuntimeAbi: 1.5 }]) {
+    const { context } = fakeWebGl2();
+    await assert.rejects(
+      start(async () => result, {
+        canvas: fakeCanvas(),
+        context,
+        onError() {},
+      }),
+      /program|runtime boundary\.frame/,
+    );
+  }
+});
+
+test("rejects malformed and ambiguous shader metadata before linking", async () => {
+  let getterCalls = 0;
+  const accessorBundle = { debug: false, shaders: [] };
+  Object.defineProperty(accessorBundle, "shaderAbi", {
+    get() {
+      getterCalls += 1;
+      return shaderAbi;
+    },
+  });
+  await assert.rejects(
+    start({}, { shaderBundle: accessorBundle }),
+    /shader bundle\.shaderAbi.*data property/,
+  );
+  assert.equal(getterCalls, 0);
+
+  const inheritedArtifact = shaderBundle([{ name: "inherited" }]);
+  Object.setPrototypeOf(inheritedArtifact.shaders[0], { injected: true });
+  await assert.rejects(
+    start({}, { shaderBundle: inheritedArtifact }),
+    /shaders\[0\].*custom prototype/,
+  );
+
+  const accessorArtifact = shaderBundle([{ name: "accessor" }]);
+  Object.defineProperty(accessorArtifact.shaders[0], "uniforms", {
+    enumerable: true,
+    get() {
+      getterCalls += 1;
+      return [];
+    },
+  });
+  await assert.rejects(
+    start({}, { shaderBundle: accessorArtifact }),
+    /shaders\[0\]\.uniforms.*data property/,
+  );
+  assert.equal(getterCalls, 0);
+
+  const duplicateShaders = shaderBundle([
+    { name: "repeated" },
+    { name: "repeated" },
+  ]);
+  await assert.rejects(
+    start({}, { shaderBundle: duplicateShaders }),
+    /duplicate shader name `repeated`/,
+  );
+
+  const duplicateUniforms = shaderBundle([{
+    name: "uniforms",
+    uniforms: [
+      { name: "tint", glslName: "pgl_u_tint", type: "vec3", source: "user" },
+      { name: "tint", glslName: "pgl_u_other", type: "vec3", source: "user" },
+    ],
+  }]);
+  await assert.rejects(
+    start({}, { shaderBundle: duplicateUniforms }),
+    /duplicate uniform name `tint`/,
+  );
+
+  const duplicateAttributes = shaderBundle([{
+    name: "attributes",
+    attributes: [
+      { name: "position", glslName: "a_position", location: 0, type: "vec3" },
+      { name: "position", glslName: "a_position", location: 0, type: "vec3" },
+    ],
+  }]);
+  await assert.rejects(
+    start({}, { shaderBundle: duplicateAttributes }),
+    /duplicate attribute name `position`/,
+  );
+
+  for (const attribute of [
+    { name: "position", glslName: "a_position", location: -1, type: "vec3" },
+    { name: "position", glslName: "a_position", location: 0, type: "vec2" },
+    { name: "unknown", glslName: "a_unknown", location: 0, type: "vec3" },
+  ]) {
+    await assert.rejects(
+      start({}, {
+        shaderBundle: shaderBundle([{
+          name: "invalid_attribute",
+          attributes: [attribute],
+        }]),
+      }),
+      /location.*non-negative|invalid standard mesh attribute metadata/,
+    );
+  }
+
+  await assert.rejects(
+    start({}, {
+      shaderBundle: shaderBundle([{
+        name: "invalid_uniform",
+        uniforms: [{
+          name: "u_time",
+          glslName: "u_time",
+          type: "vec2",
+          source: "automatic",
+        }],
+      }]),
+    }),
+    /invalid automatic uniform metadata/,
+  );
+});
+
+test("checks shader metadata against linked program reflection", async () => {
+  const position = {
+    name: "position",
+    glslName: "a_position",
+    location: 0,
+    type: "vec3",
+  };
+  const tint = {
+    name: "tint",
+    glslName: "pgl_u_tint",
+    type: "vec3",
+    source: "user",
+  };
+
+  const wrongLocation = fakeWebGl2({
+    attributeLocations: { a_position: 2 },
+  });
+  await assert.rejects(
+    start({}, {
+      canvas: fakeCanvas(),
+      context: wrongLocation.context,
+      shaderBundle: shaderBundle([{
+        name: "wrong_location",
+        attributes: [position],
+      }]),
+      onError() {},
+    }),
+    /declares location 0.*reports 2/,
+  );
+
+  const wrongAttributeType = fakeWebGl2({
+    activeAttributes: [{ name: "a_position", size: 1, type: 0x8b50 }],
+  });
+  await assert.rejects(
+    start({}, {
+      canvas: fakeCanvas(),
+      context: wrongAttributeType.context,
+      shaderBundle: shaderBundle([{
+        name: "wrong_attribute_type",
+        attributes: [position],
+      }]),
+      onError() {},
+    }),
+    /attribute `position` type does not match/,
+  );
+
+  const wrongUniformType = fakeWebGl2({
+    activeUniforms: [{ name: "pgl_u_tint", size: 1, type: 0x8b52 }],
+  });
+  await assert.rejects(
+    start({}, {
+      canvas: fakeCanvas(),
+      context: wrongUniformType.context,
+      shaderBundle: shaderBundle([{
+        name: "wrong_uniform_type",
+        uniforms: [tint],
+      }]),
+      onError() {},
+    }),
+    /uniform `tint` type does not match/,
+  );
+
+  const unrecordedUniform = fakeWebGl2({
+    activeUniforms: [{ name: "driver_only", size: 1, type: 0x1406 }],
+  });
+  await assert.rejects(
+    start({}, {
+      canvas: fakeCanvas(),
+      context: unrecordedUniform.context,
+      shaderBundle: shaderBundle([{ name: "unrecorded" }]),
+      onError() {},
+    }),
+    /unrecorded active uniform `driver_only`/,
+  );
+
+  const noTextureUnits = fakeWebGl2({ maxTextureUnits: 0 });
+  await assert.rejects(
+    start({}, {
+      canvas: fakeCanvas(),
+      context: noTextureUnits.context,
+      shaderBundle: shaderBundle([{
+        name: "too_many_samplers",
+        uniforms: [{
+          name: "albedo",
+          glslName: "pgl_u_albedo",
+          type: "texture",
+          source: "user",
+        }],
+      }]),
+      onError() {},
+    }),
+    /requires 1 texture units.*supports 0/,
+  );
+});
+
 test("seeded random sequences are reproducible", () => {
   const first = new SeededRandom(42);
   const second = new SeededRandom(42);
@@ -1273,9 +1534,14 @@ function fakeWebGl2(options = {}) {
   const deletedBuffers = [];
   const deletedTextures = [];
   let shaderChecks = 0;
+  const activeAttributes = options.activeAttributes ?? [];
+  const activeUniforms = options.activeUniforms ?? [];
   const context = {
+    ACTIVE_ATTRIBUTES: 0x8b89,
+    ACTIVE_UNIFORMS: 0x8b86,
     ARRAY_BUFFER: 0x8892,
     BLEND: 0x0be2,
+    BOOL: 0x8b56,
     CLAMP_TO_EDGE: 0x812f,
     COLOR_BUFFER_BIT: 0x4000,
     COMPILE_STATUS: 0x8b81,
@@ -1284,13 +1550,22 @@ function fakeWebGl2(options = {}) {
     DYNAMIC_DRAW: 0x88e8,
     ELEMENT_ARRAY_BUFFER: 0x8893,
     FLOAT: 0x1406,
+    FLOAT_MAT2: 0x8b5a,
+    FLOAT_MAT3: 0x8b5b,
+    FLOAT_MAT4: 0x8b5c,
+    FLOAT_VEC2: 0x8b50,
+    FLOAT_VEC3: 0x8b51,
+    FLOAT_VEC4: 0x8b52,
     FRAGMENT_SHADER: 0x8b30,
     LEQUAL: 0x0203,
     LINEAR: 0x2601,
     LINK_STATUS: 0x8b82,
+    INT: 0x1404,
+    MAX_TEXTURE_IMAGE_UNITS: 0x8872,
     NO_ERROR: 0,
     ONE_MINUS_SRC_ALPHA: 0x0303,
     RGBA: 0x1908,
+    SAMPLER_2D: 0x8b5e,
     SRC_ALPHA: 0x0302,
     STATIC_DRAW: 0x88e4,
     TEXTURE_MAG_FILTER: 0x2800,
@@ -1344,13 +1619,28 @@ function fakeWebGl2(options = {}) {
     },
     enable() {},
     enableVertexAttribArray() {},
+    getActiveAttrib(_program, index) {
+      return activeAttributes[index] ?? null;
+    },
+    getActiveUniform(_program, index) {
+      return activeUniforms[index] ?? null;
+    },
     getAttribLocation(_program, name) {
+      if (options.attributeLocations?.[name] !== undefined) {
+        return options.attributeLocations[name];
+      }
       return name === "a_position" ? 0 : 1;
+    },
+    getParameter(parameter) {
+      if (parameter === 0x8872) return options.maxTextureUnits ?? 16;
+      return null;
     },
     getProgramInfoLog() {
       return "";
     },
-    getProgramParameter() {
+    getProgramParameter(_program, parameter) {
+      if (parameter === 0x8b89) return activeAttributes.length;
+      if (parameter === 0x8b86) return activeUniforms.length;
       return true;
     },
     getShaderInfoLog() {

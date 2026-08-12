@@ -222,6 +222,374 @@ function defineEntry(record, key, value) {
         writable: true,
     });
 }
+const MAX_SHADER_ENTRIES = 4096;
+const GLSL_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const VALIDATED_STANDARD_ATTRIBUTES = Object.freeze({
+    position: ["a_position", 0, "vec3"],
+    normal: ["a_normal", 1, "vec3"],
+    uv: ["a_uv", 2, "vec2"],
+    color: ["a_color", 3, "vec4"],
+});
+const VALIDATED_AUTOMATIC_UNIFORM_TYPES = Object.freeze({
+    u_time: "float",
+    u_resolution: "vec2",
+    u_model: "mat4",
+    u_view: "mat4",
+    u_proj: "mat4",
+});
+export function validateRuntimeOptions(value) {
+    const properties = dataProperties(value, "runtime options");
+    const canvas = optionalObject(properties, "canvas");
+    const context = optionalObject(properties, "context");
+    const documentObject = optionalObject(properties, "document");
+    const requestAnimationFrame = optionalFunction(properties, "requestAnimationFrame");
+    const cancelAnimationFrame = optionalFunction(properties, "cancelAnimationFrame");
+    const seed = optionalFiniteNumber(properties, "seed");
+    const shaderBundleValue = properties.get("shaderBundle");
+    const shaderBundle = shaderBundleValue === undefined
+        ? undefined
+        : validateShaderBundle(shaderBundleValue);
+    const imageLoader = optionalFunction(properties, "imageLoader");
+    const onError = optionalFunction(properties, "onError");
+    const requireRuntimeAbi = optionalBoolean(properties, "requireRuntimeAbi");
+    const maxDeltaSeconds = optionalPositiveFiniteNumber(properties, "maxDeltaSeconds");
+    const autoResize = optionalBoolean(properties, "autoResize");
+    const devicePixelRatio = optionalPositiveFiniteNumber(properties, "devicePixelRatio");
+    const createResizeObserver = optionalFunction(properties, "createResizeObserver");
+    return Object.freeze({
+        ...(canvas === undefined ? {} : { canvas }),
+        ...(context === undefined ? {} : { context }),
+        ...(documentObject === undefined ? {} : { document: documentObject }),
+        ...(requestAnimationFrame === undefined ? {} : { requestAnimationFrame }),
+        ...(cancelAnimationFrame === undefined ? {} : { cancelAnimationFrame }),
+        ...(seed === undefined ? {} : { seed }),
+        ...(shaderBundle === undefined ? {} : { shaderBundle }),
+        ...(imageLoader === undefined ? {} : { imageLoader }),
+        ...(onError === undefined ? {} : { onError }),
+        ...(requireRuntimeAbi === undefined ? {} : { requireRuntimeAbi }),
+        ...(maxDeltaSeconds === undefined ? {} : { maxDeltaSeconds }),
+        ...(autoResize === undefined ? {} : { autoResize }),
+        ...(devicePixelRatio === undefined ? {} : { devicePixelRatio }),
+        ...(createResizeObserver === undefined ? {} : { createResizeObserver }),
+    });
+}
+export function validateProgramSource(value) {
+    return typeof value === "function"
+        ? value
+        : validateProgram(value);
+}
+export function validateProgram(value) {
+    const properties = dataProperties(value, "program");
+    const setup = optionalFunction(properties, "setup");
+    const frame = optionalFunction(properties, "frame");
+    const onEvent = optionalFunction(properties, "on_event");
+    const runtimeAbiValue = properties.get("__polyglRuntimeAbi");
+    const runtimeAbi = runtimeAbiValue === undefined
+        ? undefined
+        : nonNegativeInteger(runtimeAbiValue, "program.__polyglRuntimeAbi");
+    const shaderBundleValue = properties.get("__polyglShaderBundle");
+    const shaderBundle = shaderBundleValue === undefined
+        ? undefined
+        : validateShaderBundle(shaderBundleValue);
+    return {
+        ...(setup === undefined ? {} : { setup }),
+        ...(frame === undefined ? {} : { frame }),
+        ...(onEvent === undefined ? {} : { on_event: onEvent }),
+        ...(runtimeAbi === undefined ? {} : { __polyglRuntimeAbi: runtimeAbi }),
+        ...(shaderBundle === undefined ? {} : {
+            __polyglShaderBundle: shaderBundle,
+        }),
+    };
+}
+export function validateResizeObserver(value) {
+    if (!isObject(value)) {
+        invalid("resize observer", "an object");
+    }
+    const observe = safeMethod(value, "observe", "resize observer");
+    const disconnect = safeMethod(value, "disconnect", "resize observer");
+    return Object.freeze({
+        observe: (target) => observe.call(value, target),
+        disconnect: () => disconnect.call(value),
+    });
+}
+export function validateShaderBundle(value) {
+    const properties = dataProperties(value, "shader bundle");
+    const shaderAbiValue = properties.get("shaderAbi");
+    const bundleShaderAbi = shaderAbiValue === undefined
+        ? undefined
+        : nonNegativeInteger(shaderAbiValue, "shader bundle.shaderAbi");
+    const debug = requiredBoolean(properties, "debug", "shader bundle.debug");
+    const shaders = validateShaderArtifacts(required(properties, "shaders", "shader bundle.shaders"));
+    return Object.freeze({
+        ...(bundleShaderAbi === undefined ? {} : { shaderAbi: bundleShaderAbi }),
+        debug,
+        shaders,
+    });
+}
+export function validateShaderArtifacts(value) {
+    const values = denseArray(value, "shader bundle.shaders");
+    const names = new Set();
+    return Object.freeze(values.map((entry, index) => {
+        const artifact = validateShaderArtifact(entry, `shader bundle.shaders[${index}]`);
+        unique(names, artifact.name, "shader name", artifact.vertexLocation);
+        return artifact;
+    }));
+}
+function validateShaderArtifact(value, path) {
+    const properties = dataProperties(value, path);
+    const name = requiredNonEmptyString(properties, "name", `${path}.name`);
+    const vertex = requiredString(properties, "vertex", `${path}.vertex`);
+    const fragment = requiredString(properties, "fragment", `${path}.fragment`);
+    const vertexLocation = validateSourceLocation(required(properties, "vertexLocation", `${path}.vertexLocation`), `${path}.vertexLocation`);
+    const fragmentLocation = validateSourceLocation(required(properties, "fragmentLocation", `${path}.fragmentLocation`), `${path}.fragmentLocation`);
+    const attributes = validateAttributes(required(properties, "attributes", `${path}.attributes`), path, vertexLocation);
+    const uniforms = validateUniforms(required(properties, "uniforms", `${path}.uniforms`), path, fragmentLocation);
+    return Object.freeze({
+        name,
+        vertex,
+        fragment,
+        attributes,
+        uniforms,
+        vertexLocation,
+        fragmentLocation,
+    });
+}
+function validateAttributes(value, artifactPath, location) {
+    const values = denseArray(value, `${artifactPath}.attributes`);
+    const names = new Set();
+    const glslNames = new Set();
+    const locations = new Set();
+    return Object.freeze(values.map((entry, index) => {
+        const path = `${artifactPath}.attributes[${index}]`;
+        const properties = dataProperties(entry, path);
+        const name = requiredNonEmptyString(properties, "name", `${path}.name`);
+        const glslName = requiredGlslName(properties, "glslName", path);
+        const attributeLocation = nonNegativeInteger(required(properties, "location", `${path}.location`), `${path}.location`);
+        const type = shaderValueType(required(properties, "type", `${path}.type`), `${path}.type`);
+        validateStandardAttribute(name, glslName, attributeLocation, type, location);
+        unique(names, name, "attribute name", location);
+        unique(glslNames, glslName, "attribute GLSL name", location);
+        unique(locations, attributeLocation, "attribute location", location);
+        return Object.freeze({ name, glslName, location: attributeLocation, type });
+    }));
+}
+function validateUniforms(value, artifactPath, location) {
+    const values = denseArray(value, `${artifactPath}.uniforms`);
+    const names = new Set();
+    const glslNames = new Set();
+    return Object.freeze(values.map((entry, index) => {
+        const path = `${artifactPath}.uniforms[${index}]`;
+        const properties = dataProperties(entry, path);
+        const name = requiredNonEmptyString(properties, "name", `${path}.name`);
+        const glslName = requiredGlslName(properties, "glslName", path);
+        const type = shaderValueType(required(properties, "type", `${path}.type`), `${path}.type`);
+        const sourceValue = required(properties, "source", `${path}.source`);
+        if (sourceValue !== "automatic" && sourceValue !== "user") {
+            invalid(`${path}.source`, '"automatic" or "user"');
+        }
+        validateAutomaticUniform(name, glslName, type, sourceValue, location);
+        unique(names, name, "uniform name", location);
+        unique(glslNames, glslName, "uniform GLSL name", location);
+        return Object.freeze({ name, glslName, type, source: sourceValue });
+    }));
+}
+function validateSourceLocation(value, path) {
+    const properties = dataProperties(value, path);
+    const source = requiredNonEmptyString(properties, "source", `${path}.source`);
+    const line = positiveSafeInteger(required(properties, "line", `${path}.line`), `${path}.line`);
+    const column = positiveSafeInteger(required(properties, "column", `${path}.column`), `${path}.column`);
+    const start = nonNegativeInteger(required(properties, "start", `${path}.start`), `${path}.start`);
+    const end = nonNegativeInteger(required(properties, "end", `${path}.end`), `${path}.end`);
+    if (end < start) {
+        throw new RangeError(`${path}.end must not precede start`);
+    }
+    return Object.freeze({ source, line, column, start, end });
+}
+function validateStandardAttribute(name, glslName, location, type, sourceLocation) {
+    const contract = VALIDATED_STANDARD_ATTRIBUTES[name];
+    if (contract === undefined ||
+        glslName !== contract[0] ||
+        location !== contract[1] ||
+        type !== contract[2]) {
+        throw runtimeError(`invalid standard mesh attribute metadata for \`${name}\``, sourceLocation);
+    }
+}
+function validateAutomaticUniform(name, glslName, type, source, location) {
+    const expectedType = VALIDATED_AUTOMATIC_UNIFORM_TYPES[name];
+    if (source === "automatic") {
+        if (expectedType === undefined || glslName !== name || type !== expectedType) {
+            throw runtimeError(`invalid automatic uniform metadata for \`${name}\``, location);
+        }
+    }
+    else if (expectedType !== undefined) {
+        throw runtimeError(`reserved automatic uniform \`${name}\` cannot be user-provided`, location);
+    }
+}
+function dataProperties(value, path) {
+    if (!isObject(value)) {
+        invalid(path, "a plain object");
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+        throw new TypeError(`${path} must not use a custom prototype`);
+    }
+    const properties = new Map();
+    for (const key of Reflect.ownKeys(value)) {
+        if (typeof key !== "string") {
+            throw new TypeError(`${path} must not contain symbol properties`);
+        }
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (descriptor === undefined || !("value" in descriptor)) {
+            throw new TypeError(`${path}.${key} must be a data property`);
+        }
+        properties.set(key, descriptor.value);
+    }
+    return properties;
+}
+function denseArray(value, path) {
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
+        invalid(path, "an array");
+    }
+    if (value.length > MAX_SHADER_ENTRIES) {
+        throw new RangeError(`${path} cannot contain more than ${MAX_SHADER_ENTRIES} entries`);
+    }
+    const values = [];
+    for (let index = 0; index < value.length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (descriptor === undefined || !("value" in descriptor)) {
+            throw new TypeError(`${path}[${index}] must be a data property`);
+        }
+        values.push(descriptor.value);
+    }
+    return values;
+}
+function safeMethod(value, name, path) {
+    let current = value;
+    while (current !== null) {
+        const descriptor = Object.getOwnPropertyDescriptor(current, name);
+        if (descriptor !== undefined) {
+            if (!("value" in descriptor) || typeof descriptor.value !== "function") {
+                invalid(`${path}.${name}`, "a data-property function");
+            }
+            return descriptor.value;
+        }
+        current = Object.getPrototypeOf(current);
+    }
+    invalid(`${path}.${name}`, "a function");
+}
+function required(properties, name, path) {
+    const value = properties.get(name);
+    if (value === undefined) {
+        throw new TypeError(`${path} is required`);
+    }
+    return value;
+}
+function requiredString(properties, name, path) {
+    const value = required(properties, name, path);
+    if (typeof value !== "string")
+        invalid(path, "a string");
+    return value;
+}
+function requiredNonEmptyString(properties, name, path) {
+    const value = requiredString(properties, name, path);
+    if (value.length === 0)
+        invalid(path, "a non-empty string");
+    return value;
+}
+function requiredGlslName(properties, name, path) {
+    const value = requiredNonEmptyString(properties, name, `${path}.${name}`);
+    if (!GLSL_IDENTIFIER.test(value)) {
+        invalid(`${path}.${name}`, "a GLSL identifier");
+    }
+    return value;
+}
+function requiredBoolean(properties, name, path) {
+    const value = required(properties, name, path);
+    if (typeof value !== "boolean")
+        invalid(path, "a boolean");
+    return value;
+}
+function optionalFunction(properties, name) {
+    const value = properties.get(name);
+    if (value === undefined)
+        return undefined;
+    if (typeof value !== "function")
+        invalid(`runtime boundary.${name}`, "a function");
+    return value;
+}
+function optionalObject(properties, name) {
+    const value = properties.get(name);
+    if (value === undefined)
+        return undefined;
+    if (!isObject(value))
+        invalid(`runtime options.${name}`, "an object");
+    return value;
+}
+function optionalBoolean(properties, name) {
+    const value = properties.get(name);
+    if (value === undefined)
+        return undefined;
+    if (typeof value !== "boolean")
+        invalid(`runtime options.${name}`, "a boolean");
+    return value;
+}
+function optionalFiniteNumber(properties, name) {
+    const value = properties.get(name);
+    if (value === undefined)
+        return undefined;
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+        invalid(`runtime options.${name}`, "a finite number");
+    }
+    return value;
+}
+function optionalPositiveFiniteNumber(properties, name) {
+    const value = optionalFiniteNumber(properties, name);
+    if (value !== undefined && value <= 0) {
+        invalid(`runtime options.${name}`, "a finite number greater than zero");
+    }
+    return value;
+}
+function shaderValueType(value, path) {
+    switch (value) {
+        case "int":
+        case "float":
+        case "bool":
+        case "vec2":
+        case "vec3":
+        case "vec4":
+        case "mat2":
+        case "mat3":
+        case "mat4":
+        case "texture":
+            return value;
+        default:
+            invalid(path, "a supported shader value type");
+    }
+}
+function nonNegativeInteger(value, path) {
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+        invalid(path, "a non-negative safe integer");
+    }
+    return value;
+}
+function positiveSafeInteger(value, path) {
+    const integer = nonNegativeInteger(value, path);
+    if (integer === 0)
+        invalid(path, "a positive safe integer");
+    return integer;
+}
+function unique(values, value, description, location) {
+    if (values.has(value)) {
+        throw runtimeError(`duplicate ${description} \`${String(value)}\` in shader metadata`, location);
+    }
+    values.add(value);
+}
+function isObject(value) {
+    return typeof value === "object" && value !== null;
+}
+function invalid(path, expectation) {
+    throw new TypeError(`${path} must be ${expectation}`);
+}
 export function identity4() {
     return new Float32Array([
         1, 0, 0, 0,
@@ -887,11 +1255,12 @@ export class WebGL2ShaderRegistry {
         this.gl = gl;
         this.debug = debug;
         this.shaders = new Map();
+        if (typeof debug !== "boolean") {
+            throw new TypeError("shader debug flag must be a boolean");
+        }
+        const validatedArtifacts = validateShaderArtifacts(artifacts);
         try {
-            for (const artifact of artifacts) {
-                if (this.shaders.has(artifact.name)) {
-                    throw runtimeError(`shader pair \`${artifact.name}\` is registered more than once`, artifact.vertexLocation);
-                }
+            for (const artifact of validatedArtifacts) {
                 this.shaders.set(artifact.name, this.link(artifact));
             }
         }
@@ -901,12 +1270,15 @@ export class WebGL2ShaderRegistry {
         }
     }
     static fromBundle(gl, bundle, requireShaderAbi = false) {
-        if (bundle !== undefined &&
-            (requireShaderAbi || bundle.shaderAbi !== undefined) &&
-            bundle.shaderAbi !== shaderAbi) {
-            throw new Error(`generated shader bundle requires shader ABI ${String(bundle.shaderAbi ?? "missing")}; this runtime provides shader ABI ${shaderAbi}`);
+        const validatedBundle = bundle === undefined
+            ? undefined
+            : validateShaderBundle(bundle);
+        if (validatedBundle !== undefined &&
+            (requireShaderAbi || validatedBundle.shaderAbi !== undefined) &&
+            validatedBundle.shaderAbi !== shaderAbi) {
+            throw new Error(`generated shader bundle requires shader ABI ${String(validatedBundle.shaderAbi ?? "missing")}; this runtime provides shader ABI ${shaderAbi}`);
         }
-        return new WebGL2ShaderRegistry(gl, bundle?.debug ?? false, bundle?.shaders ?? []);
+        return new WebGL2ShaderRegistry(gl, validatedBundle?.debug ?? false, validatedBundle?.shaders ?? []);
     }
     setUniform(shaderName, uniformName, value) {
         const shader = this.shaders.get(shaderName);
@@ -1015,6 +1387,7 @@ export class WebGL2ShaderRegistry {
                 const log = this.gl.getProgramInfoLog(program) ?? "unknown link failure";
                 throw runtimeError(`failed to link shader \`${artifact.name}\`: ${log}`, artifact.vertexLocation);
             }
+            validateProgramReflection(this.gl, program, artifact);
             const uniforms = new Map();
             for (const uniform of artifact.uniforms) {
                 const location = this.gl.getUniformLocation(program, uniform.glslName);
@@ -1130,6 +1503,87 @@ export class WebGL2ShaderRegistry {
             throw new Error("shader material belongs to another runtime session");
         }
         return shader;
+    }
+}
+function validateProgramReflection(gl, program, artifact) {
+    for (const binding of artifact.attributes) {
+        const actualLocation = gl.getAttribLocation(program, binding.glslName);
+        if (actualLocation !== binding.location) {
+            throw runtimeError(`shader \`${artifact.name}\` attribute \`${binding.name}\` declares location ${binding.location}, but the linked program reports ${actualLocation}`, artifact.vertexLocation);
+        }
+    }
+    const activeAttributes = reflectedCount(gl.getProgramParameter(program, gl.ACTIVE_ATTRIBUTES), "attribute", artifact);
+    const seenAttributes = new Set();
+    for (let index = 0; index < activeAttributes; index += 1) {
+        const reflected = gl.getActiveAttrib(program, index);
+        if (reflected === null) {
+            throw runtimeError(`shader \`${artifact.name}\` returned no reflection for active attribute ${index}`, artifact.vertexLocation);
+        }
+        const binding = artifact.attributes.find((candidate) => candidate.glslName === reflected.name);
+        if (binding === undefined) {
+            throw runtimeError(`shader \`${artifact.name}\` has unrecorded active attribute \`${reflected.name}\``, artifact.vertexLocation);
+        }
+        if (seenAttributes.has(reflected.name) || reflected.size !== 1) {
+            throw runtimeError(`shader \`${artifact.name}\` has invalid reflection for attribute \`${reflected.name}\``, artifact.vertexLocation);
+        }
+        seenAttributes.add(reflected.name);
+        if (reflected.type !== webGlType(gl, binding.type)) {
+            throw runtimeError(`shader \`${artifact.name}\` attribute \`${binding.name}\` type does not match the linked program`, artifact.vertexLocation);
+        }
+    }
+    const activeUniforms = reflectedCount(gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS), "uniform", artifact);
+    const seenUniforms = new Set();
+    let activeSamplers = 0;
+    for (let index = 0; index < activeUniforms; index += 1) {
+        const reflected = gl.getActiveUniform(program, index);
+        if (reflected === null) {
+            throw runtimeError(`shader \`${artifact.name}\` returned no reflection for active uniform ${index}`, artifact.fragmentLocation);
+        }
+        const binding = artifact.uniforms.find((candidate) => candidate.glslName === reflected.name);
+        if (binding === undefined) {
+            throw runtimeError(`shader \`${artifact.name}\` has unrecorded active uniform \`${reflected.name}\``, artifact.fragmentLocation);
+        }
+        if (seenUniforms.has(reflected.name) || reflected.size !== 1) {
+            throw runtimeError(`shader \`${artifact.name}\` has invalid reflection for uniform \`${reflected.name}\``, artifact.fragmentLocation);
+        }
+        seenUniforms.add(reflected.name);
+        if (reflected.type !== webGlType(gl, binding.type)) {
+            throw runtimeError(`shader \`${artifact.name}\` uniform \`${binding.name}\` type does not match the linked program`, artifact.fragmentLocation);
+        }
+        if (binding.type === "texture")
+            activeSamplers += 1;
+    }
+    const declaredSamplers = artifact.uniforms.filter((uniform) => uniform.type === "texture").length;
+    if (declaredSamplers > 0) {
+        const textureLimit = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
+        if (typeof textureLimit !== "number" ||
+            !Number.isInteger(textureLimit) ||
+            textureLimit < 0) {
+            throw runtimeError(`shader \`${artifact.name}\` could not determine the fragment texture-unit limit`, artifact.fragmentLocation);
+        }
+        if (declaredSamplers > textureLimit || activeSamplers > textureLimit) {
+            throw runtimeError(`shader \`${artifact.name}\` requires ${declaredSamplers} texture units, but the device supports ${textureLimit}`, artifact.fragmentLocation);
+        }
+    }
+}
+function reflectedCount(value, kind, artifact) {
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+        throw runtimeError(`shader \`${artifact.name}\` returned an invalid active ${kind} count`, artifact.vertexLocation);
+    }
+    return value;
+}
+function webGlType(gl, type) {
+    switch (type) {
+        case "int": return gl.INT;
+        case "float": return gl.FLOAT;
+        case "bool": return gl.BOOL;
+        case "vec2": return gl.FLOAT_VEC2;
+        case "vec3": return gl.FLOAT_VEC3;
+        case "vec4": return gl.FLOAT_VEC4;
+        case "mat2": return gl.FLOAT_MAT2;
+        case "mat3": return gl.FLOAT_MAT3;
+        case "mat4": return gl.FLOAT_MAT4;
+        case "texture": return gl.SAMPLER_2D;
     }
 }
 function createShaderMaterial(shaderName) {
@@ -1926,6 +2380,7 @@ export class RuntimeSession {
             }
             this.fail(new Error("WebGL context was restored, but GPU resources must be recreated; restart the runtime session"));
         };
+        options = validateRuntimeOptions(options);
         this.maxDeltaSeconds = positiveFinite(options.maxDeltaSeconds ?? 0.1, "maxDeltaSeconds");
         this.configuredDevicePixelRatio = options.devicePixelRatio === undefined
             ? undefined
@@ -1961,7 +2416,7 @@ export class RuntimeSession {
     async run(source) {
         try {
             this.replaceShaderBundle(this.initialShaderBundle, this.requireRuntimeAbi);
-            const program = typeof source === "function" ? await source() : source;
+            const program = validateProgram(typeof source === "function" ? await source() : source);
             if (this.stopped) {
                 return;
             }
@@ -2100,7 +2555,7 @@ export class RuntimeSession {
         if (factory === undefined) {
             throw new Error("autoResize requires ResizeObserver support or createResizeObserver");
         }
-        this.resizeObserver = factory(this.handleResize);
+        this.resizeObserver = validateResizeObserver(factory(this.handleResize));
         this.resizeObserver.observe(this.canvas);
     }
     updatePointerPosition(event) {
@@ -2228,16 +2683,18 @@ export async function start(source, options = {}) {
     }
     startInProgress = true;
     try {
+        const validatedSource = validateProgramSource(source);
+        const validatedOptions = validateRuntimeOptions(options);
         activeSession?.stop();
-        const canvas = options.canvas ?? createCanvas(options.document ?? globalThis.document);
-        const newSession = new RuntimeSession(canvas, options);
+        const canvas = validatedOptions.canvas ?? createCanvas(validatedOptions.document ?? globalThis.document);
+        const newSession = new RuntimeSession(canvas, validatedOptions);
         activeSession = newSession;
         newSession.setStopHandler(() => {
             if (activeSession === newSession) {
                 activeSession = undefined;
             }
         });
-        await newSession.run(source);
+        await newSession.run(validatedSource);
         return newSession;
     }
     finally {

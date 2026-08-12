@@ -13,6 +13,7 @@ const inputs = [
   "dist/errors.js",
   "dist/random.js",
   "dist/records.js",
+  "dist/validation.js",
   "dist/math3d.js",
   "dist/mesh.js",
   "dist/renderer.js",
