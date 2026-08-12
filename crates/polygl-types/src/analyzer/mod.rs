@@ -1078,9 +1078,19 @@ impl Analyzer {
             .copied()
             .unwrap_or(0);
         if count >= self.options.instance_limit {
+            let attempted = instance_signature(pending.source_name.as_str(), &key.arguments);
+            let mut generated = self
+                .instances
+                .keys()
+                .filter(|instance| instance.function == key.function)
+                .map(|instance| instance_signature(&instance.function, &instance.arguments))
+                .collect::<Vec<_>>();
+            generated.sort();
             self.instance_limit_error(
                 pending.source_name.as_str(),
                 self.options.instance_limit,
+                &attempted,
+                &generated,
                 pending.call_span,
             );
             return None;
@@ -1194,6 +1204,15 @@ impl Analyzer {
     pub(super) fn annotated_type(expression: &TypeExpr) -> InferType {
         InferType::from_type(&Type::from_expr(expression))
     }
+}
+
+fn instance_signature(function: &str, arguments: &[Type]) -> String {
+    let arguments = arguments
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{function}({arguments})")
 }
 
 fn block_always_returns(block: &polygl_hir::Block) -> bool {

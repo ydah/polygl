@@ -325,7 +325,14 @@ impl Analyzer {
         );
     }
 
-    pub(super) fn instance_limit_error(&mut self, name: &str, limit: usize, span: Span) {
+    pub(super) fn instance_limit_error(
+        &mut self,
+        name: &str,
+        limit: usize,
+        attempted: &str,
+        generated: &[String],
+        span: Span,
+    ) {
         self.diagnostics.push(
             Diagnostic::new(
                 Severity::Error,
@@ -333,6 +340,13 @@ impl Analyzer {
                 format!("`{name}` exceeds the limit of {limit} type instances"),
                 span,
             )
+            .with_note(format!("rejected call specialization: `{attempted}`"))
+            .with_note(format!(
+                "generated {} specialization{}: {}",
+                generated.len(),
+                if generated.len() == 1 { "" } else { "s" },
+                generated.join(", ")
+            ))
             .with_suggestion(Suggestion::rewrite(
                 span,
                 format!("add @pgl annotations or split `{name}` into type-specific functions"),

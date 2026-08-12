@@ -11,6 +11,7 @@ pub struct CompileBudget {
     pub max_syntax_depth: usize,
     pub max_items: usize,
     pub max_functions: usize,
+    pub max_specializations_per_function: usize,
     pub max_shaders: usize,
     pub max_diagnostics: usize,
 }
@@ -30,6 +31,7 @@ impl CompileBudget {
             max_syntax_depth: 512,
             max_items: 4_096,
             max_functions: 2_048,
+            max_specializations_per_function: 8,
             max_shaders: 128,
             max_diagnostics: 100,
         }
@@ -140,7 +142,12 @@ impl StageValidator {
     }
 
     pub(crate) fn validate_configuration(&self) -> Result<(), BudgetViolation> {
-        self.check("diagnostic count", self.budget.max_diagnostics, 1)
+        self.check("diagnostic count", self.budget.max_diagnostics, 1)?;
+        self.check(
+            "specializations per function",
+            self.budget.max_specializations_per_function,
+            1,
+        )
     }
 
     pub(crate) fn validate_source(&self, source_bytes: usize) -> Result<(), BudgetViolation> {

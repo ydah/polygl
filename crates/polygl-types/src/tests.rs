@@ -1119,6 +1119,14 @@ fn rejects_a_ninth_function_instance_with_e0310() {
         .find(|diagnostic| diagnostic.code == "E0310")
         .expect("instance limit diagnostic");
     assert!(!diagnostic.suggestions.is_empty());
+    assert_eq!(
+        diagnostic.notes.first().map(String::as_str),
+        Some("rejected call specialization: `identity(int[][])`")
+    );
+    assert_eq!(diagnostic.notes.len(), 2);
+    assert!(diagnostic.notes[1].contains("generated 8 specializations:"));
+    assert!(diagnostic.notes[1].contains("identity(int)"));
+    assert!(diagnostic.notes[1].contains("identity(str[])"));
 }
 
 #[test]

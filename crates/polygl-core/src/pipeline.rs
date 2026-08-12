@@ -159,11 +159,16 @@ impl<'adapter> Compiler<'adapter> {
             CompileStage::TypedHir,
             true,
             || {
-                polygl_types::analyze(hir.module())
-                    .map(TypedHir::new)
-                    .map_err(|diagnostics| {
-                        validated_diagnostics("type analyzer", source, diagnostics, budget)
-                    })
+                polygl_types::analyze_with_options(
+                    hir.module(),
+                    polygl_types::AnalyzeOptions {
+                        instance_limit: budget.max_specializations_per_function,
+                    },
+                )
+                .map(TypedHir::new)
+                .map_err(|diagnostics| {
+                    validated_diagnostics("type analyzer", source, diagnostics, budget)
+                })
             },
         )?;
         validator
@@ -795,6 +800,29 @@ mod tests {
             .unwrap_err();
         assert!(matches!(error, CompileError::Configuration(_)));
         assert!(error.render(&source).contains("diagnostic count"));
+    }
+
+    #[test]
+    fn rejects_a_zero_specialization_budget_before_lowering() {
+        COUNTING_LOWER_CALLS.store(0, Ordering::Relaxed);
+        let registry = AdapterRegistry::from_adapters([&COUNTING as &dyn LanguageAdapter]).unwrap();
+        let compiler = Compiler::new(registry);
+        let source = SourceFile::new(SourceId::new(0), "main.counting", "x");
+        let budget = CompileBudget {
+            max_specializations_per_function: 0,
+            ..CompileBudget::standard()
+        };
+
+        let error = compiler
+            .analyze_with_budget(&source, "counting", budget)
+            .unwrap_err();
+        assert!(matches!(error, CompileError::Configuration(_)));
+        assert_eq!(COUNTING_LOWER_CALLS.load(Ordering::Relaxed), 0);
+        assert!(
+            error
+                .render(&source)
+                .contains("specializations per function")
+        );
     }
 
     #[test]
