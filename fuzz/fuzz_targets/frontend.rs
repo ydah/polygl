@@ -1,12 +1,12 @@
 #![no_main]
 
+mod common;
+
 use libfuzzer_sys::fuzz_target;
-use polygl_adapter_api::{LanguageAdapter, LowerCtx};
+use polygl_adapter_api::LanguageAdapter;
 use polygl_adapter_perl::PerlAdapter;
 use polygl_adapter_php::PhpAdapter;
 use polygl_adapter_ruby::RubyAdapter;
-use polygl_core::BuiltinTable;
-use polygl_span::{SourceFile, SourceId};
 
 fuzz_target!(|input: &[u8]| {
     let Some((&language, source_bytes)) = input.split_first() else {
@@ -17,9 +17,5 @@ fuzz_target!(|input: &[u8]| {
         1 => &PhpAdapter,
         _ => &PerlAdapter,
     };
-    let Ok(source) = SourceFile::from_bytes(SourceId::new(0), "fuzz", source_bytes.to_vec()) else {
-        return;
-    };
-    let mut context = LowerCtx::new(&BuiltinTable);
-    let _ = adapter.lower(&source, &mut context);
+    common::fuzz_frontend(adapter, source_bytes);
 });

@@ -34,5 +34,26 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "frontend-ruby"
+path = "fuzz_targets/frontend_ruby.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "frontend-php"
+path = "fuzz_targets/frontend_php.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "frontend-perl"
+path = "fuzz_targets/frontend_perl.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
 members = ["."]
