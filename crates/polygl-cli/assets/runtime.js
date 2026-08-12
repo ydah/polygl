@@ -982,15 +982,25 @@ function boundedSegments(value, label, minimum = 3) {
     return value;
 }
 const FLOATS_PER_VERTEX = 6;
-const CIRCLE_SEGMENTS = 32;
 const IDENTITY_TRANSFORM = [1, 0, 0, 1, 0, 0];
-const STROKE_WIDTH = 1;
 const MAX_FLOAT32 = 3.4028234663852886e38;
+const INITIAL_VERTEX_CAPACITY = 256;
+const MIN_CIRCLE_SEGMENTS = 8;
+const MAX_CIRCLE_SEGMENTS = 512;
 export class WebGL2BatchRenderer {
     constructor(canvas, context, documentObject) {
         this.canvas = canvas;
-        this.vertices = [];
+        this.vertices = new Float32Array(INITIAL_VERTEX_CAPACITY);
+        this.vertexFloatCount = 0;
+        this.bufferCapacityBytes = 0;
+        this.drawCalls = 0;
+        this.triangles = 0;
+        this.uploadedBytes = 0;
+        this.bufferGrowths = 0;
         this.fillColor = [1, 1, 1, 1];
+        this.strokeWidthValue = 1;
+        this.strokeCapValue = "butt";
+        this.strokeJoinValue = "miter";
         this.transform = IDENTITY_TRANSFORM;
         this.transformStack = [];
         const initialWidth = positiveInteger(canvas.width, "canvas width");
@@ -1011,10 +1021,18 @@ export class WebGL2BatchRenderer {
             throw new Error("failed to create the WebGL2 vertex buffer");
         }
         this.buffer = buffer;
+        const vertexArray = gl.createVertexArray();
+        if (vertexArray === null) {
+            gl.deleteBuffer(this.buffer);
+            gl.deleteProgram(this.program);
+            throw new Error("failed to create the WebGL2 vertex array");
+        }
+        this.vertexArray = vertexArray;
         const position = gl.getAttribLocation(this.program, "a_position");
         const color = gl.getAttribLocation(this.program, "a_color");
         const resolution = gl.getUniformLocation(this.program, "u_resolution");
         if (position < 0 || color < 0 || resolution === null) {
+            gl.deleteVertexArray(this.vertexArray);
             gl.deleteBuffer(this.buffer);
             gl.deleteProgram(this.program);
             throw new Error("the built-in WebGL2 shader interface is incomplete");
@@ -1025,11 +1043,13 @@ export class WebGL2BatchRenderer {
         gl.useProgram(this.program);
         gl.enable(gl.BLEND);
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        gl.bindVertexArray(this.vertexArray);
         gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
         gl.enableVertexAttribArray(this.positionAttribute);
         gl.vertexAttribPointer(this.positionAttribute, 2, gl.FLOAT, false, FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT, 0);
         gl.enableVertexAttribArray(this.colorAttribute);
         gl.vertexAttribPointer(this.colorAttribute, 4, gl.FLOAT, false, FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT, 2 * Float32Array.BYTES_PER_ELEMENT);
+        gl.bindVertexArray(null);
         let overlay;
         try {
             overlay = Canvas2DTextOverlay.attach(canvas, documentObject);
@@ -1038,6 +1058,7 @@ export class WebGL2BatchRenderer {
         }
         catch (error) {
             overlay?.dispose();
+            gl.deleteVertexArray(this.vertexArray);
             gl.deleteBuffer(this.buffer);
             gl.deleteProgram(this.program);
             throw error;
@@ -1070,33 +1091,62 @@ export class WebGL2BatchRenderer {
     noStroke() {
         this.strokeColor = undefined;
     }
+    strokeWidth(width) {
+        if (!Number.isFinite(width) || width <= 0) {
+            throw new RangeError("stroke width must be a finite number greater than zero");
+        }
+        this.strokeWidthValue = width;
+    }
+    strokeCap(cap) {
+        if (cap !== "butt" && cap !== "square" && cap !== "round") {
+            throw new TypeError("stroke cap must be butt, square, or round");
+        }
+        this.strokeCapValue = cap;
+    }
+    strokeJoin(join) {
+        if (join !== "miter" && join !== "bevel" && join !== "round") {
+            throw new TypeError("stroke join must be miter, bevel, or round");
+        }
+        this.strokeJoinValue = join;
+    }
+    stats() {
+        return Object.freeze({
+            drawCalls: this.drawCalls,
+            triangles: this.triangles,
+            uploadedBytes: this.uploadedBytes,
+            bufferGrowths: this.bufferGrowths,
+            bufferCapacityBytes: this.bufferCapacityBytes,
+        });
+    }
     rect(x, y, width, height) {
         const right = x + width;
         const bottom = y + height;
         this.fillTriangle(x, y, right, y, right, bottom);
         this.fillTriangle(x, y, right, bottom, x, bottom);
         if (this.strokeColor !== undefined) {
-            this.strokeLine(x, y, right, y, this.strokeColor);
-            this.strokeLine(right, y, right, bottom, this.strokeColor);
-            this.strokeLine(right, bottom, x, bottom, this.strokeColor);
-            this.strokeLine(x, bottom, x, y, this.strokeColor);
+            this.strokePath([[x, y], [right, y], [right, bottom], [x, bottom]], true, this.strokeColor);
         }
     }
     circle(x, y, radius) {
         if (!Number.isFinite(radius) || radius < 0) {
             throw new RangeError("circle radius must be a non-negative finite number");
         }
-        for (let segment = 0; segment < CIRCLE_SEGMENTS; segment += 1) {
-            const start = (segment / CIRCLE_SEGMENTS) * Math.PI * 2;
-            const end = ((segment + 1) / CIRCLE_SEGMENTS) * Math.PI * 2;
+        if (radius === 0)
+            return;
+        const segments = this.circleSegments(radius);
+        const outline = [];
+        for (let segment = 0; segment < segments; segment += 1) {
+            const start = (segment / segments) * Math.PI * 2;
+            const end = ((segment + 1) / segments) * Math.PI * 2;
             const startX = x + Math.cos(start) * radius;
             const startY = y + Math.sin(start) * radius;
             const endX = x + Math.cos(end) * radius;
             const endY = y + Math.sin(end) * radius;
             this.fillTriangle(x, y, startX, startY, endX, endY);
-            if (this.strokeColor !== undefined) {
-                this.strokeLine(startX, startY, endX, endY, this.strokeColor);
-            }
+            outline.push([startX, startY]);
+        }
+        if (this.strokeColor !== undefined) {
+            this.strokePath(outline, true, this.strokeColor);
         }
     }
     line(x1, y1, x2, y2) {
@@ -1105,9 +1155,7 @@ export class WebGL2BatchRenderer {
     triangle(x1, y1, x2, y2, x3, y3) {
         this.fillTriangle(x1, y1, x2, y2, x3, y3);
         if (this.strokeColor !== undefined) {
-            this.strokeLine(x1, y1, x2, y2, this.strokeColor);
-            this.strokeLine(x2, y2, x3, y3, this.strokeColor);
-            this.strokeLine(x3, y3, x1, y1, this.strokeColor);
+            this.strokePath([[x1, y1], [x2, y2], [x3, y3]], true, this.strokeColor);
         }
     }
     text(value, x, y) {
@@ -1141,24 +1189,32 @@ export class WebGL2BatchRenderer {
         this.transform = finiteMatrix(multiply(this.transform, [coordinate(x), 0, 0, coordinate(y), 0, 0]));
     }
     flush() {
-        if (this.vertices.length === 0) {
+        if (this.vertexFloatCount === 0) {
             return;
         }
         const gl = this.gl;
         gl.disable(gl.DEPTH_TEST);
+        gl.bindVertexArray(this.vertexArray);
         gl.useProgram(this.program);
         gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
-        gl.enableVertexAttribArray(this.positionAttribute);
-        gl.vertexAttribPointer(this.positionAttribute, 2, gl.FLOAT, false, FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT, 0);
-        gl.enableVertexAttribArray(this.colorAttribute);
-        gl.vertexAttribPointer(this.colorAttribute, 4, gl.FLOAT, false, FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT, 2 * Float32Array.BYTES_PER_ELEMENT);
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(this.vertices), gl.DYNAMIC_DRAW);
+        const byteLength = this.vertexFloatCount * Float32Array.BYTES_PER_ELEMENT;
+        if (byteLength > this.bufferCapacityBytes) {
+            this.bufferCapacityBytes = geometricCapacity(Math.max(Float32Array.BYTES_PER_ELEMENT, this.bufferCapacityBytes), byteLength);
+            gl.bufferData(gl.ARRAY_BUFFER, this.bufferCapacityBytes, gl.DYNAMIC_DRAW);
+            this.bufferGrowths += 1;
+        }
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.vertices.subarray(0, this.vertexFloatCount));
         gl.uniform2f(this.resolution, this.canvas.width, this.canvas.height);
-        gl.drawArrays(gl.TRIANGLES, 0, this.vertices.length / FLOATS_PER_VERTEX);
-        this.vertices.length = 0;
+        gl.drawArrays(gl.TRIANGLES, 0, this.vertexFloatCount / FLOATS_PER_VERTEX);
+        this.drawCalls += 1;
+        this.triangles += this.vertexFloatCount / (FLOATS_PER_VERTEX * 3);
+        this.uploadedBytes += byteLength;
+        this.vertexFloatCount = 0;
+        gl.bindVertexArray(null);
     }
     dispose() {
-        this.vertices.length = 0;
+        this.vertexFloatCount = 0;
+        this.gl.deleteVertexArray(this.vertexArray);
         this.gl.deleteBuffer(this.buffer);
         this.gl.deleteProgram(this.program);
         this.textOverlay?.dispose();
@@ -1169,22 +1225,161 @@ export class WebGL2BatchRenderer {
         this.vertex(x3, y3, this.fillColor);
     }
     strokeLine(x1, y1, x2, y2, color) {
-        const [startX, startY] = this.transformPoint(x1, y1);
-        const [endX, endY] = this.transformPoint(x2, y2);
-        const dx = endX - startX;
-        const dy = endY - startY;
-        const length = Math.hypot(dx, dy);
-        if (length === 0) {
+        this.strokePath([[x1, y1], [x2, y2]], false, color);
+    }
+    strokePath(points, closed, color) {
+        const screenPoints = points.map(([x, y]) => this.transformPoint(x, y));
+        const segments = [];
+        const count = closed ? screenPoints.length : screenPoints.length - 1;
+        for (let index = 0; index < count; index += 1) {
+            const start = screenPoints[index];
+            const end = screenPoints[(index + 1) % screenPoints.length];
+            if (start === undefined || end === undefined)
+                continue;
+            const dx = end[0] - start[0];
+            const dy = end[1] - start[1];
+            const length = Math.hypot(dx, dy);
+            if (length <= Number.EPSILON)
+                continue;
+            const unitX = dx / length;
+            const unitY = dy / length;
+            segments.push({
+                startX: start[0],
+                startY: start[1],
+                endX: end[0],
+                endY: end[1],
+                unitX,
+                unitY,
+                normalX: -unitY,
+                normalY: unitX,
+            });
+        }
+        if (segments.length === 0)
+            return;
+        const halfWidth = this.strokeWidthValue / 2;
+        for (let index = 0; index < segments.length; index += 1) {
+            const segment = segments[index];
+            if (segment === undefined)
+                continue;
+            const squareStart = !closed && index === 0 && this.strokeCapValue === "square"
+                ? halfWidth
+                : 0;
+            const squareEnd = !closed && index === segments.length - 1 &&
+                this.strokeCapValue === "square"
+                ? halfWidth
+                : 0;
+            this.strokeSegmentQuad(segment, halfWidth, squareStart, squareEnd, color);
+        }
+        const joinCount = closed ? segments.length : segments.length - 1;
+        for (let index = 0; index < joinCount; index += 1) {
+            const previous = segments[index];
+            const next = segments[(index + 1) % segments.length];
+            if (previous !== undefined && next !== undefined) {
+                this.strokeJoinGeometry(previous, next, halfWidth, color);
+            }
+        }
+        if (!closed && this.strokeCapValue === "round") {
+            const first = segments[0];
+            const last = segments[segments.length - 1];
+            if (first !== undefined)
+                this.roundCap(first, true, halfWidth, color);
+            if (last !== undefined)
+                this.roundCap(last, false, halfWidth, color);
+        }
+    }
+    strokeSegmentQuad(segment, halfWidth, extendStart, extendEnd, color) {
+        const startX = segment.startX - segment.unitX * extendStart;
+        const startY = segment.startY - segment.unitY * extendStart;
+        const endX = segment.endX + segment.unitX * extendEnd;
+        const endY = segment.endY + segment.unitY * extendEnd;
+        const offsetX = segment.normalX * halfWidth;
+        const offsetY = segment.normalY * halfWidth;
+        this.screenTriangle([startX + offsetX, startY + offsetY], [endX + offsetX, endY + offsetY], [endX - offsetX, endY - offsetY], color);
+        this.screenTriangle([startX + offsetX, startY + offsetY], [endX - offsetX, endY - offsetY], [startX - offsetX, startY - offsetY], color);
+    }
+    strokeJoinGeometry(previous, next, halfWidth, color) {
+        const cross = previous.unitX * next.unitY - previous.unitY * next.unitX;
+        if (Math.abs(cross) <= 1e-12)
+            return;
+        const side = cross > 0 ? -1 : 1;
+        const center = [previous.endX, previous.endY];
+        const first = [
+            center[0] + previous.normalX * halfWidth * side,
+            center[1] + previous.normalY * halfWidth * side,
+        ];
+        const second = [
+            center[0] + next.normalX * halfWidth * side,
+            center[1] + next.normalY * halfWidth * side,
+        ];
+        if (this.strokeJoinValue === "bevel") {
+            this.screenTriangle(center, first, second, color);
             return;
         }
-        const offsetX = (-dy / length) * (STROKE_WIDTH / 2);
-        const offsetY = (dx / length) * (STROKE_WIDTH / 2);
-        this.screenVertex(startX + offsetX, startY + offsetY, color);
-        this.screenVertex(endX + offsetX, endY + offsetY, color);
-        this.screenVertex(endX - offsetX, endY - offsetY, color);
-        this.screenVertex(startX + offsetX, startY + offsetY, color);
-        this.screenVertex(endX - offsetX, endY - offsetY, color);
-        this.screenVertex(startX - offsetX, startY - offsetY, color);
+        if (this.strokeJoinValue === "round") {
+            this.roundJoin(center, first, second, cross > 0, color);
+            return;
+        }
+        const firstNormalX = previous.normalX * side;
+        const firstNormalY = previous.normalY * side;
+        const secondNormalX = next.normalX * side;
+        const secondNormalY = next.normalY * side;
+        const sumX = firstNormalX + secondNormalX;
+        const sumY = firstNormalY + secondNormalY;
+        const sumLength = Math.hypot(sumX, sumY);
+        if (sumLength <= 1e-12) {
+            this.screenTriangle(center, first, second, color);
+            return;
+        }
+        const miterX = sumX / sumLength;
+        const miterY = sumY / sumLength;
+        const denominator = miterX * secondNormalX + miterY * secondNormalY;
+        const miterLength = denominator <= 1e-12 ? Infinity : halfWidth / denominator;
+        if (!Number.isFinite(miterLength) || miterLength > halfWidth * 4) {
+            this.screenTriangle(center, first, second, color);
+            return;
+        }
+        const tip = [
+            center[0] + miterX * miterLength,
+            center[1] + miterY * miterLength,
+        ];
+        this.screenTriangle(first, tip, second, color);
+    }
+    roundJoin(center, first, second, counterClockwise, color) {
+        let start = Math.atan2(first[1] - center[1], first[0] - center[0]);
+        let end = Math.atan2(second[1] - center[1], second[0] - center[0]);
+        if (counterClockwise) {
+            while (end < start)
+                end += Math.PI * 2;
+        }
+        else {
+            while (end > start)
+                end -= Math.PI * 2;
+        }
+        const steps = Math.max(2, Math.ceil(Math.abs(end - start) * 4));
+        for (let index = 0; index < steps; index += 1) {
+            const angle1 = start + ((end - start) * index) / steps;
+            const angle2 = start + ((end - start) * (index + 1)) / steps;
+            const radius = this.strokeWidthValue / 2;
+            this.screenTriangle(center, [center[0] + Math.cos(angle1) * radius, center[1] + Math.sin(angle1) * radius], [center[0] + Math.cos(angle2) * radius, center[1] + Math.sin(angle2) * radius], color);
+        }
+    }
+    roundCap(segment, atStart, radius, color) {
+        const center = atStart
+            ? [segment.startX, segment.startY]
+            : [segment.endX, segment.endY];
+        const direction = Math.atan2(segment.unitY, segment.unitX);
+        const start = atStart ? direction + Math.PI / 2 : direction - Math.PI / 2;
+        const steps = Math.max(4, Math.ceil(Math.PI * radius / 2));
+        for (let index = 0; index < steps; index += 1) {
+            const angle1 = start + (Math.PI * index) / steps;
+            const angle2 = start + (Math.PI * (index + 1)) / steps;
+            this.screenTriangle(center, [center[0] + Math.cos(angle1) * radius, center[1] + Math.sin(angle1) * radius], [center[0] + Math.cos(angle2) * radius, center[1] + Math.sin(angle2) * radius], color);
+        }
+    }
+    screenTriangle(first, second, third, color) {
+        this.screenVertex(first[0], first[1], color);
+        this.screenVertex(second[0], second[1], color);
+        this.screenVertex(third[0], third[1], color);
     }
     vertex(x, y, color) {
         const [screenX, screenY] = this.transformPoint(x, y);
@@ -1200,7 +1395,28 @@ export class WebGL2BatchRenderer {
         ];
     }
     screenVertex(x, y, color) {
-        this.vertices.push(drawableCoordinate(x), drawableCoordinate(y), ...color);
+        this.ensureVertexCapacity(FLOATS_PER_VERTEX);
+        const offset = this.vertexFloatCount;
+        this.vertices[offset] = drawableCoordinate(x);
+        this.vertices[offset + 1] = drawableCoordinate(y);
+        this.vertices.set(color, offset + 2);
+        this.vertexFloatCount += FLOATS_PER_VERTEX;
+    }
+    ensureVertexCapacity(additional) {
+        const required = this.vertexFloatCount + additional;
+        if (required <= this.vertices.length)
+            return;
+        const replacement = new Float32Array(geometricCapacity(this.vertices.length, required));
+        replacement.set(this.vertices);
+        this.vertices = replacement;
+    }
+    circleSegments(radius) {
+        const [a, b, c, d] = this.transform;
+        const projectedRadius = radius * Math.max(Math.hypot(a, b), Math.hypot(c, d));
+        if (projectedRadius <= 0.5)
+            return MIN_CIRCLE_SEGMENTS;
+        const maximumAngle = 2 * Math.acos(Math.max(-1, 1 - 0.5 / projectedRadius));
+        return Math.min(MAX_CIRCLE_SEGMENTS, Math.max(MIN_CIRCLE_SEGMENTS, Math.ceil((Math.PI * 2) / maximumAngle)));
     }
 }
 class Canvas2DTextOverlay {
@@ -1371,10 +1587,20 @@ function channel(value) {
     return Math.min(1, Math.max(0, value));
 }
 function positiveInteger(value, label) {
-    if (!Number.isInteger(value) || value <= 0) {
-        throw new RangeError(`${label} must be a positive integer`);
+    if (!Number.isSafeInteger(value) || value <= 0) {
+        throw new RangeError(`${label} must be a positive safe integer`);
     }
     return value;
+}
+function geometricCapacity(current, required) {
+    let capacity = Math.max(1, current);
+    while (capacity < required) {
+        capacity *= 2;
+        if (!Number.isSafeInteger(capacity)) {
+            throw new RangeError("renderer vertex capacity exceeds the safe integer range");
+        }
+    }
+    return capacity;
 }
 const shaderMaterialBrand = Symbol("ShaderMaterial");
 const IDENTITY_MATRIX = new Float32Array([
@@ -1389,6 +1615,8 @@ export class WebGL2ShaderRegistry {
         this.debug = debug;
         this.shaders = new Map();
         this.materials = new WeakMap();
+        this.compileLinkMilliseconds = 0;
+        this.uniformUploads = 0;
         if (typeof debug !== "boolean") {
             throw new TypeError("shader debug flag must be a boolean");
         }
@@ -1398,7 +1626,9 @@ export class WebGL2ShaderRegistry {
         }
         try {
             for (const artifact of validatedArtifacts) {
+                const started = monotonicMilliseconds();
                 const shader = this.link(artifact);
+                this.compileLinkMilliseconds += Math.max(0, monotonicMilliseconds() - started);
                 this.shaders.set(artifact.name, shader);
                 this.materials.set(shader.material, shader);
             }
@@ -1429,8 +1659,20 @@ export class WebGL2ShaderRegistry {
             throw runtimeError(`shader \`${shaderName}\` has no user uniform \`${uniformName}\``, shader.artifact.fragmentLocation);
         }
         validateUniformValue(this.gl, binding, value, shader.artifact.fragmentLocation);
-        shader.userValues.set(uniformName, copyUniformValue(value));
+        const copied = copyUniformValue(value);
+        const previous = shader.userValues.get(uniformName);
+        if (!uniformValuesEqual(previous, copied)) {
+            shader.userValues.set(uniformName, copied);
+            shader.globalDirty.add(uniformName);
+        }
         shader.globalUniformsSet = true;
+    }
+    stats() {
+        return Object.freeze({
+            programs: this.shaders.size,
+            compileLinkMilliseconds: this.compileLinkMilliseconds,
+            uniformUploads: this.uniformUploads,
+        });
     }
     material(shaderName) {
         const shader = this.shaders.get(shaderName);
@@ -1461,8 +1703,14 @@ export class WebGL2ShaderRegistry {
                 continue;
             }
             if (binding.source === "automatic") {
+                const value = automaticUniformValue(binding, automatic);
+                if (uniformValuesEqual(shader.drawValues.get(binding.name), value)) {
+                    continue;
+                }
+                this.beginUploadScope(shader, binding);
                 this.uploadAutomaticForDraw(binding, location, automatic);
                 this.assertUploadSucceeded(shader, binding);
+                shader.drawValues.set(binding.name, copyUniformValue(value));
                 continue;
             }
             const value = userValues.get(binding.name);
@@ -1472,14 +1720,20 @@ export class WebGL2ShaderRegistry {
                 }
                 continue;
             }
+            if (binding.type !== "texture" &&
+                uniformValuesEqual(shader.drawValues.get(binding.name), value)) {
+                continue;
+            }
+            this.beginUploadScope(shader, binding);
             textureUnit = this.uploadUser(binding, location, value, textureUnit);
             this.assertUploadSucceeded(shader, binding);
+            shader.drawValues.set(binding.name, copyUniformValue(value));
         }
         return shader.artifact.attributes;
     }
     updateAutomaticUniforms(elapsedSeconds, width, height) {
         for (const shader of this.shaders.values()) {
-            this.gl.useProgram(shader.program);
+            let programBound = false;
             let textureUnit = 0;
             for (const binding of shader.artifact.uniforms) {
                 const location = shader.uniforms.get(binding.name);
@@ -1487,8 +1741,17 @@ export class WebGL2ShaderRegistry {
                     continue;
                 }
                 if (binding.source === "automatic") {
+                    if (!globalAutomaticChanged(binding, shader.lastGlobalAutomatic, elapsedSeconds, width, height)) {
+                        continue;
+                    }
+                    if (!programBound) {
+                        this.gl.useProgram(shader.program);
+                        programBound = true;
+                    }
+                    this.beginUploadScope(shader, binding);
                     this.uploadAutomatic(binding, location, elapsedSeconds, width, height);
                     this.assertUploadSucceeded(shader, binding);
+                    shader.drawValues.delete(binding.name);
                     continue;
                 }
                 const value = shader.userValues.get(binding.name);
@@ -1498,9 +1761,22 @@ export class WebGL2ShaderRegistry {
                     }
                     continue;
                 }
+                if (!shader.globalDirty.has(binding.name)) {
+                    if (binding.type === "texture")
+                        textureUnit += 1;
+                    continue;
+                }
+                if (!programBound) {
+                    this.gl.useProgram(shader.program);
+                    programBound = true;
+                }
+                this.beginUploadScope(shader, binding);
                 textureUnit = this.uploadUser(binding, location, value, textureUnit);
                 this.assertUploadSucceeded(shader, binding);
+                shader.globalDirty.delete(binding.name);
+                shader.drawValues.delete(binding.name);
             }
+            shader.lastGlobalAutomatic = { elapsedSeconds, width, height };
         }
     }
     dispose() {
@@ -1540,6 +1816,9 @@ export class WebGL2ShaderRegistry {
                 program,
                 uniforms,
                 userValues: new Map(),
+                globalDirty: new Set(),
+                drawValues: new Map(),
+                lastGlobalAutomatic: undefined,
                 globalUniformsSet: false,
             };
         }
@@ -1631,10 +1910,22 @@ export class WebGL2ShaderRegistry {
         }
     }
     assertUploadSucceeded(shader, binding) {
+        this.uniformUploads += 1;
+        if (!this.debug)
+            return;
         const error = this.gl.getError();
         if (error !== this.gl.NO_ERROR) {
             throw runtimeError(`WebGL rejected uniform \`${binding.name}\` for shader \`${shader.artifact.name}\` (error 0x${error.toString(16)})`, shader.artifact.fragmentLocation);
         }
+    }
+    beginUploadScope(shader, binding) {
+        if (!this.debug)
+            return;
+        for (let count = 0; count < 16; count += 1) {
+            if (this.gl.getError() === this.gl.NO_ERROR)
+                return;
+        }
+        throw runtimeError(`could not clear prior WebGL errors before uniform \`${binding.name}\` for shader \`${shader.artifact.name}\``, shader.artifact.fragmentLocation);
     }
     requireMaterial(material) {
         const shader = this.materials.get(material);
@@ -1801,8 +2092,49 @@ function validateNumericArray(value, length, invalid) {
 function copyUniformValue(value) {
     return isNumericSequence(value) ? Object.freeze(Array.from(value)) : value;
 }
+function uniformValuesEqual(left, right) {
+    if (left === right)
+        return true;
+    if (!isNumericSequence(left) || !isNumericSequence(right))
+        return false;
+    if (left.length !== right.length)
+        return false;
+    for (let index = 0; index < left.length; index += 1) {
+        if (left[index] !== right[index])
+            return false;
+    }
+    return true;
+}
+function automaticUniformValue(binding, automatic) {
+    switch (binding.name) {
+        case "u_time": return automatic.elapsedSeconds;
+        case "u_resolution": return [automatic.width, automatic.height];
+        case "u_model": return automatic.model;
+        case "u_view": return automatic.view;
+        case "u_proj": return automatic.projection;
+        default: throw new Error(`unknown automatic uniform \`${binding.name}\``);
+    }
+}
+function globalAutomaticChanged(binding, previous, elapsedSeconds, width, height) {
+    if (previous === undefined)
+        return true;
+    switch (binding.name) {
+        case "u_time": return previous.elapsedSeconds !== elapsedSeconds;
+        case "u_resolution": return previous.width !== width || previous.height !== height;
+        case "u_model":
+        case "u_view":
+        case "u_proj":
+            return false;
+        default: throw new Error(`unknown automatic uniform \`${binding.name}\``);
+    }
+}
 function isNumericSequence(value) {
     return Array.isArray(value) || value instanceof Float32Array;
+}
+function monotonicMilliseconds() {
+    return typeof globalThis.performance?.now === "function"
+        ? globalThis.performance.now()
+        : Date.now();
 }
 const sceneOwnerBrand = Symbol("SceneOwner");
 const sceneHandleInfo = new WeakMap();
@@ -1825,6 +2157,8 @@ export class WebGL2SceneRenderer {
         this.startupPhase = true;
         this.disposed = false;
         this.meshBytes = 0;
+        this.drawCalls = 0;
+        this.triangles = 0;
         this.camera = {
             verticalFov: Math.PI / 4,
             near: 0.1,
@@ -1841,6 +2175,16 @@ export class WebGL2SceneRenderer {
     }
     replaceShaderRegistry(registry) {
         this.shaderRegistry = registry;
+    }
+    stats() {
+        return Object.freeze({
+            drawCalls: this.drawCalls,
+            triangles: this.triangles,
+            meshes: this.meshes.size,
+            meshBytes: this.meshBytes,
+            nodes: this.nodes.size,
+            textures: this.textures.size,
+        });
     }
     meshBox(width, height, depth) {
         return this.createMesh(boxMesh(width, height, depth));
@@ -1864,8 +2208,8 @@ export class WebGL2SceneRenderer {
         return Object.freeze(material);
     }
     nodeAdd(mesh, material) {
-        this.assertResourceCount("scene nodes", this.nodes.size, this.resourceLimits.maxNodes);
         const resource = this.requireMesh(mesh);
+        this.assertResourceCount("scene nodes", this.nodes.size, this.resourceLimits.maxNodes);
         if (this.basicMaterials.has(material)) {
             this.requireOwned(material, "material");
         }
@@ -1905,6 +2249,9 @@ export class WebGL2SceneRenderer {
         }
         this.meshes.delete(resource);
         this.meshBytes -= resource.byteLength;
+        for (const vertexArray of resource.vertexArrays.values()) {
+            this.gl.deleteVertexArray(vertexArray);
+        }
         this.gl.deleteBuffer(resource.vertexBuffer);
         this.gl.deleteBuffer(resource.indexBuffer);
     }
@@ -2086,7 +2433,10 @@ export class WebGL2SceneRenderer {
                 this.bindMesh(node.mesh, attributes);
             }
             this.gl.drawElements(this.gl.TRIANGLES, node.mesh.indexCount, this.gl.UNSIGNED_INT, 0);
+            this.drawCalls += 1;
+            this.triangles += node.mesh.indexCount / 3;
         }
+        this.gl.bindVertexArray(null);
         this.gl.disable(this.gl.DEPTH_TEST);
     }
     dispose() {
@@ -2095,6 +2445,9 @@ export class WebGL2SceneRenderer {
         }
         this.disposed = true;
         for (const mesh of this.meshes) {
+            for (const vertexArray of mesh.vertexArrays.values()) {
+                this.gl.deleteVertexArray(vertexArray);
+            }
             this.gl.deleteBuffer(mesh.vertexBuffer);
             this.gl.deleteBuffer(mesh.indexBuffer);
         }
@@ -2138,6 +2491,7 @@ export class WebGL2SceneRenderer {
             indexBuffer,
             indexCount: data.indices.length,
             byteLength,
+            vertexArrays: new Map(),
             references: 0,
         };
         this.meshes.add(mesh);
@@ -2146,6 +2500,19 @@ export class WebGL2SceneRenderer {
         return handle;
     }
     bindMesh(mesh, attributes) {
+        const layoutKey = attributes
+            .map((attribute) => `${attribute.name}:${attribute.location}`)
+            .join("|");
+        const cached = mesh.vertexArrays.get(layoutKey);
+        if (cached !== undefined) {
+            this.gl.bindVertexArray(cached);
+            return;
+        }
+        const vertexArray = this.gl.createVertexArray();
+        if (vertexArray === null) {
+            throw new Error("failed to create a mesh vertex array");
+        }
+        this.gl.bindVertexArray(vertexArray);
         this.gl.bindBuffer(this.gl.ARRAY_BUFFER, mesh.vertexBuffer);
         this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, mesh.indexBuffer);
         const stride = FLOATS_PER_MESH_VERTEX * Float32Array.BYTES_PER_ELEMENT;
@@ -2157,6 +2524,7 @@ export class WebGL2SceneRenderer {
             this.gl.enableVertexAttribArray(attribute.location);
             this.gl.vertexAttribPointer(attribute.location, layout.size, this.gl.FLOAT, false, stride, layout.offset * Float32Array.BYTES_PER_ELEMENT);
         }
+        mesh.vertexArrays.set(layoutKey, vertexArray);
     }
     bindBasic(material, model, view, projection) {
         const basic = this.basicProgram ?? this.createBasicProgram();
@@ -2684,6 +3052,7 @@ export class RuntimeSession {
         this.contextLost = false;
         this.stopped = false;
         this.onStop = () => { };
+        this.renderedFrames = 0;
         this.tick = (timestamp) => {
             if (this.stopped || this.sessionState !== "running") {
                 return;
@@ -2880,6 +3249,7 @@ export class RuntimeSession {
         if (this.autoResize) {
             try {
                 this.installResizeObserver(options.createResizeObserver);
+                this.windowObject?.addEventListener("resize", this.handleResize);
                 this.syncDisplaySize();
             }
             catch (error) {
@@ -2908,9 +3278,9 @@ export class RuntimeSession {
             if (this.stopped) {
                 return;
             }
-            if (!this.contextLost) {
-                this.render();
-            }
+            if (this.contextLost)
+                return;
+            this.render();
             this.sessionState = this.shouldPauseForVisibility() ? "paused" : "running";
             if (program.frame !== undefined &&
                 !this.contextLost &&
@@ -2950,6 +3320,7 @@ export class RuntimeSession {
         this.documentObject?.removeEventListener("keyup", this.handleKeyUp);
         this.documentObject?.removeEventListener("visibilitychange", this.handleVisibilityChange);
         this.windowObject?.removeEventListener("blur", this.handleBlur);
+        this.windowObject?.removeEventListener("resize", this.handleResize);
         this.renderer.dispose();
         this.scene.dispose();
         this.shaderRegistry.dispose();
@@ -2964,6 +3335,14 @@ export class RuntimeSession {
     capabilities() {
         this.runtimeCapabilities ?? (this.runtimeCapabilities = readRuntimeCapabilities(this.renderer.context));
         return this.runtimeCapabilities;
+    }
+    stats() {
+        return Object.freeze({
+            frames: this.renderedFrames,
+            batch: this.renderer.stats(),
+            scene: this.scene.stats(),
+            shaders: this.shaderRegistry.stats(),
+        });
     }
     setShaderUniform(shaderName, uniformName, value) {
         this.shaderRegistry.setUniform(shaderName, uniformName, value);
@@ -3159,8 +3538,12 @@ export class RuntimeSession {
         if (bounds.width <= 0 || bounds.height <= 0) {
             return false;
         }
+        const observedRatio = this.windowObject?.devicePixelRatio;
         const ratio = this.configuredDevicePixelRatio ??
-            this.windowObject?.devicePixelRatio ?? 1;
+            (typeof observedRatio === "number" &&
+                Number.isFinite(observedRatio) && observedRatio > 0
+                ? observedRatio
+                : 1);
         const width = Math.max(1, Math.round(bounds.width * ratio));
         const height = Math.max(1, Math.round(bounds.height * ratio));
         if (this.canvas.width === width && this.canvas.height === height) {
@@ -3176,6 +3559,7 @@ export class RuntimeSession {
         this.updateShaderUniforms();
         this.scene.render(this.elapsedSeconds, this.canvas.width, this.canvas.height);
         this.renderer.flush();
+        this.renderedFrames += 1;
     }
     replaceShaderBundle(bundle, requireShaderAbi = false) {
         this.shaderRegistry.dispose();
@@ -3293,6 +3677,15 @@ export function stroke(r, g, b, a = 1) {
 export function noStroke() {
     session().renderer.noStroke();
 }
+export function strokeWidth(width) {
+    session().renderer.strokeWidth(width);
+}
+export function strokeCap(cap) {
+    session().renderer.strokeCap(cap);
+}
+export function strokeJoin(join) {
+    session().renderer.strokeJoin(join);
+}
 export function rect(x, y, width, height) {
     session().renderer.rect(x, y, width, height);
 }
@@ -3403,6 +3796,9 @@ export function shaderSet(node, name, value) {
 }
 export function runtimeCapabilities() {
     return session().capabilities();
+}
+export function runtimeStats() {
+    return session().stats();
 }
 export function floorToInt(value) {
     return saturatingInt(Math.floor(value));

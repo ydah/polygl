@@ -43,6 +43,7 @@ const {
   rect,
   rotate,
   runtimeCapabilities,
+  runtimeStats,
   roundToInt,
   runtimeOps,
   runtimeAbi,
@@ -54,6 +55,9 @@ const {
   size,
   start,
   stroke,
+  strokeCap,
+  strokeJoin,
+  strokeWidth,
   structFromEntries,
   text,
   textureLoad,
@@ -650,14 +654,14 @@ test("runs setup and frames while batching shape vertices", async () => {
   assert.equal(canvas.height, 180);
   assert.equal(loadValues[0], 64);
   assert.ok(loadValues[1] >= 0 && loadValues[1] < 1);
-  assert.deepEqual(draws, [102]);
+  assert.deepEqual(draws, [30]);
   assert.equal(clears.length, 0);
   assert.equal(frames.length, 1);
 
   frames[0](1_000);
   assert.deepEqual(frameDeltas, [0]);
   assert.deepEqual(frameTimes, [0]);
-  assert.deepEqual(draws, [102, 3]);
+  assert.deepEqual(draws, [30, 3]);
   assert.equal(frames.length, 2);
   assert.deepEqual(failures, []);
 
@@ -669,6 +673,86 @@ test("runs setup and frames while batching shape vertices", async () => {
   assert.deepEqual(cancelled, [3]);
   assert.equal(canvas.listeners.size, 0);
   assert.throws(() => fill(1, 1, 1), /has not been started/);
+});
+
+test("reuses geometric vertex buffers and exposes cumulative frame stats", async () => {
+  const gl = fakeWebGl2();
+  const frames = [];
+  const handle = await start({
+    frame() { triangle(0, 0, 1, 0, 0, 1); },
+  }, {
+    canvas: fakeCanvas(),
+    context: gl.context,
+    requestAnimationFrame(callback) {
+      frames.push(callback);
+      return frames.length;
+    },
+    cancelAnimationFrame() {},
+    onError() {},
+  });
+  frames[0](1_000);
+  frames[1](1_016);
+  assert.equal(gl.bufferAllocations.length, 1);
+  assert.equal(gl.uploads.length, 2);
+  const stats = runtimeStats();
+  assert.equal(stats.frames, 3);
+  assert.deepEqual(
+    {
+      drawCalls: stats.batch.drawCalls,
+      triangles: stats.batch.triangles,
+      uploadedBytes: stats.batch.uploadedBytes,
+      bufferGrowths: stats.batch.bufferGrowths,
+    },
+    { drawCalls: 2, triangles: 2, uploadedBytes: 144, bufferGrowths: 1 },
+  );
+  assert.equal(Object.isFrozen(stats), true);
+  handle.stop();
+});
+
+test("adapts circles to projected size and supports stroke geometry policies", async () => {
+  const adaptive = fakeWebGl2();
+  const adaptiveHandle = await start({
+    setup() {
+      circle(10, 10, 5);
+      background(0, 0, 0);
+      pushMatrix();
+      scale(10, 10);
+      circle(10, 10, 5);
+      popMatrix();
+    },
+  }, {
+    canvas: fakeCanvas(),
+    context: adaptive.context,
+    onError() {},
+  });
+  assert.deepEqual(adaptive.draws, [24, 69]);
+  adaptiveHandle.stop();
+
+  const stroked = fakeWebGl2();
+  const strokedHandle = await start({
+    setup() {
+      assert.throws(() => strokeWidth(0), /greater than zero/);
+      assert.throws(() => strokeCap("projecting"), /butt, square, or round/);
+      assert.throws(() => strokeJoin("sharp"), /miter, bevel, or round/);
+      stroke(1, 1, 1);
+      strokeWidth(4);
+      strokeCap("square");
+      line(0, 0, 10, 0);
+    },
+  }, {
+    canvas: fakeCanvas(),
+    context: stroked.context,
+    onError() {},
+  });
+  const positions = [];
+  for (let index = 0; index < stroked.uploads[0].length; index += 6) {
+    positions.push(stroked.uploads[0].slice(index, index + 2));
+  }
+  assert.deepEqual(positions, [
+    [-2, 2], [12, 2], [12, -2],
+    [-2, 2], [12, -2], [-2, -2],
+  ]);
+  strokedHandle.stop();
 });
 
 test("caps long frame gaps and coalesces event-driven renders", async () => {
@@ -719,6 +803,35 @@ test("caps long frame gaps and coalesces event-driven renders", async () => {
   eventCanvas.listeners.get("pointermove")({ clientX: 20, clientY: 1 });
   assert.equal(eventFrames.length, 2);
   eventHandle.stop();
+});
+
+test("stops and releases listeners after a frame callback throws", async () => {
+  const gl = fakeWebGl2();
+  const canvas = fakeCanvas();
+  const documentObject = fakeDocument();
+  const frames = [];
+  const failures = [];
+  const failure = new Error("frame exploded");
+  const handle = await start({
+    frame() { throw failure; },
+  }, {
+    canvas,
+    context: gl.context,
+    document: documentObject,
+    requestAnimationFrame(callback) {
+      frames.push(callback);
+      return frames.length;
+    },
+    cancelAnimationFrame() {},
+    onError(reason) { failures.push(reason); },
+  });
+  frames[0](1_000);
+  assert.deepEqual(failures, [failure]);
+  assert.equal(handle.state, "stopped");
+  assert.equal(frames.length, 1);
+  assert.equal(canvas.listeners.size, 0);
+  assert.equal(documentObject.listeners.size, 0);
+  assert.equal(gl.deletedPrograms.length, gl.createdPrograms.length);
 });
 
 test("supports context-bound sessions and deterministic fixed timesteps", async () => {
@@ -840,6 +953,29 @@ test("tracks display size and handles WebGL context loss deterministically", asy
   resizeHandle.stop();
   assert.equal(disconnected, true);
 
+  const invalidRatioDocument = fakeDocument();
+  invalidRatioDocument.defaultView.devicePixelRatio = Infinity;
+  const ratioCanvas = fakeCanvas();
+  ratioCanvas.cssWidth = 75;
+  ratioCanvas.cssHeight = 25;
+  const ratioHandle = await start({}, {
+    canvas: ratioCanvas,
+    context: fakeWebGl2().context,
+    document: invalidRatioDocument,
+    autoResize: true,
+    createResizeObserver() {
+      return { observe() {}, disconnect() {} };
+    },
+    onError() {},
+  });
+  assert.equal(ratioCanvas.width, 75);
+  assert.equal(ratioCanvas.height, 25);
+  ratioCanvas.cssWidth = 80;
+  invalidRatioDocument.defaultView.listeners.get("resize")();
+  assert.equal(ratioCanvas.width, 80);
+  ratioHandle.stop();
+  assert.equal(invalidRatioDocument.defaultView.listeners.size, 0);
+
   const lost = fakeWebGl2();
   const lostCanvas = fakeCanvas();
   const lostFrames = [];
@@ -868,6 +1004,36 @@ test("tracks display size and handles WebGL context loss deterministically", asy
   lostCanvas.listeners.get("webglcontextrestored")({});
   assert.match(failures[1], /restart the runtime session/);
   assert.equal(lostCanvas.listeners.size, 0);
+});
+
+test("preserves context-lost state when loss occurs during setup", async () => {
+  const gl = fakeWebGl2();
+  const canvas = fakeCanvas();
+  let enterSetup;
+  let finishSetup;
+  const setupEntered = new Promise((resolve) => { enterSetup = resolve; });
+  const setupBlocked = new Promise((resolve) => { finishSetup = resolve; });
+  const failures = [];
+  const started = start({
+    async setup() {
+      enterSetup();
+      await setupBlocked;
+    },
+    frame() {},
+  }, {
+    canvas,
+    context: gl.context,
+    onError(reason) { failures.push(String(reason)); },
+  });
+  await setupEntered;
+  canvas.listeners.get("webglcontextlost")({ preventDefault() {} });
+  finishSetup();
+  const handle = await started;
+  assert.equal(handle.state, "context-lost");
+  assert.equal(failures.length, 1);
+  canvas.listeners.get("webglcontextrestored")({});
+  assert.equal(handle.state, "stopped");
+  assert.equal(canvas.listeners.size, 0);
 });
 
 test("applies strokes and transforms while dispatching input events", async () => {
@@ -1123,7 +1289,8 @@ test("compiles reflected shaders and uploads automatic and user uniforms", async
   assert.throws(() => materialShader("missing"), /unknown shader pair `missing`/);
   frames[0](1_000);
   frames[1](1_016);
-  assert.deepEqual(uniform1fValues, [0, 0, 0.016]);
+  assert.deepEqual(uniform1fValues, [0, 0.016]);
+  assert.equal(runtimeStats().shaders.uniformUploads, 3);
   handle.stop();
 });
 
@@ -1182,6 +1349,39 @@ test("allows optimized-out uniforms and rejects invalid uploads", async () => {
     ),
     /uniform `count` expects int/,
   );
+
+  const priorError = fakeWebGl2({ webglErrors: [0x0500, 0, 0] });
+  const priorHandle = await start({}, {
+    canvas: fakeCanvas(),
+    context: priorError.context,
+    shaderBundle: shaderBundle([{
+      name: "scoped",
+      uniforms: [{
+        name: "u_time",
+        glslName: "u_time",
+        type: "float",
+        source: "automatic",
+      }],
+    }]),
+    onError() {},
+  });
+  priorHandle.stop();
+
+  const uploadError = fakeWebGl2({ webglErrors: [0, 0x0502] });
+  await assert.rejects(start({}, {
+    canvas: fakeCanvas(),
+    context: uploadError.context,
+    shaderBundle: shaderBundle([{
+      name: "scoped",
+      uniforms: [{
+        name: "u_time",
+        glslName: "u_time",
+        type: "float",
+        source: "automatic",
+      }],
+    }]),
+    onError() {},
+  }), /WebGL rejected uniform `u_time`.*error 0x502/);
 });
 
 test("renders retained 3D primitives and rejects handles from old sessions", async () => {
@@ -1264,6 +1464,8 @@ test("uploads custom shader uniforms independently for each node", async () => {
     elementDraws,
     uniform3fvValues,
     uniformMatrix4Values,
+    createdVertexArrays,
+    deletedVertexArrays,
   } = fakeWebGl2();
   const bundle = shaderBundle([
     {
@@ -1320,7 +1522,9 @@ test("uploads custom shader uniforms independently for each node", async () => {
   );
   assert.equal(models.at(-2).value[12], -1.5);
   assert.equal(models.at(-1).value[12], 1.5);
+  assert.equal(createdVertexArrays.length, 2);
   handle.stop();
+  assert.equal(deletedVertexArrays.length, 2);
 });
 
 test("keeps GPU resources alive while referenced and invalidates disposed handles", async () => {
@@ -1909,6 +2113,7 @@ function fakeWebGl2(options = {}) {
   const elementDraws = [];
   const clears = [];
   const uploads = [];
+  const bufferAllocations = [];
   const textureUploads = [];
   const textureParameters = [];
   const pixelStores = [];
@@ -1919,9 +2124,12 @@ function fakeWebGl2(options = {}) {
   const deletedShaders = [];
   const deletedBuffers = [];
   const deletedTextures = [];
+  const createdVertexArrays = [];
+  const deletedVertexArrays = [];
   const createdPrograms = [];
   const deletedPrograms = [];
   let shaderChecks = 0;
+  const webglErrors = [...(options.webglErrors ?? [])];
   const attributeLocationCalls = new Map();
   const activeAttributes = options.activeAttributes ?? [];
   const activeUniforms = options.activeUniforms ?? [];
@@ -1991,10 +2199,13 @@ function fakeWebGl2(options = {}) {
     attachShader() {},
     bindBuffer() {},
     bindTexture() {},
+    bindVertexArray() {},
     blendFunc() {},
     bufferData(_target, data) {
-      uploads.push([...data]);
+      if (typeof data === "number") bufferAllocations.push(data);
+      else uploads.push([...data]);
     },
+    bufferSubData(_target, _offset, data) { uploads.push([...data]); },
     clear(mask) {
       clears.push(mask);
     },
@@ -2014,12 +2225,18 @@ function fakeWebGl2(options = {}) {
     createShader() {
       return {};
     },
+    createVertexArray() {
+      const vertexArray = {};
+      createdVertexArrays.push(vertexArray);
+      return vertexArray;
+    },
     deleteBuffer(buffer) { deletedBuffers.push(buffer); },
     deleteProgram(program) { deletedPrograms.push(program); },
     deleteShader(shader) {
       deletedShaders.push(shader);
     },
     deleteTexture(texture) { deletedTextures.push(texture); },
+    deleteVertexArray(vertexArray) { deletedVertexArrays.push(vertexArray); },
     depthFunc() {},
     disable() {},
     drawArrays(_mode, _first, count) {
@@ -2084,7 +2301,7 @@ function fakeWebGl2(options = {}) {
       return name === options.inactiveUniform ? null : { name };
     },
     getError() {
-      return options.uniformError ?? 0;
+      return webglErrors.shift() ?? options.uniformError ?? 0;
     },
     isTexture(value) {
       return value?.texture === true;
@@ -2127,6 +2344,7 @@ function fakeWebGl2(options = {}) {
     elementDraws,
     clears,
     uploads,
+    bufferAllocations,
     textureUploads,
     textureParameters,
     pixelStores,
@@ -2137,6 +2355,8 @@ function fakeWebGl2(options = {}) {
     deletedShaders,
     deletedBuffers,
     deletedTextures,
+    createdVertexArrays,
+    deletedVertexArrays,
     createdPrograms,
     deletedPrograms,
   };

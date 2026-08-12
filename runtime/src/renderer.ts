@@ -8,23 +8,56 @@ type Matrix2D = readonly [
   number,
 ];
 
+export type StrokeCap = "butt" | "square" | "round";
+export type StrokeJoin = "miter" | "bevel" | "round";
+
+export interface BatchRendererStats {
+  readonly drawCalls: number;
+  readonly triangles: number;
+  readonly uploadedBytes: number;
+  readonly bufferGrowths: number;
+  readonly bufferCapacityBytes: number;
+}
+
+interface ScreenSegment {
+  readonly startX: number;
+  readonly startY: number;
+  readonly endX: number;
+  readonly endY: number;
+  readonly unitX: number;
+  readonly unitY: number;
+  readonly normalX: number;
+  readonly normalY: number;
+}
+
 const FLOATS_PER_VERTEX = 6;
-const CIRCLE_SEGMENTS = 32;
 const IDENTITY_TRANSFORM: Matrix2D = [1, 0, 0, 1, 0, 0];
-const STROKE_WIDTH = 1;
 const MAX_FLOAT32 = 3.4028234663852886e38;
+const INITIAL_VERTEX_CAPACITY = 256;
+const MIN_CIRCLE_SEGMENTS = 8;
+const MAX_CIRCLE_SEGMENTS = 512;
 
 export class WebGL2BatchRenderer {
   private readonly gl: WebGL2RenderingContext;
   private readonly program: WebGLProgram;
   private readonly buffer: WebGLBuffer;
+  private readonly vertexArray: WebGLVertexArrayObject;
   private readonly positionAttribute: number;
   private readonly colorAttribute: number;
   private readonly resolution: WebGLUniformLocation;
-  private readonly vertices: number[] = [];
+  private vertices = new Float32Array(INITIAL_VERTEX_CAPACITY);
+  private vertexFloatCount = 0;
+  private bufferCapacityBytes = 0;
+  private drawCalls = 0;
+  private triangles = 0;
+  private uploadedBytes = 0;
+  private bufferGrowths = 0;
   private readonly textOverlay: Canvas2DTextOverlay | undefined;
   private fillColor: Color = [1, 1, 1, 1];
   private strokeColor: Color | undefined;
+  private strokeWidthValue = 1;
+  private strokeCapValue: StrokeCap = "butt";
+  private strokeJoinValue: StrokeJoin = "miter";
   private transform: Matrix2D = IDENTITY_TRANSFORM;
   private readonly transformStack: Matrix2D[] = [];
 
@@ -52,11 +85,19 @@ export class WebGL2BatchRenderer {
       throw new Error("failed to create the WebGL2 vertex buffer");
     }
     this.buffer = buffer;
+    const vertexArray = gl.createVertexArray();
+    if (vertexArray === null) {
+      gl.deleteBuffer(this.buffer);
+      gl.deleteProgram(this.program);
+      throw new Error("failed to create the WebGL2 vertex array");
+    }
+    this.vertexArray = vertexArray;
 
     const position = gl.getAttribLocation(this.program, "a_position");
     const color = gl.getAttribLocation(this.program, "a_color");
     const resolution = gl.getUniformLocation(this.program, "u_resolution");
     if (position < 0 || color < 0 || resolution === null) {
+      gl.deleteVertexArray(this.vertexArray);
       gl.deleteBuffer(this.buffer);
       gl.deleteProgram(this.program);
       throw new Error("the built-in WebGL2 shader interface is incomplete");
@@ -68,6 +109,7 @@ export class WebGL2BatchRenderer {
     gl.useProgram(this.program);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.bindVertexArray(this.vertexArray);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
     gl.enableVertexAttribArray(this.positionAttribute);
     gl.vertexAttribPointer(
@@ -87,6 +129,7 @@ export class WebGL2BatchRenderer {
       FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT,
       2 * Float32Array.BYTES_PER_ELEMENT,
     );
+    gl.bindVertexArray(null);
     let overlay: Canvas2DTextOverlay | undefined;
     try {
       overlay = Canvas2DTextOverlay.attach(canvas, documentObject);
@@ -94,6 +137,7 @@ export class WebGL2BatchRenderer {
       this.resize(initialWidth, initialHeight);
     } catch (error) {
       overlay?.dispose();
+      gl.deleteVertexArray(this.vertexArray);
       gl.deleteBuffer(this.buffer);
       gl.deleteProgram(this.program);
       throw error;
@@ -133,16 +177,48 @@ export class WebGL2BatchRenderer {
     this.strokeColor = undefined;
   }
 
+  public strokeWidth(width: number): void {
+    if (!Number.isFinite(width) || width <= 0) {
+      throw new RangeError("stroke width must be a finite number greater than zero");
+    }
+    this.strokeWidthValue = width;
+  }
+
+  public strokeCap(cap: StrokeCap): void {
+    if (cap !== "butt" && cap !== "square" && cap !== "round") {
+      throw new TypeError("stroke cap must be butt, square, or round");
+    }
+    this.strokeCapValue = cap;
+  }
+
+  public strokeJoin(join: StrokeJoin): void {
+    if (join !== "miter" && join !== "bevel" && join !== "round") {
+      throw new TypeError("stroke join must be miter, bevel, or round");
+    }
+    this.strokeJoinValue = join;
+  }
+
+  public stats(): BatchRendererStats {
+    return Object.freeze({
+      drawCalls: this.drawCalls,
+      triangles: this.triangles,
+      uploadedBytes: this.uploadedBytes,
+      bufferGrowths: this.bufferGrowths,
+      bufferCapacityBytes: this.bufferCapacityBytes,
+    });
+  }
+
   public rect(x: number, y: number, width: number, height: number): void {
     const right = x + width;
     const bottom = y + height;
     this.fillTriangle(x, y, right, y, right, bottom);
     this.fillTriangle(x, y, right, bottom, x, bottom);
     if (this.strokeColor !== undefined) {
-      this.strokeLine(x, y, right, y, this.strokeColor);
-      this.strokeLine(right, y, right, bottom, this.strokeColor);
-      this.strokeLine(right, bottom, x, bottom, this.strokeColor);
-      this.strokeLine(x, bottom, x, y, this.strokeColor);
+      this.strokePath(
+        [[x, y], [right, y], [right, bottom], [x, bottom]],
+        true,
+        this.strokeColor,
+      );
     }
   }
 
@@ -150,9 +226,12 @@ export class WebGL2BatchRenderer {
     if (!Number.isFinite(radius) || radius < 0) {
       throw new RangeError("circle radius must be a non-negative finite number");
     }
-    for (let segment = 0; segment < CIRCLE_SEGMENTS; segment += 1) {
-      const start = (segment / CIRCLE_SEGMENTS) * Math.PI * 2;
-      const end = ((segment + 1) / CIRCLE_SEGMENTS) * Math.PI * 2;
+    if (radius === 0) return;
+    const segments = this.circleSegments(radius);
+    const outline: Array<readonly [number, number]> = [];
+    for (let segment = 0; segment < segments; segment += 1) {
+      const start = (segment / segments) * Math.PI * 2;
+      const end = ((segment + 1) / segments) * Math.PI * 2;
       const startX = x + Math.cos(start) * radius;
       const startY = y + Math.sin(start) * radius;
       const endX = x + Math.cos(end) * radius;
@@ -165,9 +244,10 @@ export class WebGL2BatchRenderer {
         endX,
         endY,
       );
-      if (this.strokeColor !== undefined) {
-        this.strokeLine(startX, startY, endX, endY, this.strokeColor);
-      }
+      outline.push([startX, startY]);
+    }
+    if (this.strokeColor !== undefined) {
+      this.strokePath(outline, true, this.strokeColor);
     }
   }
 
@@ -191,9 +271,7 @@ export class WebGL2BatchRenderer {
   ): void {
     this.fillTriangle(x1, y1, x2, y2, x3, y3);
     if (this.strokeColor !== undefined) {
-      this.strokeLine(x1, y1, x2, y2, this.strokeColor);
-      this.strokeLine(x2, y2, x3, y3, this.strokeColor);
-      this.strokeLine(x3, y3, x1, y1, this.strokeColor);
+      this.strokePath([[x1, y1], [x2, y2], [x3, y3]], true, this.strokeColor);
     }
   }
 
@@ -251,47 +329,44 @@ export class WebGL2BatchRenderer {
   }
 
   public flush(): void {
-    if (this.vertices.length === 0) {
+    if (this.vertexFloatCount === 0) {
       return;
     }
     const gl = this.gl;
     gl.disable(gl.DEPTH_TEST);
+    gl.bindVertexArray(this.vertexArray);
     gl.useProgram(this.program);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
-    gl.enableVertexAttribArray(this.positionAttribute);
-    gl.vertexAttribPointer(
-      this.positionAttribute,
-      2,
-      gl.FLOAT,
-      false,
-      FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT,
-      0,
-    );
-    gl.enableVertexAttribArray(this.colorAttribute);
-    gl.vertexAttribPointer(
-      this.colorAttribute,
-      4,
-      gl.FLOAT,
-      false,
-      FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT,
-      2 * Float32Array.BYTES_PER_ELEMENT,
-    );
-    gl.bufferData(
+    const byteLength = this.vertexFloatCount * Float32Array.BYTES_PER_ELEMENT;
+    if (byteLength > this.bufferCapacityBytes) {
+      this.bufferCapacityBytes = geometricCapacity(
+        Math.max(Float32Array.BYTES_PER_ELEMENT, this.bufferCapacityBytes),
+        byteLength,
+      );
+      gl.bufferData(gl.ARRAY_BUFFER, this.bufferCapacityBytes, gl.DYNAMIC_DRAW);
+      this.bufferGrowths += 1;
+    }
+    gl.bufferSubData(
       gl.ARRAY_BUFFER,
-      new Float32Array(this.vertices),
-      gl.DYNAMIC_DRAW,
+      0,
+      this.vertices.subarray(0, this.vertexFloatCount),
     );
     gl.uniform2f(this.resolution, this.canvas.width, this.canvas.height);
     gl.drawArrays(
       gl.TRIANGLES,
       0,
-      this.vertices.length / FLOATS_PER_VERTEX,
+      this.vertexFloatCount / FLOATS_PER_VERTEX,
     );
-    this.vertices.length = 0;
+    this.drawCalls += 1;
+    this.triangles += this.vertexFloatCount / (FLOATS_PER_VERTEX * 3);
+    this.uploadedBytes += byteLength;
+    this.vertexFloatCount = 0;
+    gl.bindVertexArray(null);
   }
 
   public dispose(): void {
-    this.vertices.length = 0;
+    this.vertexFloatCount = 0;
+    this.gl.deleteVertexArray(this.vertexArray);
     this.gl.deleteBuffer(this.buffer);
     this.gl.deleteProgram(this.program);
     this.textOverlay?.dispose();
@@ -317,22 +392,214 @@ export class WebGL2BatchRenderer {
     y2: number,
     color: Color,
   ): void {
-    const [startX, startY] = this.transformPoint(x1, y1);
-    const [endX, endY] = this.transformPoint(x2, y2);
-    const dx = endX - startX;
-    const dy = endY - startY;
-    const length = Math.hypot(dx, dy);
-    if (length === 0) {
+    this.strokePath([[x1, y1], [x2, y2]], false, color);
+  }
+
+  private strokePath(
+    points: readonly (readonly [number, number])[],
+    closed: boolean,
+    color: Color,
+  ): void {
+    const screenPoints = points.map(([x, y]) => this.transformPoint(x, y));
+    const segments: ScreenSegment[] = [];
+    const count = closed ? screenPoints.length : screenPoints.length - 1;
+    for (let index = 0; index < count; index += 1) {
+      const start = screenPoints[index];
+      const end = screenPoints[(index + 1) % screenPoints.length];
+      if (start === undefined || end === undefined) continue;
+      const dx = end[0] - start[0];
+      const dy = end[1] - start[1];
+      const length = Math.hypot(dx, dy);
+      if (length <= Number.EPSILON) continue;
+      const unitX = dx / length;
+      const unitY = dy / length;
+      segments.push({
+        startX: start[0],
+        startY: start[1],
+        endX: end[0],
+        endY: end[1],
+        unitX,
+        unitY,
+        normalX: -unitY,
+        normalY: unitX,
+      });
+    }
+    if (segments.length === 0) return;
+    const halfWidth = this.strokeWidthValue / 2;
+    for (let index = 0; index < segments.length; index += 1) {
+      const segment = segments[index];
+      if (segment === undefined) continue;
+      const squareStart = !closed && index === 0 && this.strokeCapValue === "square"
+        ? halfWidth
+        : 0;
+      const squareEnd = !closed && index === segments.length - 1 &&
+          this.strokeCapValue === "square"
+        ? halfWidth
+        : 0;
+      this.strokeSegmentQuad(
+        segment,
+        halfWidth,
+        squareStart,
+        squareEnd,
+        color,
+      );
+    }
+    const joinCount = closed ? segments.length : segments.length - 1;
+    for (let index = 0; index < joinCount; index += 1) {
+      const previous = segments[index];
+      const next = segments[(index + 1) % segments.length];
+      if (previous !== undefined && next !== undefined) {
+        this.strokeJoinGeometry(previous, next, halfWidth, color);
+      }
+    }
+    if (!closed && this.strokeCapValue === "round") {
+      const first = segments[0];
+      const last = segments[segments.length - 1];
+      if (first !== undefined) this.roundCap(first, true, halfWidth, color);
+      if (last !== undefined) this.roundCap(last, false, halfWidth, color);
+    }
+  }
+
+  private strokeSegmentQuad(
+    segment: ScreenSegment,
+    halfWidth: number,
+    extendStart: number,
+    extendEnd: number,
+    color: Color,
+  ): void {
+    const startX = segment.startX - segment.unitX * extendStart;
+    const startY = segment.startY - segment.unitY * extendStart;
+    const endX = segment.endX + segment.unitX * extendEnd;
+    const endY = segment.endY + segment.unitY * extendEnd;
+    const offsetX = segment.normalX * halfWidth;
+    const offsetY = segment.normalY * halfWidth;
+    this.screenTriangle(
+      [startX + offsetX, startY + offsetY],
+      [endX + offsetX, endY + offsetY],
+      [endX - offsetX, endY - offsetY],
+      color,
+    );
+    this.screenTriangle(
+      [startX + offsetX, startY + offsetY],
+      [endX - offsetX, endY - offsetY],
+      [startX - offsetX, startY - offsetY],
+      color,
+    );
+  }
+
+  private strokeJoinGeometry(
+    previous: ScreenSegment,
+    next: ScreenSegment,
+    halfWidth: number,
+    color: Color,
+  ): void {
+    const cross = previous.unitX * next.unitY - previous.unitY * next.unitX;
+    if (Math.abs(cross) <= 1e-12) return;
+    const side = cross > 0 ? -1 : 1;
+    const center: readonly [number, number] = [previous.endX, previous.endY];
+    const first: readonly [number, number] = [
+      center[0] + previous.normalX * halfWidth * side,
+      center[1] + previous.normalY * halfWidth * side,
+    ];
+    const second: readonly [number, number] = [
+      center[0] + next.normalX * halfWidth * side,
+      center[1] + next.normalY * halfWidth * side,
+    ];
+    if (this.strokeJoinValue === "bevel") {
+      this.screenTriangle(center, first, second, color);
       return;
     }
-    const offsetX = (-dy / length) * (STROKE_WIDTH / 2);
-    const offsetY = (dx / length) * (STROKE_WIDTH / 2);
-    this.screenVertex(startX + offsetX, startY + offsetY, color);
-    this.screenVertex(endX + offsetX, endY + offsetY, color);
-    this.screenVertex(endX - offsetX, endY - offsetY, color);
-    this.screenVertex(startX + offsetX, startY + offsetY, color);
-    this.screenVertex(endX - offsetX, endY - offsetY, color);
-    this.screenVertex(startX - offsetX, startY - offsetY, color);
+    if (this.strokeJoinValue === "round") {
+      this.roundJoin(center, first, second, cross > 0, color);
+      return;
+    }
+    const firstNormalX = previous.normalX * side;
+    const firstNormalY = previous.normalY * side;
+    const secondNormalX = next.normalX * side;
+    const secondNormalY = next.normalY * side;
+    const sumX = firstNormalX + secondNormalX;
+    const sumY = firstNormalY + secondNormalY;
+    const sumLength = Math.hypot(sumX, sumY);
+    if (sumLength <= 1e-12) {
+      this.screenTriangle(center, first, second, color);
+      return;
+    }
+    const miterX = sumX / sumLength;
+    const miterY = sumY / sumLength;
+    const denominator = miterX * secondNormalX + miterY * secondNormalY;
+    const miterLength = denominator <= 1e-12 ? Infinity : halfWidth / denominator;
+    if (!Number.isFinite(miterLength) || miterLength > halfWidth * 4) {
+      this.screenTriangle(center, first, second, color);
+      return;
+    }
+    const tip: readonly [number, number] = [
+      center[0] + miterX * miterLength,
+      center[1] + miterY * miterLength,
+    ];
+    this.screenTriangle(first, tip, second, color);
+  }
+
+  private roundJoin(
+    center: readonly [number, number],
+    first: readonly [number, number],
+    second: readonly [number, number],
+    counterClockwise: boolean,
+    color: Color,
+  ): void {
+    let start = Math.atan2(first[1] - center[1], first[0] - center[0]);
+    let end = Math.atan2(second[1] - center[1], second[0] - center[0]);
+    if (counterClockwise) {
+      while (end < start) end += Math.PI * 2;
+    } else {
+      while (end > start) end -= Math.PI * 2;
+    }
+    const steps = Math.max(2, Math.ceil(Math.abs(end - start) * 4));
+    for (let index = 0; index < steps; index += 1) {
+      const angle1 = start + ((end - start) * index) / steps;
+      const angle2 = start + ((end - start) * (index + 1)) / steps;
+      const radius = this.strokeWidthValue / 2;
+      this.screenTriangle(
+        center,
+        [center[0] + Math.cos(angle1) * radius, center[1] + Math.sin(angle1) * radius],
+        [center[0] + Math.cos(angle2) * radius, center[1] + Math.sin(angle2) * radius],
+        color,
+      );
+    }
+  }
+
+  private roundCap(
+    segment: ScreenSegment,
+    atStart: boolean,
+    radius: number,
+    color: Color,
+  ): void {
+    const center: readonly [number, number] = atStart
+      ? [segment.startX, segment.startY]
+      : [segment.endX, segment.endY];
+    const direction = Math.atan2(segment.unitY, segment.unitX);
+    const start = atStart ? direction + Math.PI / 2 : direction - Math.PI / 2;
+    const steps = Math.max(4, Math.ceil(Math.PI * radius / 2));
+    for (let index = 0; index < steps; index += 1) {
+      const angle1 = start + (Math.PI * index) / steps;
+      const angle2 = start + (Math.PI * (index + 1)) / steps;
+      this.screenTriangle(
+        center,
+        [center[0] + Math.cos(angle1) * radius, center[1] + Math.sin(angle1) * radius],
+        [center[0] + Math.cos(angle2) * radius, center[1] + Math.sin(angle2) * radius],
+        color,
+      );
+    }
+  }
+
+  private screenTriangle(
+    first: readonly [number, number],
+    second: readonly [number, number],
+    third: readonly [number, number],
+    color: Color,
+  ): void {
+    this.screenVertex(first[0], first[1], color);
+    this.screenVertex(second[0], second[1], color);
+    this.screenVertex(third[0], third[1], color);
   }
 
   private vertex(x: number, y: number, color: Color): void {
@@ -351,7 +618,35 @@ export class WebGL2BatchRenderer {
   }
 
   private screenVertex(x: number, y: number, color: Color): void {
-    this.vertices.push(drawableCoordinate(x), drawableCoordinate(y), ...color);
+    this.ensureVertexCapacity(FLOATS_PER_VERTEX);
+    const offset = this.vertexFloatCount;
+    this.vertices[offset] = drawableCoordinate(x);
+    this.vertices[offset + 1] = drawableCoordinate(y);
+    this.vertices.set(color, offset + 2);
+    this.vertexFloatCount += FLOATS_PER_VERTEX;
+  }
+
+  private ensureVertexCapacity(additional: number): void {
+    const required = this.vertexFloatCount + additional;
+    if (required <= this.vertices.length) return;
+    const replacement = new Float32Array(
+      geometricCapacity(this.vertices.length, required),
+    );
+    replacement.set(this.vertices);
+    this.vertices = replacement;
+  }
+
+  private circleSegments(radius: number): number {
+    const [a, b, c, d] = this.transform;
+    const projectedRadius = radius * Math.max(Math.hypot(a, b), Math.hypot(c, d));
+    if (projectedRadius <= 0.5) return MIN_CIRCLE_SEGMENTS;
+    const maximumAngle = 2 * Math.acos(
+      Math.max(-1, 1 - 0.5 / projectedRadius),
+    );
+    return Math.min(
+      MAX_CIRCLE_SEGMENTS,
+      Math.max(MIN_CIRCLE_SEGMENTS, Math.ceil((Math.PI * 2) / maximumAngle)),
+    );
   }
 }
 
@@ -564,8 +859,19 @@ function channel(value: number): number {
 }
 
 function positiveInteger(value: number, label: string): number {
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new RangeError(`${label} must be a positive integer`);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new RangeError(`${label} must be a positive safe integer`);
   }
   return value;
+}
+
+function geometricCapacity(current: number, required: number): number {
+  let capacity = Math.max(1, current);
+  while (capacity < required) {
+    capacity *= 2;
+    if (!Number.isSafeInteger(capacity)) {
+      throw new RangeError("renderer vertex capacity exceeds the safe integer range");
+    }
+  }
+  return capacity;
 }

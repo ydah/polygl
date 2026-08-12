@@ -4,6 +4,7 @@ import type { RuntimeCapabilities } from "./capabilities.js";
 import { runtimeAbi } from "./generated/abi.js";
 import { SeededRandom } from "./random.js";
 import { WebGL2BatchRenderer } from "./renderer.js";
+import type { BatchRendererStats } from "./renderer.js";
 import { WebGL2SceneRenderer } from "./scene.js";
 import type {
   BasicMaterial,
@@ -12,6 +13,7 @@ import type {
   NodeHandle,
   RuntimeImageLoader,
   RuntimeResourceLimits,
+  SceneRendererStats,
   SceneShaderValue,
   TextureOptions,
   TextureHandle,
@@ -22,6 +24,7 @@ import type {
   ShaderBundle,
   ShaderMaterial,
   ShaderUniformValue,
+  ShaderRegistryStats,
 } from "./shader.js";
 import {
   validateProgram,
@@ -100,7 +103,15 @@ export interface RuntimeHandle {
   readonly canvas: HTMLCanvasElement;
   readonly state: RuntimeSessionState;
   capabilities(): RuntimeCapabilities;
+  stats(): RuntimeStats;
   stop(): void;
+}
+
+export interface RuntimeStats {
+  readonly frames: number;
+  readonly batch: BatchRendererStats;
+  readonly scene: SceneRendererStats;
+  readonly shaders: ShaderRegistryStats;
 }
 
 export class RuntimeSession implements RuntimeHandle {
@@ -138,6 +149,7 @@ export class RuntimeSession implements RuntimeHandle {
   private readonly requireRuntimeAbi: boolean;
   private readonly resourceLimits: RuntimeResourceLimits;
   private runtimeCapabilities: RuntimeCapabilities | undefined;
+  private renderedFrames = 0;
 
   public get state(): RuntimeSessionState {
     return this.sessionState;
@@ -197,6 +209,7 @@ export class RuntimeSession implements RuntimeHandle {
     if (this.autoResize) {
       try {
         this.installResizeObserver(options.createResizeObserver);
+        this.windowObject?.addEventListener("resize", this.handleResize);
         this.syncDisplaySize();
       } catch (error) {
         this.stop();
@@ -234,9 +247,8 @@ export class RuntimeSession implements RuntimeHandle {
       if (this.stopped) {
         return;
       }
-      if (!this.contextLost) {
-        this.render();
-      }
+      if (this.contextLost) return;
+      this.render();
       this.sessionState = this.shouldPauseForVisibility() ? "paused" : "running";
       if (
         program.frame !== undefined &&
@@ -284,6 +296,7 @@ export class RuntimeSession implements RuntimeHandle {
       this.handleVisibilityChange,
     );
     this.windowObject?.removeEventListener("blur", this.handleBlur);
+    this.windowObject?.removeEventListener("resize", this.handleResize);
     this.renderer.dispose();
     this.scene.dispose();
     this.shaderRegistry.dispose();
@@ -301,6 +314,15 @@ export class RuntimeSession implements RuntimeHandle {
   public capabilities(): RuntimeCapabilities {
     this.runtimeCapabilities ??= readRuntimeCapabilities(this.renderer.context);
     return this.runtimeCapabilities;
+  }
+
+  public stats(): RuntimeStats {
+    return Object.freeze({
+      frames: this.renderedFrames,
+      batch: this.renderer.stats(),
+      scene: this.scene.stats(),
+      shaders: this.shaderRegistry.stats(),
+    });
   }
 
   public setShaderUniform(
@@ -763,8 +785,12 @@ export class RuntimeSession implements RuntimeHandle {
     if (bounds.width <= 0 || bounds.height <= 0) {
       return false;
     }
+    const observedRatio = this.windowObject?.devicePixelRatio;
     const ratio = this.configuredDevicePixelRatio ??
-      this.windowObject?.devicePixelRatio ?? 1;
+      (typeof observedRatio === "number" &&
+          Number.isFinite(observedRatio) && observedRatio > 0
+        ? observedRatio
+        : 1);
     const width = Math.max(1, Math.round(bounds.width * ratio));
     const height = Math.max(1, Math.round(bounds.height * ratio));
     if (this.canvas.width === width && this.canvas.height === height) {
@@ -790,6 +816,7 @@ export class RuntimeSession implements RuntimeHandle {
       this.canvas.height,
     );
     this.renderer.flush();
+    this.renderedFrames += 1;
   }
 
   private replaceShaderBundle(

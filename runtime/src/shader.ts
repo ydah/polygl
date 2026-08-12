@@ -65,6 +65,12 @@ export interface ShaderAutomaticUniforms {
   readonly projection: Float32Array;
 }
 
+export interface ShaderRegistryStats {
+  readonly programs: number;
+  readonly compileLinkMilliseconds: number;
+  readonly uniformUploads: number;
+}
+
 const shaderMaterialBrand: unique symbol = Symbol("ShaderMaterial");
 
 export interface ShaderMaterial {
@@ -79,7 +85,16 @@ interface LinkedShader {
   readonly program: WebGLProgram;
   readonly uniforms: ReadonlyMap<string, WebGLUniformLocation>;
   readonly userValues: Map<string, ShaderUniformValue>;
+  readonly globalDirty: Set<string>;
+  readonly drawValues: Map<string, ShaderUniformValue>;
+  lastGlobalAutomatic: ShaderAutomaticSnapshot | undefined;
   globalUniformsSet: boolean;
+}
+
+interface ShaderAutomaticSnapshot {
+  readonly elapsedSeconds: number;
+  readonly width: number;
+  readonly height: number;
 }
 
 const IDENTITY_MATRIX = new Float32Array([
@@ -92,6 +107,8 @@ const IDENTITY_MATRIX = new Float32Array([
 export class WebGL2ShaderRegistry {
   private readonly shaders = new Map<string, LinkedShader>();
   private readonly materials = new WeakMap<object, LinkedShader>();
+  private compileLinkMilliseconds = 0;
+  private uniformUploads = 0;
 
   public constructor(
     private readonly gl: WebGL2RenderingContext,
@@ -110,7 +127,12 @@ export class WebGL2ShaderRegistry {
     }
     try {
       for (const artifact of validatedArtifacts) {
+        const started = monotonicMilliseconds();
         const shader = this.link(artifact);
+        this.compileLinkMilliseconds += Math.max(
+          0,
+          monotonicMilliseconds() - started,
+        );
         this.shaders.set(artifact.name, shader);
         this.materials.set(shader.material, shader);
       }
@@ -170,11 +192,21 @@ export class WebGL2ShaderRegistry {
       value,
       shader.artifact.fragmentLocation,
     );
-    shader.userValues.set(
-      uniformName,
-      copyUniformValue(value),
-    );
+    const copied = copyUniformValue(value);
+    const previous = shader.userValues.get(uniformName);
+    if (!uniformValuesEqual(previous, copied)) {
+      shader.userValues.set(uniformName, copied);
+      shader.globalDirty.add(uniformName);
+    }
     shader.globalUniformsSet = true;
+  }
+
+  public stats(): ShaderRegistryStats {
+    return Object.freeze({
+      programs: this.shaders.size,
+      compileLinkMilliseconds: this.compileLinkMilliseconds,
+      uniformUploads: this.uniformUploads,
+    });
   }
 
   public material(shaderName: string): ShaderMaterial {
@@ -227,8 +259,14 @@ export class WebGL2ShaderRegistry {
         continue;
       }
       if (binding.source === "automatic") {
+        const value = automaticUniformValue(binding, automatic);
+        if (uniformValuesEqual(shader.drawValues.get(binding.name), value)) {
+          continue;
+        }
+        this.beginUploadScope(shader, binding);
         this.uploadAutomaticForDraw(binding, location, automatic);
         this.assertUploadSucceeded(shader, binding);
+        shader.drawValues.set(binding.name, copyUniformValue(value));
         continue;
       }
       const value = userValues.get(binding.name);
@@ -241,8 +279,16 @@ export class WebGL2ShaderRegistry {
         }
         continue;
       }
+      if (
+        binding.type !== "texture" &&
+        uniformValuesEqual(shader.drawValues.get(binding.name), value)
+      ) {
+        continue;
+      }
+      this.beginUploadScope(shader, binding);
       textureUnit = this.uploadUser(binding, location, value, textureUnit);
       this.assertUploadSucceeded(shader, binding);
+      shader.drawValues.set(binding.name, copyUniformValue(value));
     }
     return shader.artifact.attributes;
   }
@@ -253,7 +299,7 @@ export class WebGL2ShaderRegistry {
     height: number,
   ): void {
     for (const shader of this.shaders.values()) {
-      this.gl.useProgram(shader.program);
+      let programBound = false;
       let textureUnit = 0;
       for (const binding of shader.artifact.uniforms) {
         const location = shader.uniforms.get(binding.name);
@@ -261,8 +307,23 @@ export class WebGL2ShaderRegistry {
           continue;
         }
         if (binding.source === "automatic") {
+          if (!globalAutomaticChanged(
+            binding,
+            shader.lastGlobalAutomatic,
+            elapsedSeconds,
+            width,
+            height,
+          )) {
+            continue;
+          }
+          if (!programBound) {
+            this.gl.useProgram(shader.program);
+            programBound = true;
+          }
+          this.beginUploadScope(shader, binding);
           this.uploadAutomatic(binding, location, elapsedSeconds, width, height);
           this.assertUploadSucceeded(shader, binding);
+          shader.drawValues.delete(binding.name);
           continue;
         }
         const value = shader.userValues.get(binding.name);
@@ -275,9 +336,21 @@ export class WebGL2ShaderRegistry {
           }
           continue;
         }
+        if (!shader.globalDirty.has(binding.name)) {
+          if (binding.type === "texture") textureUnit += 1;
+          continue;
+        }
+        if (!programBound) {
+          this.gl.useProgram(shader.program);
+          programBound = true;
+        }
+        this.beginUploadScope(shader, binding);
         textureUnit = this.uploadUser(binding, location, value, textureUnit);
         this.assertUploadSucceeded(shader, binding);
+        shader.globalDirty.delete(binding.name);
+        shader.drawValues.delete(binding.name);
       }
+      shader.lastGlobalAutomatic = { elapsedSeconds, width, height };
     }
   }
 
@@ -341,6 +414,9 @@ export class WebGL2ShaderRegistry {
         program,
         uniforms,
         userValues: new Map(),
+        globalDirty: new Set(),
+        drawValues: new Map(),
+        lastGlobalAutomatic: undefined,
         globalUniformsSet: false,
       };
     } catch (error) {
@@ -452,6 +528,8 @@ export class WebGL2ShaderRegistry {
     shader: LinkedShader,
     binding: ShaderUniform,
   ): void {
+    this.uniformUploads += 1;
+    if (!this.debug) return;
     const error = this.gl.getError();
     if (error !== this.gl.NO_ERROR) {
       throw runtimeError(
@@ -459,6 +537,20 @@ export class WebGL2ShaderRegistry {
         shader.artifact.fragmentLocation,
       );
     }
+  }
+
+  private beginUploadScope(
+    shader: LinkedShader,
+    binding: ShaderUniform,
+  ): void {
+    if (!this.debug) return;
+    for (let count = 0; count < 16; count += 1) {
+      if (this.gl.getError() === this.gl.NO_ERROR) return;
+    }
+    throw runtimeError(
+      `could not clear prior WebGL errors before uniform \`${binding.name}\` for shader \`${shader.artifact.name}\``,
+      shader.artifact.fragmentLocation,
+    );
   }
 
   private requireMaterial(material: ShaderMaterial): LinkedShader {
@@ -725,8 +817,60 @@ function copyUniformValue(value: ShaderUniformValue): ShaderUniformValue {
   return isNumericSequence(value) ? Object.freeze(Array.from(value)) : value;
 }
 
+function uniformValuesEqual(
+  left: ShaderUniformValue | undefined,
+  right: ShaderUniformValue,
+): boolean {
+  if (left === right) return true;
+  if (!isNumericSequence(left) || !isNumericSequence(right)) return false;
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+}
+
+function automaticUniformValue(
+  binding: ShaderUniform,
+  automatic: ShaderAutomaticUniforms,
+): ShaderUniformValue {
+  switch (binding.name) {
+    case "u_time": return automatic.elapsedSeconds;
+    case "u_resolution": return [automatic.width, automatic.height];
+    case "u_model": return automatic.model;
+    case "u_view": return automatic.view;
+    case "u_proj": return automatic.projection;
+    default: throw new Error(`unknown automatic uniform \`${binding.name}\``);
+  }
+}
+
+function globalAutomaticChanged(
+  binding: ShaderUniform,
+  previous: ShaderAutomaticSnapshot | undefined,
+  elapsedSeconds: number,
+  width: number,
+  height: number,
+): boolean {
+  if (previous === undefined) return true;
+  switch (binding.name) {
+    case "u_time": return previous.elapsedSeconds !== elapsedSeconds;
+    case "u_resolution": return previous.width !== width || previous.height !== height;
+    case "u_model":
+    case "u_view":
+    case "u_proj":
+      return false;
+    default: throw new Error(`unknown automatic uniform \`${binding.name}\``);
+  }
+}
+
 function isNumericSequence(
-  value: ShaderUniformValue,
+  value: ShaderUniformValue | undefined,
 ): value is NumericSequence {
   return Array.isArray(value) || value instanceof Float32Array;
+}
+
+function monotonicMilliseconds(): number {
+  return typeof globalThis.performance?.now === "function"
+    ? globalThis.performance.now()
+    : Date.now();
 }

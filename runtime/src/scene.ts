@@ -64,6 +64,15 @@ export interface RuntimeResourceLimits {
   readonly maxShaderPrograms?: number;
 }
 
+export interface SceneRendererStats {
+  readonly drawCalls: number;
+  readonly triangles: number;
+  readonly meshes: number;
+  readonly meshBytes: number;
+  readonly nodes: number;
+  readonly textures: number;
+}
+
 export interface TextureOptions {
   readonly minFilter?:
     | "nearest"
@@ -98,6 +107,7 @@ interface MeshResource {
   readonly indexBuffer: WebGLBuffer;
   readonly indexCount: number;
   readonly byteLength: number;
+  readonly vertexArrays: Map<string, WebGLVertexArrayObject>;
   references: number;
 }
 
@@ -165,6 +175,8 @@ export class WebGL2SceneRenderer {
   private startupPhase = true;
   private disposed = false;
   private meshBytes = 0;
+  private drawCalls = 0;
+  private triangles = 0;
   private camera: CameraState = {
     verticalFov: Math.PI / 4,
     near: 0.1,
@@ -191,6 +203,17 @@ export class WebGL2SceneRenderer {
 
   public replaceShaderRegistry(registry: WebGL2ShaderRegistry): void {
     this.shaderRegistry = registry;
+  }
+
+  public stats(): SceneRendererStats {
+    return Object.freeze({
+      drawCalls: this.drawCalls,
+      triangles: this.triangles,
+      meshes: this.meshes.size,
+      meshBytes: this.meshBytes,
+      nodes: this.nodes.size,
+      textures: this.textures.size,
+    });
   }
 
   public meshBox(width: number, height: number, depth: number): MeshHandle {
@@ -283,6 +306,9 @@ export class WebGL2SceneRenderer {
     }
     this.meshes.delete(resource);
     this.meshBytes -= resource.byteLength;
+    for (const vertexArray of resource.vertexArrays.values()) {
+      this.gl.deleteVertexArray(vertexArray);
+    }
     this.gl.deleteBuffer(resource.vertexBuffer);
     this.gl.deleteBuffer(resource.indexBuffer);
   }
@@ -535,7 +561,10 @@ export class WebGL2SceneRenderer {
         this.gl.UNSIGNED_INT,
         0,
       );
+      this.drawCalls += 1;
+      this.triangles += node.mesh.indexCount / 3;
     }
+    this.gl.bindVertexArray(null);
     this.gl.disable(this.gl.DEPTH_TEST);
   }
 
@@ -545,6 +574,9 @@ export class WebGL2SceneRenderer {
     }
     this.disposed = true;
     for (const mesh of this.meshes) {
+      for (const vertexArray of mesh.vertexArrays.values()) {
+        this.gl.deleteVertexArray(vertexArray);
+      }
       this.gl.deleteBuffer(mesh.vertexBuffer);
       this.gl.deleteBuffer(mesh.indexBuffer);
     }
@@ -597,6 +629,7 @@ export class WebGL2SceneRenderer {
       indexBuffer,
       indexCount: data.indices.length,
       byteLength,
+      vertexArrays: new Map(),
       references: 0,
     };
     this.meshes.add(mesh);
@@ -609,6 +642,19 @@ export class WebGL2SceneRenderer {
     mesh: MeshResource,
     attributes: readonly ShaderAttribute[],
   ): void {
+    const layoutKey = attributes
+      .map((attribute) => `${attribute.name}:${attribute.location}`)
+      .join("|");
+    const cached = mesh.vertexArrays.get(layoutKey);
+    if (cached !== undefined) {
+      this.gl.bindVertexArray(cached);
+      return;
+    }
+    const vertexArray = this.gl.createVertexArray();
+    if (vertexArray === null) {
+      throw new Error("failed to create a mesh vertex array");
+    }
+    this.gl.bindVertexArray(vertexArray);
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, mesh.vertexBuffer);
     this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, mesh.indexBuffer);
     const stride =
@@ -628,6 +674,7 @@ export class WebGL2SceneRenderer {
         layout.offset * Float32Array.BYTES_PER_ELEMENT,
       );
     }
+    mesh.vertexArrays.set(layoutKey, vertexArray);
   }
 
   private bindBasic(

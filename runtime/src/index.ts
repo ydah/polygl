@@ -22,6 +22,11 @@ export {
 } from "./records.js";
 export type { PolyglRecord } from "./records.js";
 export { WebGL2BatchRenderer } from "./renderer.js";
+export type {
+  BatchRendererStats,
+  StrokeCap,
+  StrokeJoin,
+} from "./renderer.js";
 export { readRuntimeCapabilities } from "./capabilities.js";
 export type { RuntimeCapabilities } from "./capabilities.js";
 export { WebGL2SceneRenderer } from "./scene.js";
@@ -33,6 +38,7 @@ export type {
   RuntimeImageLoader,
   RuntimeImageRequest,
   RuntimeResourceLimits,
+  SceneRendererStats,
   SceneShaderValue,
   TextureHandle,
   TextureOptions,
@@ -43,6 +49,7 @@ export type {
   ShaderAttribute,
   ShaderBundle,
   ShaderMaterial,
+  ShaderRegistryStats,
   NumericSequence,
   ShaderUniform,
   ShaderUniformValue,
@@ -58,6 +65,7 @@ export type {
   RuntimeOptions,
   RuntimeResizeObserver,
   RuntimeSessionState,
+  RuntimeStats,
 } from "./session.js";
 
 import { runtimeError } from "./errors.js";
@@ -81,6 +89,8 @@ import type {
   TextureOptions,
 } from "./scene.js";
 import type { RuntimeCapabilities } from "./capabilities.js";
+import type { RuntimeStats } from "./session.js";
+import type { StrokeCap, StrokeJoin } from "./renderer.js";
 import {
   validateProgramSource,
   validateRuntimeOptions,
@@ -148,6 +158,18 @@ export function stroke(r: number, g: number, b: number, a = 1): void {
 
 export function noStroke(): void {
   session().renderer.noStroke();
+}
+
+export function strokeWidth(width: number): void {
+  session().renderer.strokeWidth(width);
+}
+
+export function strokeCap(cap: StrokeCap): void {
+  session().renderer.strokeCap(cap);
+}
+
+export function strokeJoin(join: StrokeJoin): void {
+  session().renderer.strokeJoin(join);
 }
 
 export function rect(
@@ -362,6 +384,10 @@ export function shaderSet(
 
 export function runtimeCapabilities(): RuntimeCapabilities {
   return session().capabilities();
+}
+
+export function runtimeStats(): RuntimeStats {
+  return session().stats();
 }
 
 export function floorToInt(value: number): number {
