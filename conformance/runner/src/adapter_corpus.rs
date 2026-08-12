@@ -151,6 +151,9 @@ fn verify_case(root: &Path, case: &CorpusCase) -> Result<(), ConformanceError> {
 mod tests {
     use std::path::PathBuf;
 
+    use polygl_core::Compiler;
+    use polygl_span::{SourceFile, SourceId};
+
     use super::verify_adapter_corpus;
 
     #[test]
@@ -160,5 +163,30 @@ mod tests {
             .parent()
             .expect("runner lives directly under conformance");
         assert_eq!(verify_adapter_corpus(root).unwrap(), 12);
+    }
+
+    #[test]
+    fn large_flat_source_compiles_without_recursive_failure() {
+        let mut text = String::from("def setup\n  value = 0\n");
+        for _ in 0..4_096 {
+            text.push_str("  value = value + 1\n");
+        }
+        text.push_str("  background(value, 0.0, 0.0)\nend\n");
+        let source = SourceFile::new(SourceId::new(0), "large-flat.rb", text);
+        let output = Compiler::standard().analyze(&source, "ruby").unwrap();
+        assert!(output.typed.metrics().syntax_node_count > 10_000);
+    }
+
+    #[test]
+    fn actual_megabyte_input_is_rejected_before_parsing() {
+        let text = " ".repeat(polygl_core::CompileBudget::standard().max_source_bytes + 1);
+        let source = SourceFile::new(SourceId::new(0), "oversized.rb", text);
+        let error = Compiler::standard().analyze(&source, "ruby").unwrap_err();
+        let diagnostic = error
+            .diagnostics()
+            .and_then(|diagnostics| diagnostics.iter().next())
+            .expect("budget failures must be structured diagnostics");
+        assert_eq!(diagnostic.code, polygl_span::DiagnosticCode::E0001);
+        assert!(diagnostic.message.contains("source bytes"));
     }
 }
