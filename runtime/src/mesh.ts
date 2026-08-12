@@ -1,4 +1,8 @@
+import { copyDenseNumericSequence } from "./numeric.js";
+
 export const FLOATS_PER_MESH_VERTEX = 12;
+const MAX_MESH_VERTEX_VALUES = FLOATS_PER_MESH_VERTEX * 1_000_000;
+const MAX_MESH_INDEX_VALUES = 6_000_000;
 
 export interface MeshData {
   readonly vertices: Float32Array;
@@ -127,22 +131,32 @@ export function customMesh(
   vertices: readonly number[],
   indices: readonly number[],
 ): MeshData {
+  const safeVertices = copyDenseNumericSequence(
+    vertices,
+    "mesh vertices",
+    MAX_MESH_VERTEX_VALUES,
+  );
+  const safeIndices = copyDenseNumericSequence(
+    indices,
+    "mesh indices",
+    MAX_MESH_INDEX_VALUES,
+  );
   if (
-    vertices.length === 0 ||
-    vertices.length % FLOATS_PER_MESH_VERTEX !== 0
+    safeVertices.length === 0 ||
+    safeVertices.length % FLOATS_PER_MESH_VERTEX !== 0
   ) {
     throw new RangeError(
       `mesh vertices must contain ${FLOATS_PER_MESH_VERTEX} finite values per vertex`,
     );
   }
-  if (vertices.some((value) => !Number.isFinite(value))) {
+  if (safeVertices.some((value) => !Number.isFinite(value))) {
     throw new RangeError("mesh vertices must be finite numbers");
   }
-  const vertexCount = vertices.length / FLOATS_PER_MESH_VERTEX;
+  const vertexCount = safeVertices.length / FLOATS_PER_MESH_VERTEX;
   if (
-    indices.length === 0 ||
-    indices.length % 3 !== 0 ||
-    indices.some(
+    safeIndices.length === 0 ||
+    safeIndices.length % 3 !== 0 ||
+    safeIndices.some(
       (value) =>
         !Number.isInteger(value) ||
         value < 0 ||
@@ -154,7 +168,7 @@ export function customMesh(
       "mesh indices must be in-range unsigned triangle indices",
     );
   }
-  return createMeshData(vertices, indices);
+  return createMeshData(safeVertices, safeIndices);
 }
 
 function createMeshData(

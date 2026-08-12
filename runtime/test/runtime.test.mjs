@@ -1471,6 +1471,33 @@ test("allows optimized-out uniforms and rejects invalid uploads", async () => {
     /uniform `count` expects int/,
   );
 
+  let vectorGetterCalls = 0;
+  const accessorVector = new Array(3).fill(0);
+  Object.defineProperty(accessorVector, "1", {
+    get() {
+      vectorGetterCalls += 1;
+      return 0;
+    },
+  });
+  const vector = fakeWebGl2();
+  await assert.rejects(start({
+    setup() { setShaderUniform("vector", "value", accessorVector); },
+  }, {
+    canvas: fakeCanvas(),
+    context: vector.context,
+    shaderBundle: shaderBundle([{
+      name: "vector",
+      uniforms: [{
+        name: "value",
+        glslName: "pgl_u_value",
+        type: "vec3",
+        source: "user",
+      }],
+    }]),
+    onError() {},
+  }), /uniform `value` expects vec3/);
+  assert.equal(vectorGetterCalls, 0);
+
   const priorError = fakeWebGl2({ webglErrors: [0x0500, 0, 0] });
   const priorHandle = await start({}, {
     canvas: fakeCanvas(),
@@ -1570,6 +1597,27 @@ test("renders retained 3D primitives and rejects handles from old sessions", asy
     ),
     /finite 32-bit floats/,
   );
+  let accessorCalls = 0;
+  const accessorVertices = new Array(12).fill(0);
+  Object.defineProperty(accessorVertices, "0", {
+    get() {
+      accessorCalls += 1;
+      return 0;
+    },
+  });
+  assert.throws(
+    () => meshFrom(accessorVertices, [0, 0, 0]),
+    /mesh vertices\[0\].*data property/,
+  );
+  const accessorColor = new Array(4).fill(1);
+  Object.defineProperty(accessorColor, "0", {
+    get() {
+      accessorCalls += 1;
+      return 1;
+    },
+  });
+  assert.throws(() => materialBasic(accessorColor), /color\[0\].*data property/);
+  assert.equal(accessorCalls, 0);
   handle.stop();
 
   const next = fakeWebGl2();
@@ -1892,6 +1940,24 @@ test("rejects oversized decoded textures before uploading them", async () => {
     onError() {},
   }), /exceeding the 32px texture limit/);
   assert.equal(gl.textureUploads.length, 1);
+
+  let dimensionGetterCalls = 0;
+  const accessorSource = { height: 1 };
+  Object.defineProperty(accessorSource, "width", {
+    get() {
+      dimensionGetterCalls += 1;
+      return 1;
+    },
+  });
+  await assert.rejects(start({
+    setup() { textureLoad("assets/accessor.png"); },
+  }, {
+    canvas: fakeCanvas(),
+    context: fakeWebGl2().context,
+    imageLoader: async () => accessorSource,
+    onError() {},
+  }), /image source\.width must be a data property/);
+  assert.equal(dimensionGetterCalls, 0);
 });
 
 test("cancels a pending texture upload when its handle is disposed", async () => {

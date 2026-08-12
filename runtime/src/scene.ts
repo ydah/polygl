@@ -14,6 +14,7 @@ import {
   sphereMesh,
 } from "./mesh.js";
 import type { MeshData } from "./mesh.js";
+import { copyFixedFiniteSequence } from "./numeric.js";
 import type {
   NumericSequence,
   ShaderAttribute,
@@ -1150,14 +1151,7 @@ function fixedVector(
   length: number,
   label: string,
 ): readonly number[] {
-  const components = Array.from(value);
-  if (
-    components.length !== length ||
-    components.some((item) => !Number.isFinite(item))
-  ) {
-    throw new RangeError(`${label} must contain ${length} finite numbers`);
-  }
-  return Object.freeze(components);
+  return copyFixedFiniteSequence(value, length, label);
 }
 
 function fixedVec3(value: NumericSequence, label: string): Vec3 {
@@ -1412,14 +1406,24 @@ function firstPositiveDimension(
   source: object,
   names: readonly string[],
 ): number | undefined {
+  const prototype: unknown = Object.getPrototypeOf(source);
+  const plain = prototype === Object.prototype || prototype === null;
   for (const name of names) {
     let value: unknown;
-    try {
-      value = Reflect.get(source, name);
-    } catch (error) {
-      throw new TypeError(
-        `image source.${name} could not be read: ${errorMessage(error)}`,
-      );
+    if (plain) {
+      const descriptor = Object.getOwnPropertyDescriptor(source, name);
+      if (descriptor !== undefined && !("value" in descriptor)) {
+        throw new TypeError(`image source.${name} must be a data property`);
+      }
+      value = descriptor?.value;
+    } else {
+      try {
+        value = Reflect.get(source, name);
+      } catch (error) {
+        throw new TypeError(
+          `image source.${name} could not be read: ${errorMessage(error)}`,
+        );
+      }
     }
     if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
       return value;

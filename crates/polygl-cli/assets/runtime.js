@@ -222,6 +222,65 @@ function defineEntry(record, key, value) {
         writable: true,
     });
 }
+const MAX_NUMERIC_SEQUENCE_LENGTH = 16777216;
+export function copyDenseNumericSequence(value, label, maximumLength = MAX_NUMERIC_SEQUENCE_LENGTH) {
+    if (!Number.isSafeInteger(maximumLength) || maximumLength < 0) {
+        throw new RangeError("numeric sequence maximum length must be non-negative");
+    }
+    if (Array.isArray(value)) {
+        if (Object.getPrototypeOf(value) !== Array.prototype) {
+            throw new TypeError(`${label} must not use a custom array prototype`);
+        }
+        if (value.length > maximumLength) {
+            throw new RangeError(`${label} cannot contain more than ${maximumLength} values`);
+        }
+        const result = [];
+        for (let index = 0; index < value.length; index += 1) {
+            const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+            if (descriptor === undefined || !("value" in descriptor)) {
+                throw new TypeError(`${label}[${index}] must be a data property`);
+            }
+            if (typeof descriptor.value !== "number") {
+                throw new TypeError(`${label}[${index}] must be a number`);
+            }
+            result.push(descriptor.value);
+        }
+        for (const key of Reflect.ownKeys(value)) {
+            if (key === "length")
+                continue;
+            if (typeof key !== "string" || !isDenseIndex(key, value.length)) {
+                throw new TypeError(`${label} must contain only indexed data properties`);
+            }
+        }
+        return result;
+    }
+    if (value instanceof Float32Array &&
+        Object.getPrototypeOf(value) === Float32Array.prototype) {
+        if (value.length > maximumLength) {
+            throw new RangeError(`${label} cannot contain more than ${maximumLength} values`);
+        }
+        const result = [];
+        for (let index = 0; index < value.length; index += 1) {
+            result.push(value[index] ?? 0);
+        }
+        return result;
+    }
+    throw new TypeError(`${label} must be an array or Float32Array`);
+}
+export function copyFixedFiniteSequence(value, length, label) {
+    const components = copyDenseNumericSequence(value, label, length);
+    if (components.length !== length ||
+        components.some((item) => !Number.isFinite(item))) {
+        throw new RangeError(`${label} must contain ${length} finite numbers`);
+    }
+    return Object.freeze(components);
+}
+function isDenseIndex(key, length) {
+    if (!/^(0|[1-9][0-9]*)$/.test(key))
+        return false;
+    const index = Number(key);
+    return Number.isSafeInteger(index) && index >= 0 && index < length;
+}
 export function readRuntimeCapabilities(gl) {
     return Object.freeze({
         webglVersion: stringParameter(gl, gl.VERSION, "WebGL version"),
@@ -863,6 +922,8 @@ function dot3(left, right) {
     return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
 }
 export const FLOATS_PER_MESH_VERTEX = 12;
+const MAX_MESH_VERTEX_VALUES = FLOATS_PER_MESH_VERTEX * 1000000;
+const MAX_MESH_INDEX_VALUES = 6000000;
 export function boxMesh(width, height, depth) {
     const x = positive(width, "box width") / 2;
     const y = positive(height, "box height") / 2;
@@ -946,23 +1007,25 @@ export function planeMesh(width, depth, columns = 1, rows = 1) {
     return createMeshData(vertices, indices);
 }
 export function customMesh(vertices, indices) {
-    if (vertices.length === 0 ||
-        vertices.length % FLOATS_PER_MESH_VERTEX !== 0) {
+    const safeVertices = copyDenseNumericSequence(vertices, "mesh vertices", MAX_MESH_VERTEX_VALUES);
+    const safeIndices = copyDenseNumericSequence(indices, "mesh indices", MAX_MESH_INDEX_VALUES);
+    if (safeVertices.length === 0 ||
+        safeVertices.length % FLOATS_PER_MESH_VERTEX !== 0) {
         throw new RangeError(`mesh vertices must contain ${FLOATS_PER_MESH_VERTEX} finite values per vertex`);
     }
-    if (vertices.some((value) => !Number.isFinite(value))) {
+    if (safeVertices.some((value) => !Number.isFinite(value))) {
         throw new RangeError("mesh vertices must be finite numbers");
     }
-    const vertexCount = vertices.length / FLOATS_PER_MESH_VERTEX;
-    if (indices.length === 0 ||
-        indices.length % 3 !== 0 ||
-        indices.some((value) => !Number.isInteger(value) ||
+    const vertexCount = safeVertices.length / FLOATS_PER_MESH_VERTEX;
+    if (safeIndices.length === 0 ||
+        safeIndices.length % 3 !== 0 ||
+        safeIndices.some((value) => !Number.isInteger(value) ||
             value < 0 ||
             value >= vertexCount ||
             value > 4294967295)) {
         throw new RangeError("mesh indices must be in-range unsigned triangle indices");
     }
-    return createMeshData(vertices, indices);
+    return createMeshData(safeVertices, safeIndices);
 }
 function createMeshData(vertices, indices) {
     const typedVertices = new Float32Array(vertices);
@@ -2208,14 +2271,21 @@ function validateUniformValue(gl, binding, value, location) {
     }
 }
 function validateNumericArray(value, length, invalid) {
-    if (!isNumericSequence(value) ||
-        value.length !== length ||
-        value.some((item) => typeof item !== "number" || !Number.isFinite(item))) {
+    let components;
+    try {
+        components = copyDenseNumericSequence(value, "uniform value", length);
+    }
+    catch {
         invalid();
     }
+    if (components.length !== length ||
+        components.some((item) => !Number.isFinite(item)))
+        invalid();
 }
 function copyUniformValue(value) {
-    return isNumericSequence(value) ? Object.freeze(Array.from(value)) : value;
+    return isNumericSequence(value)
+        ? Object.freeze(copyDenseNumericSequence(value, "uniform value"))
+        : value;
 }
 function uniformValuesEqual(left, right) {
     if (left === right)
@@ -2996,12 +3066,7 @@ function opaqueHandle(kind, owner) {
     return Object.freeze(brand({ kind }, owner, kind));
 }
 function fixedVector(value, length, label) {
-    const components = Array.from(value);
-    if (components.length !== length ||
-        components.some((item) => !Number.isFinite(item))) {
-        throw new RangeError(`${label} must contain ${length} finite numbers`);
-    }
-    return Object.freeze(components);
+    return copyFixedFiniteSequence(value, length, label);
 }
 function fixedVec3(value, label) {
     return fixedVector(value, 3, label);
@@ -3181,13 +3246,24 @@ function imageDimensions(source, path) {
     return { width, height };
 }
 function firstPositiveDimension(source, names) {
+    const prototype = Object.getPrototypeOf(source);
+    const plain = prototype === Object.prototype || prototype === null;
     for (const name of names) {
         let value;
-        try {
-            value = Reflect.get(source, name);
+        if (plain) {
+            const descriptor = Object.getOwnPropertyDescriptor(source, name);
+            if (descriptor !== undefined && !("value" in descriptor)) {
+                throw new TypeError(`image source.${name} must be a data property`);
+            }
+            value = descriptor?.value;
         }
-        catch (error) {
-            throw new TypeError(`image source.${name} could not be read: ${errorMessage(error)}`);
+        else {
+            try {
+                value = Reflect.get(source, name);
+            }
+            catch (error) {
+                throw new TypeError(`image source.${name} could not be read: ${errorMessage(error)}`);
+            }
         }
         if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
             return value;

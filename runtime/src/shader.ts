@@ -1,5 +1,6 @@
 import { runtimeError } from "./errors.js";
 import type { SourceLocation } from "./errors.js";
+import { copyDenseNumericSequence } from "./numeric.js";
 import { shaderAbi } from "./generated/abi.js";
 import {
   validateShaderArtifacts,
@@ -804,17 +805,22 @@ function validateNumericArray(
   length: number,
   invalid: () => never,
 ): void {
-  if (
-    !isNumericSequence(value) ||
-    value.length !== length ||
-    value.some((item) => typeof item !== "number" || !Number.isFinite(item))
-  ) {
+  let components: readonly number[];
+  try {
+    components = copyDenseNumericSequence(value, "uniform value", length);
+  } catch {
     invalid();
   }
+  if (
+    components.length !== length ||
+    components.some((item) => !Number.isFinite(item))
+  ) invalid();
 }
 
 function copyUniformValue(value: ShaderUniformValue): ShaderUniformValue {
-  return isNumericSequence(value) ? Object.freeze(Array.from(value)) : value;
+  return isNumericSequence(value)
+    ? Object.freeze(copyDenseNumericSequence(value, "uniform value"))
+    : value;
 }
 
 function uniformValuesEqual(
