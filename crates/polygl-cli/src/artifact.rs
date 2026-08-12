@@ -293,12 +293,15 @@ fn portable_component_key(component: &str) -> Result<String, CliError> {
 }
 
 fn is_windows_device_name(name: &str) -> bool {
-    matches!(name, "con" | "prn" | "aux" | "nul")
+    matches!(name, "con" | "prn" | "aux" | "nul" | "conin$" | "conout$")
         || name
             .strip_prefix("com")
             .or_else(|| name.strip_prefix("lpt"))
             .is_some_and(|suffix| {
-                matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
+                matches!(
+                    suffix,
+                    "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+                )
             })
 }
 
@@ -355,7 +358,16 @@ mod tests {
                 .collect::<Vec<_>>();
             assert!(validate_paths(&files).is_err());
         }
-        for path in ["CON", "nul.png", "folder./image.png", "bad?.png"] {
+        for path in [
+            "CON",
+            "nul.png",
+            "COM¹.txt",
+            "lpt²",
+            "CONIN$",
+            "conout$.log",
+            "folder./image.png",
+            "bad?.png",
+        ] {
             assert!(validate_paths(&[ArtifactFile::new(path, Vec::new())]).is_err());
         }
     }
