@@ -50,11 +50,13 @@ jobs:
           rustup toolchain install nightly-2026-08-01 --profile minimal
           cargo +nightly-2026-08-01 install --locked --version 0.13.2 cargo-fuzz
 
-      - name: Fuzz source frontends
-        run: >-
-          cargo +nightly-2026-08-01 fuzz run frontend
-          fuzz/corpus/frontend
-          -- -max_total_time=180 -timeout=10
+      - name: Fuzz each source frontend independently
+        shell: bash
+        run: |
+          for target in frontend_ruby frontend_php frontend_perl; do
+            cargo +nightly-2026-08-01 fuzz run "$target" \
+              fuzz/corpus/frontend -- -max_total_time=60 -timeout=10
+          done
 
       - name: Fuzz the valid pipeline through both backends
         run: >-
@@ -77,8 +79,16 @@ jobs:
         run: >-
           cargo mutants
           --package polygl-cli
-          --package polygl-lir
           --re 'portable_component_key|insert_path|invalid_asset_path_reason'
+          --cargo-arg=--locked
+          --timeout 120
+          --jobs 2
+
+      - name: Challenge optimizer effect preservation
+        run: >-
+          cargo mutants
+          --package polygl-lir
+          --re 'effects|optimize_module|optimize_block|optimize_expression'
           --cargo-arg=--locked
           --timeout 120
           --jobs 2
@@ -93,7 +103,7 @@ jobs:
           --jobs 2
 
   benchmark:
-    name: Compiler benchmark record
+    name: Compiler and runtime benchmark record
     runs-on: ubuntu-24.04
     steps:
       - name: Check out source
@@ -102,13 +112,39 @@ jobs:
       - name: Build release compiler
         run: cargo build --locked --release -p polygl-cli
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 10.33.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: conformance/browser/pnpm-lock.yaml
+
+      - name: Install browser benchmark dependencies
+        run: |
+          pnpm --dir conformance/browser install --frozen-lockfile
+          pnpm --dir runtime install --frozen-lockfile
+          pnpm --dir conformance/browser exec playwright install --with-deps chromium
+
+      - name: Build browser runtime
+        run: pnpm --dir runtime build
+
       - name: Measure representative compiler workloads
         run: node benchmarks/compiler/run.mjs > compiler-benchmark.json
+
+      - name: Measure representative browser runtime workloads
+        run: node benchmarks/runtime/run.mjs > runtime-benchmark.json
 
       - name: Upload benchmark record
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: compiler-benchmark
-          path: compiler-benchmark.json
+          path: |
+            compiler-benchmark.json
+            runtime-benchmark.json
           if-no-files-found: error
           retention-days: 30

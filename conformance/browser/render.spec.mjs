@@ -263,6 +263,65 @@ test("debug runtime overlay reports the generated source location", async ({
   );
 });
 
+test("browser resize, DPR, and context loss follow the session contract", async ({
+  page,
+}) => {
+  await routeBuild(page);
+  await page.goto("http://polygl.test/rectangle/ruby/index.html");
+  await page.evaluate(() => globalThis.__polyglReady);
+  const result = await page.evaluate(async () => {
+    const runtime = await import("./runtime.js");
+    const canvas = document.createElement("canvas");
+    canvas.style.width = "80px";
+    canvas.style.height = "40px";
+    document.body.append(canvas);
+    const errors = [];
+    const handle = await runtime.start(
+      { frame() {} },
+      {
+        autoResize: true,
+        canvas,
+        devicePixelRatio: 2,
+        onError(reason) {
+          errors.push(String(reason));
+        },
+      },
+    );
+    const initial = [canvas.width, canvas.height];
+    canvas.style.width = "50px";
+    canvas.style.height = "30px";
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const resized = [canvas.width, canvas.height];
+    const extension = canvas
+      .getContext("webgl2")
+      .getExtension("WEBGL_lose_context");
+    if (extension === null) {
+      handle.stop();
+      canvas.remove();
+      return { contextLossSupported: false, initial, resized };
+    }
+    extension.loseContext();
+    for (let attempt = 0; attempt < 20 && errors.length === 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const stateAfterLoss = handle.state;
+    handle.stop();
+    canvas.remove();
+    return {
+      contextLossSupported: true,
+      errors,
+      initial,
+      resized,
+      stateAfterLoss,
+    };
+  });
+  expect(result.contextLossSupported).toBe(true);
+  expect(result.initial).toEqual([160, 80]);
+  expect(result.resized).toEqual([100, 60]);
+  expect(result.stateAfterLoss).toBe("context-lost");
+  expect(result.errors[0]).toContain("rendering is suspended");
+});
+
 test("a loaded texture is sampled into a real framebuffer", async ({ page }) => {
   await page.addInitScript(() => {
     const originalGetContext = HTMLCanvasElement.prototype.getContext;

@@ -5,6 +5,9 @@ on:
   push:
     branches:
       - main
+  schedule:
+    - cron: "19 2 * * 3"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -70,3 +73,36 @@ jobs:
 
       - name: Compare Ruby, PHP, and Perl framebuffers
         run: pnpm --dir conformance/browser test
+
+  portability:
+    name: Firefox and WebKit portability (non-blocking)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Select pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 10.33.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+          cache-dependency-path: conformance/browser/pnpm-lock.yaml
+
+      - name: Install portability browsers
+        run: |
+          pnpm --dir conformance/browser install --frozen-lockfile
+          pnpm --dir conformance/browser exec playwright install --with-deps firefox webkit
+
+      - name: Run portability smoke tests
+        run: pnpm --dir conformance/browser test:portability
