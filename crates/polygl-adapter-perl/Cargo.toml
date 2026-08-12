@@ -12,7 +12,7 @@ polygl-adapter-api = { path = "../polygl-adapter-api", version = "=0.1.0" }
 polygl-adapter-treesitter-util = { path = "../polygl-adapter-treesitter-util", version = "=0.1.0" }
 polygl-hir = { path = "../polygl-hir", version = "=0.1.0" }
 polygl-span = { path = "../polygl-span", version = "=0.1.0" }
-tree-sitter = "=0.26.11"
+tree-sitter = "=0.26.12"
 ts-parser-perl = "=1.2.1"
 
 [dev-dependencies]
