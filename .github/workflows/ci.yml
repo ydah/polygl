@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Select pinned Rust toolchain
         run: rustup show active-toolchain
@@ -31,41 +31,88 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Select pinned Rust toolchain
         run: rustup show active-toolchain
 
       - name: Lint workspace
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
   test:
-    name: Rust / test
-    runs-on: ubuntu-24.04
+    name: Rust / test / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - macos-14
+          - windows-2025
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Select pinned Rust toolchain
         run: rustup show active-toolchain
 
       - name: Test workspace
-        run: cargo test --workspace
+        run: cargo test --locked --workspace --all-features
+
+  toolchain:
+    name: Rust / ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: MSRV
+            toolchain: 1.96.1
+          - name: stable
+            toolchain: stable
+          - name: next
+            toolchain: beta
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust ${{ matrix.toolchain }}
+        run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal
+
+      - name: Check all targets and features
+        run: >-
+          cargo +${{ matrix.toolchain }} check
+          --locked --workspace --all-targets --all-features
+
+  rustdoc:
+    name: Rust / rustdoc
+    runs-on: ubuntu-24.04
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Select pinned Rust toolchain
+        run: rustup show active-toolchain
+
+      - name: Build workspace documentation
+        run: cargo doc --locked --workspace --all-features --no-deps
 
   runtime:
     name: Runtime
     runs-on: ubuntu-24.04
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
         with:
           version: 10.33.0
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .node-version
           cache: pnpm
@@ -81,14 +128,27 @@ jobs:
         run: pnpm --dir runtime test
 
   npm-cli:
-    name: npm CLI wrapper
+    name: npm CLI wrapper / ${{ matrix.channel }}
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        channel:
+          - minimum
+          - development
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Node.js
-        uses: actions/setup-node@v4
+      - name: Install minimum supported Node.js
+        if: matrix.channel == 'minimum'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20.0.0
+
+      - name: Install development Node.js
+        if: matrix.channel == 'development'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .node-version
 
@@ -100,7 +160,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Select pinned Rust toolchain
         run: rustup show active-toolchain
@@ -113,7 +173,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Select pinned Rust toolchain
         run: rustup show active-toolchain
@@ -134,3 +194,13 @@ jobs:
             -o "$generated"
           perl -pi -e 's/\r\n\z/\n/; s/[ \t]+\n\z/\n/' "$generated"
           cmp THIRD_PARTY_LICENSES.txt "$generated"
+
+  reproducible:
+    name: Reproducible release build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Compare independent clean builds
+        run: scripts/check-reproducible-build.sh
