@@ -37,6 +37,10 @@ enum Dependency<'module> {
 /// GLSL ES 3.00 subset at that boundary.
 pub fn split(module: &Module) -> Result<SplitProgram, Diagnostics> {
     let mut validator = Validator::new(module);
+    validator.validate_declaration_uniqueness();
+    if validator.diagnostics.has_errors() {
+        return Err(validator.diagnostics);
+    }
     validator.validate_shader_pairs();
     validator.resolve_host_reachability();
     validator.validate_material_references();
@@ -166,6 +170,27 @@ impl<'module> Validator<'module> {
             validating_structs: HashSet::new(),
             validated_structs: HashSet::new(),
             current_path: Vec::new(),
+        }
+    }
+
+    fn validate_declaration_uniqueness(&mut self) {
+        let mut functions = HashSet::new();
+        for function in &self.module.functions {
+            if !functions.insert(function.name.as_str()) {
+                self.invalid_lir(
+                    format!("LIR declares function `{}` more than once", function.name),
+                    function.span,
+                );
+            }
+        }
+        let mut constants = HashSet::new();
+        for constant in &self.module.constants {
+            if !constants.insert(constant.name.as_str()) {
+                self.invalid_lir(
+                    format!("LIR declares constant `{}` more than once", constant.name),
+                    constant.span,
+                );
+            }
         }
     }
 
@@ -689,10 +714,22 @@ impl<'module> Validator<'module> {
                         }
                     }
                     CallTarget::Runtime(operation) => {
-                        let builtin = BuiltinTable::all()
+                        let Some(builtin) = BuiltinTable::all()
                             .iter()
                             .find(|builtin| builtin.runtime_op == *operation)
-                            .expect("LIR runtime operations come from the builtin registry");
+                        else {
+                            self.invalid_lir(
+                                format!(
+                                    "LIR references unregistered runtime operation `{}`",
+                                    operation.as_str()
+                                ),
+                                expression.span,
+                            );
+                            for argument in args {
+                                self.inspect_host_expr(argument);
+                            }
+                            return;
+                        };
                         if builtin.domain == BuiltinDomain::Gpu {
                             self.error_with_dependency_path(
                                 "E0404",
@@ -1127,10 +1164,22 @@ impl<'module> Validator<'module> {
                         }
                     }
                     CallTarget::Runtime(operation) => {
-                        let builtin = BuiltinTable::all()
+                        let Some(builtin) = BuiltinTable::all()
                             .iter()
                             .find(|builtin| builtin.runtime_op == *operation)
-                            .expect("LIR runtime operations come from the builtin registry");
+                        else {
+                            self.invalid_lir(
+                                format!(
+                                    "LIR references unregistered runtime operation `{}`",
+                                    operation.as_str()
+                                ),
+                                expression.span,
+                            );
+                            for argument in args {
+                                self.inspect_expr(argument);
+                            }
+                            return;
+                        };
                         if builtin.domain == BuiltinDomain::Host {
                             self.error_with_dependency_path(
                                 "E0404",
@@ -1313,6 +1362,13 @@ impl<'module> Validator<'module> {
             Diagnostic::new(Severity::Error, code, message, span)
                 .with_note(format!("dependency path: {}", path.join(" → ")))
                 .with_suggestion(Suggestion::rewrite(span, suggestion)),
+        );
+    }
+
+    fn invalid_lir(&mut self, message: impl Into<String>, span: polygl_span::Span) {
+        self.diagnostics.push(
+            Diagnostic::new(Severity::Error, "E0001", message, span)
+                .with_note("rejecting malformed LIR at the Host/GPU split boundary"),
         );
     }
 }
@@ -1820,6 +1876,44 @@ mod tests {
         assert!(split.host.entries.is_empty());
         assert_eq!(split.gpu.entries.len(), 2);
         assert!(split.warnings.is_empty());
+    }
+
+    #[test]
+    fn rejects_malformed_public_lir_instead_of_panicking() {
+        let unknown_runtime = expression(
+            ExprKind::Call {
+                target: CallTarget::Runtime(polygl_builtins::RuntimeOp::new("not_registered")),
+                args: Vec::new(),
+            },
+            Type::Unit,
+        );
+        let unknown = valid_pair(vec![
+            Statement::new(StatementKind::Expr(unknown_runtime), span()),
+            return_vector4(),
+        ]);
+        let diagnostics = split(&unknown).expect_err("unknown runtime operations must be rejected");
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "E0001" && diagnostic.message.contains("not_registered")
+        }));
+
+        let duplicate = Function {
+            name: "duplicate".to_owned(),
+            params: Vec::new(),
+            result: Type::Unit,
+            body: Block {
+                statements: Vec::new(),
+                span: span(),
+            },
+            domain: Domain::Host,
+            span: span(),
+        };
+        let mut duplicate_declarations = valid_pair(vec![return_vector4()]);
+        duplicate_declarations.functions = vec![duplicate.clone(), duplicate];
+        let diagnostics = split(&duplicate_declarations)
+            .expect_err("duplicate declarations must be rejected before graph construction");
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "E0001" && diagnostic.message.contains("more than once")
+        }));
     }
 
     #[test]
