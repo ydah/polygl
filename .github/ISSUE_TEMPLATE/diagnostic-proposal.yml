@@ -1,0 +1,43 @@
+name: Diagnostic proposal
+description: Propose or revise a stable compiler diagnostic contract.
+title: "[diagnostic proposal] "
+labels: [proposal, diagnostics]
+body:
+  - type: input
+    id: code
+    attributes:
+      label: Proposed code/family and producer
+      placeholder: E02xx / ruby adapter
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options: [error, warning, note]
+    validations:
+      required: true
+  - type: textarea
+    id: trigger
+    attributes:
+      label: Exact trigger and non-triggering counterexample
+    validations:
+      required: true
+  - type: textarea
+    id: spans
+    attributes:
+      label: Primary span, related labels, and source ownership
+    validations:
+      required: true
+  - type: textarea
+    id: fixes
+    attributes:
+      label: Fixes and applicability
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Registry/docs/SARIF/LSP compatibility impact and tests
+    validations:
+      required: true

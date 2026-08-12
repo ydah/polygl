@@ -1,0 +1,55 @@
+name: Compiler bug
+description: Report parsing-independent HIR, typing, LIR, backend, artifact, or CLI behavior.
+title: "[compiler] "
+labels: [bug, compiler]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include private source or security issues here; use private vulnerability reporting.
+  - type: input
+    id: version
+    attributes:
+      label: PolyGL version or commit
+    validations:
+      required: true
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Affected stage
+      options: [CLI/config, HIR, type analysis, LIR/split/optimizer, JavaScript backend, GLSL backend, packaging]
+    validations:
+      required: true
+  - type: textarea
+    id: source
+    attributes:
+      label: Minimal source and command
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed diagnostics/artifacts
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Common Core behavior
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: OS, architecture, Rust and Node versions
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I reproduced this from a clean output directory.
+          required: true
+        - label: This report does not contain a private vulnerability.
+          required: true

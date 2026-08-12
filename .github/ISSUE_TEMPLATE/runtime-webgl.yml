@@ -1,0 +1,41 @@
+name: Runtime or WebGL bug
+description: Report lifecycle, input, resources, shader reflection, or rendering behavior.
+title: "[runtime] "
+labels: [bug, runtime]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: PolyGL version or commit
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal source or JavaScript reproduction
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: lifecycle
+    attributes:
+      label: Area
+      options: [startup/setup, frame/timing, resize/input, mesh/node/material, texture loading, shader/uniform/reflection, WebGL state, context loss, error overlay]
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed and expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Browser version, OS, GPU/renderer, and capability report
+    validations:
+      required: true
+  - type: textarea
+    id: artifacts
+    attributes:
+      label: Screenshot, framebuffer diff, console, and generated shader metadata

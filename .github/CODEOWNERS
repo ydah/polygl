@@ -1,0 +1,11 @@
+# Cross-layer compatibility and release ownership
+* @ydah
+
+/crates/polygl-adapter-* @ydah
+/crates/polygl-hir/ @ydah
+/crates/polygl-lir/ @ydah
+/runtime/ @ydah
+/conformance/ @ydah
+/.github/workflows/ @ydah
+/scripts/release-* @ydah
+/docs/decisions/ @ydah

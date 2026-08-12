@@ -1,0 +1,42 @@
+name: Language proposal
+description: Propose a new adapter or an intentional Common Core syntax mapping.
+title: "[language proposal] "
+labels: [proposal, adapter]
+body:
+  - type: input
+    id: language
+    attributes:
+      label: Language and supported version range
+    validations:
+      required: true
+  - type: textarea
+    id: parser
+    attributes:
+      label: Parser, license, maintenance, spans, comments, and recovery
+    validations:
+      required: true
+  - type: textarea
+    id: mapping
+    attributes:
+      label: Common Core mapping and deliberate rejections
+    validations:
+      required: true
+  - type: textarea
+    id: semantics
+    attributes:
+      label: Division, remainder, truthiness, absence, collections, and evaluation-order differences
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Planned corpus, snapshots, Neutral cases, browser cases, and fuzz target
+    validations:
+      required: true
+  - type: checkboxes
+    id: non_goal
+    attributes:
+      label: Scope confirmation
+      options:
+        - label: This proposal does not claim full compatibility with the source language.
+          required: true
