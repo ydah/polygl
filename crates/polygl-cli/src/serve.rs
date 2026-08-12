@@ -4,7 +4,8 @@ use std::hash::{Hash, Hasher};
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -14,11 +15,14 @@ use polygl_backend_js::BuildMode;
 use crate::{CliError, build};
 
 const WATCH_INTERVAL: Duration = Duration::from_millis(150);
+const FAILED_BUILD_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 const ACCEPT_RETRY: Duration = Duration::from_millis(15);
 const CLIENT_WRITE_TIMEOUT: Duration = Duration::from_millis(100);
+const HTTP_READ_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_REQUEST_BYTES: usize = 16 * 1024;
 const MAX_CLIENT_FRAME_BYTES: usize = 64 * 1024;
 const MAX_WEBSOCKET_CLIENTS: usize = 32;
+const MAX_HTTP_CONNECTIONS: usize = 64;
 const WEBSOCKET_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const CLIENT_START: &str = "<!-- polygl-dev-client:start -->";
 const CLIENT_END: &str = "<!-- polygl-dev-client:end -->";
@@ -79,9 +83,11 @@ static NEXT_CLIENT: AtomicU64 = AtomicU64::new(0);
 type ActiveGeneration = Arc<RwLock<Option<Arc<Generation>>>>;
 type CurrentError = Arc<RwLock<Option<String>>>;
 type Clients = Arc<Mutex<Vec<WebSocketClient>>>;
+type BroadcastSender = Sender<String>;
 
 struct Generation {
     root: PathBuf,
+    watched_paths: Vec<PathBuf>,
 }
 
 impl Generation {
@@ -102,7 +108,10 @@ impl Generation {
             ))
         })?;
         match build(source, &root, BuildMode::Debug, messages) {
-            Ok(()) => Ok(Arc::new(Self { root })),
+            Ok(report) => Ok(Arc::new(Self {
+                root,
+                watched_paths: report.watched_paths,
+            })),
             Err(error) => {
                 let _ = fs::remove_dir_all(&root);
                 Err(error)
@@ -121,6 +130,8 @@ struct ServerState {
     active: ActiveGeneration,
     error: CurrentError,
     clients: Clients,
+    broadcaster: BroadcastSender,
+    active_connections: AtomicUsize,
     port: u16,
 }
 
@@ -138,7 +149,7 @@ pub(crate) fn serve(
 ) -> Result<(), CliError> {
     // Capture before compiling. If the file changes during compilation, the
     // first watch iteration observes a different fingerprint and rebuilds it.
-    let mut fingerprint = source_fingerprint(source);
+    let source_before_build = path_fingerprint(source);
     let (generation, initial_error) = match Generation::build(source, messages) {
         Ok(generation) => (Some(generation), None),
         Err(error) if !watch => return Err(error),
@@ -165,25 +176,44 @@ pub(crate) fn serve(
             .map_err(|error| CliError::new(format!("failed to write server status: {error}")))?;
     }
 
+    let clients = Arc::new(Mutex::new(Vec::new()));
+    let broadcaster = start_broadcast_worker(Arc::clone(&clients))?;
     let state = Arc::new(ServerState {
         active: Arc::new(RwLock::new(generation)),
         error: Arc::new(RwLock::new(initial_error)),
-        clients: Arc::new(Mutex::new(Vec::new())),
+        clients,
+        broadcaster,
+        active_connections: AtomicUsize::new(0),
         port: actual_address.port(),
     });
+    let mut watched_paths = current_watch_paths(&state, source)?;
+    let mut fingerprint = paths_fingerprint(&watched_paths);
+    if path_fingerprint(source) != source_before_build {
+        fingerprint = None;
+    }
     let mut next_watch = Instant::now() + WATCH_INTERVAL;
+    let mut next_failed_retry = Instant::now();
     loop {
         accept_pending(&listener, &state)?;
         if watch && Instant::now() >= next_watch {
             next_watch = Instant::now() + WATCH_INTERVAL;
-            let observed = source_fingerprint(source);
-            if observed != fingerprint {
+            let observed = paths_fingerprint(&watched_paths);
+            let retry_failed_build = state
+                .error
+                .read()
+                .map_err(|_| CliError::new("build error lock is poisoned"))?
+                .is_some()
+                && Instant::now() >= next_failed_retry;
+            if observed != fingerprint || retry_failed_build {
                 // Advance to the version this build is intended to consume.
                 // A concurrent save changes the next observed value and cannot
                 // be swallowed as the new baseline.
                 fingerprint = observed;
+                next_failed_retry = Instant::now() + FAILED_BUILD_RETRY_INTERVAL;
                 match Generation::build(source, messages) {
                     Ok(generation) => {
+                        watched_paths = generation.watched_paths.clone();
+                        fingerprint = paths_fingerprint(&watched_paths);
                         *state
                             .active
                             .write()
@@ -193,25 +223,31 @@ pub(crate) fn serve(
                             .error
                             .write()
                             .map_err(|_| CliError::new("build error lock is poisoned"))? = None;
-                        broadcast(&state.clients, r#"{"type":"reload"}"#);
+                        broadcast(&state.broadcaster, r#"{"type":"reload"}"#);
                         writeln!(messages, "rebuilt {}", source.display()).map_err(|error| {
                             CliError::new(format!("failed to write rebuild status: {error}"))
                         })?;
                     }
                     Err(error) => {
                         let message = error.to_string();
-                        write_error(messages, &message)?;
-                        *state
+                        let mut current_error = state
                             .error
                             .write()
-                            .map_err(|_| CliError::new("build error lock is poisoned"))? =
-                            Some(message.clone());
-                        let payload = serde_json::json!({
-                            "type": "error",
-                            "message": message,
-                        })
-                        .to_string();
-                        broadcast(&state.clients, &payload);
+                            .map_err(|_| CliError::new("build error lock is poisoned"))?;
+                        let changed = current_error.as_deref() != Some(&message);
+                        if changed {
+                            *current_error = Some(message.clone());
+                        }
+                        drop(current_error);
+                        if changed {
+                            write_error(messages, &message)?;
+                            let payload = serde_json::json!({
+                                "type": "error",
+                                "message": message,
+                            })
+                            .to_string();
+                            broadcast(&state.broadcaster, &payload);
+                        }
                     }
                 }
             }
@@ -223,9 +259,19 @@ pub(crate) fn serve(
 fn accept_pending(listener: &TcpListener, state: &Arc<ServerState>) -> Result<(), CliError> {
     loop {
         match listener.accept() {
-            Ok((stream, _)) => {
+            Ok((mut stream, _)) => {
+                let Some(permit) = ConnectionPermit::acquire(Arc::clone(state)) else {
+                    let _ = respond(
+                        &mut stream,
+                        503,
+                        "text/plain; charset=utf-8",
+                        b"too many connections",
+                    );
+                    continue;
+                };
                 let state = Arc::clone(state);
                 thread::spawn(move || {
+                    let _permit = permit;
                     if let Err(error) = handle_connection(stream, &state) {
                         eprintln!("development server connection failed: {error}");
                     }
@@ -241,8 +287,30 @@ fn accept_pending(listener: &TcpListener, state: &Arc<ServerState>) -> Result<()
     }
 }
 
+struct ConnectionPermit {
+    state: Arc<ServerState>,
+}
+
+impl ConnectionPermit {
+    fn acquire(state: Arc<ServerState>) -> Option<Self> {
+        state
+            .active_connections
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+                (active < MAX_HTTP_CONNECTIONS).then_some(active + 1)
+            })
+            .ok()?;
+        Some(Self { state })
+    }
+}
+
+impl Drop for ConnectionPermit {
+    fn drop(&mut self) {
+        self.state.active_connections.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 fn handle_connection(mut stream: TcpStream, state: &Arc<ServerState>) -> io::Result<()> {
-    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    stream.set_read_timeout(Some(HTTP_READ_TIMEOUT))?;
     let request = read_request(&mut stream)?;
     let Some((method, target)) = request_line(&request) else {
         return respond(
@@ -260,13 +328,21 @@ fn handle_connection(mut stream: TcpStream, state: &Arc<ServerState>) -> io::Res
             b"method not allowed",
         );
     }
+    if !valid_http_host(&request, state.port) {
+        return respond(
+            &mut stream,
+            403,
+            "text/plain; charset=utf-8",
+            b"invalid host",
+        );
+    }
     if target == "/__polygl_ws" {
         return upgrade_websocket(stream, &request, state);
     }
     serve_static(&mut stream, &state.active, &state.error, target)
 }
 
-fn read_request(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
+fn read_request(stream: &mut impl Read) -> io::Result<Vec<u8>> {
     let mut request = Vec::new();
     let mut buffer = [0_u8; 1024];
     loop {
@@ -275,14 +351,14 @@ fn read_request(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
             break;
         }
         request.extend_from_slice(&buffer[..read]);
-        if request.windows(4).any(|window| window == b"\r\n\r\n") {
-            break;
-        }
         if request.len() > MAX_REQUEST_BYTES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "HTTP request headers are too large",
             ));
+        }
+        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
         }
     }
     Ok(request)
@@ -369,10 +445,28 @@ fn same_origin(request: &str, port: u16) -> bool {
     let Some(origin) = header_value(request, "origin") else {
         return false;
     };
-    let loopback = format!("127.0.0.1:{port}");
-    let localhost = format!("localhost:{port}");
-    (host.eq_ignore_ascii_case(&loopback) || host.eq_ignore_ascii_case(&localhost))
-        && origin.eq_ignore_ascii_case(&format!("http://{host}"))
+    host_is_loopback(host, port) && origin.eq_ignore_ascii_case(&format!("http://{host}"))
+}
+
+fn valid_http_host(request: &[u8], port: u16) -> bool {
+    let Ok(request) = std::str::from_utf8(request) else {
+        return false;
+    };
+    let mut hosts = request.lines().filter_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("host").then(|| value.trim())
+    });
+    let Some(host) = hosts.next() else {
+        return false;
+    };
+    hosts.next().is_none() && host_is_loopback(host, port)
+}
+
+fn host_is_loopback(host: &str, port: u16) -> bool {
+    host.eq_ignore_ascii_case(&format!("127.0.0.1:{port}"))
+        || host.eq_ignore_ascii_case(&format!("localhost:{port}"))
+        || (port == 80
+            && (host.eq_ignore_ascii_case("127.0.0.1") || host.eq_ignore_ascii_case("localhost")))
 }
 
 fn valid_websocket_key(key: &str) -> bool {
@@ -403,13 +497,17 @@ fn reap_client(mut reader: TcpStream, id: u64, writer: Arc<Mutex<TcpStream>>, cl
                 }
             }
             Ok(Some(_)) => {}
-            Ok(None) | Err(_) => break,
+            Ok(None) => break,
+            Err(_) => {
+                let _ = write_frame(&writer, 0x8, &1002_u16.to_be_bytes());
+                break;
+            }
         }
     }
     remove_client(clients, id);
 }
 
-fn read_client_frame(stream: &mut TcpStream) -> io::Result<Option<(u8, Vec<u8>)>> {
+fn read_client_frame(stream: &mut impl Read) -> io::Result<Option<(u8, Vec<u8>)>> {
     let mut header = [0_u8; 2];
     match stream.read_exact(&mut header) {
         Ok(()) => {}
@@ -426,7 +524,15 @@ fn read_client_frame(stream: &mut TcpStream) -> io::Result<Option<(u8, Vec<u8>)>
         Err(error) => return Err(error),
     }
     let opcode = header[0] & 0x0f;
+    let final_frame = header[0] & 0x80 != 0;
+    let reserved_bits = header[0] & 0x70;
     let masked = header[1] & 0x80 != 0;
+    if reserved_bits != 0 || !final_frame || !matches!(opcode, 0x1 | 0x2 | 0x8 | 0x9 | 0xA) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "unsupported WebSocket frame",
+        ));
+    }
     if !masked {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -441,6 +547,12 @@ fn read_client_frame(stream: &mut TcpStream) -> io::Result<Option<(u8, Vec<u8>)>
     } else if length == 127 {
         let mut bytes = [0_u8; 8];
         stream.read_exact(&mut bytes)?;
+        if bytes[0] & 0x80 != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid WebSocket frame length",
+            ));
+        }
         length = u64::from_be_bytes(bytes);
     }
     if length > MAX_CLIENT_FRAME_BYTES as u64 || (opcode >= 0x8 && length > 125) {
@@ -455,6 +567,12 @@ fn read_client_frame(stream: &mut TcpStream) -> io::Result<Option<(u8, Vec<u8>)>
     stream.read_exact(&mut payload)?;
     for (index, byte) in payload.iter_mut().enumerate() {
         *byte ^= mask[index % mask.len()];
+    }
+    if opcode == 0x8 && payload.len() == 1 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid WebSocket close payload",
+        ));
     }
     Ok(Some((opcode, payload)))
 }
@@ -515,10 +633,11 @@ fn serve_static(
 
 fn safe_relative_path(target: &str) -> Option<PathBuf> {
     let target = target.strip_prefix('/')?;
-    let target = if target.is_empty() {
+    let decoded = percent_decode(target)?;
+    let target = if decoded.is_empty() {
         "index.html"
     } else {
-        target
+        decoded.as_str()
     };
     let path = Path::new(target);
     if path.components().all(|component| {
@@ -528,6 +647,34 @@ fn safe_relative_path(target: &str) -> Option<PathBuf> {
         Some(path.to_path_buf())
     } else {
         None
+    }
+}
+
+fn percent_decode(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'%' {
+            decoded.push(bytes[index]);
+            index += 1;
+            continue;
+        }
+        let high = hex_value(*bytes.get(index + 1)?)?;
+        let low = hex_value(*bytes.get(index + 2)?)?;
+        decoded.push((high << 4) | low);
+        index += 3;
+    }
+    let decoded = String::from_utf8(decoded).ok()?;
+    (!decoded.chars().any(char::is_control)).then_some(decoded)
+}
+
+const fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
     }
 }
 
@@ -615,26 +762,39 @@ fn write_error(messages: &mut dyn Write, message: &str) -> Result<(), CliError> 
         .map_err(|error| CliError::new(format!("failed to write build error: {error}")))
 }
 
-fn broadcast(clients: &Clients, message: &str) {
-    let clients = Arc::clone(clients);
-    let message = message.to_owned();
-    thread::spawn(move || {
-        let snapshot = match clients.lock() {
-            Ok(clients) => clients.clone(),
-            Err(_) => return,
-        };
-        let mut failed = Vec::new();
-        for client in snapshot {
-            if write_frame(&client.writer, 0x1, message.as_bytes()).is_err() {
-                failed.push(client.id);
+fn start_broadcast_worker(clients: Clients) -> Result<BroadcastSender, CliError> {
+    let (sender, receiver) = mpsc::channel::<String>();
+    thread::Builder::new()
+        .name("polygl-broadcast".to_owned())
+        .spawn(move || {
+            while let Ok(message) = receiver.recv() {
+                broadcast_now(&clients, &message);
             }
+        })
+        .map_err(|error| CliError::new(format!("failed to start broadcast worker: {error}")))?;
+    Ok(sender)
+}
+
+fn broadcast(sender: &BroadcastSender, message: &str) {
+    let _ = sender.send(message.to_owned());
+}
+
+fn broadcast_now(clients: &Clients, message: &str) {
+    let snapshot = match clients.lock() {
+        Ok(clients) => clients.clone(),
+        Err(_) => return,
+    };
+    let mut failed = Vec::new();
+    for client in snapshot {
+        if write_frame(&client.writer, 0x1, message.as_bytes()).is_err() {
+            failed.push(client.id);
         }
-        if !failed.is_empty()
-            && let Ok(mut clients) = clients.lock()
-        {
-            clients.retain(|client| !failed.contains(&client.id));
-        }
-    });
+    }
+    if !failed.is_empty()
+        && let Ok(mut clients) = clients.lock()
+    {
+        clients.retain(|client| !failed.contains(&client.id));
+    }
 }
 
 fn write_frame(writer: &Mutex<TcpStream>, opcode: u8, payload: &[u8]) -> io::Result<()> {
@@ -670,11 +830,31 @@ fn websocket_accept(key: &str) -> String {
     base64(&sha1(&input))
 }
 
-fn source_fingerprint(path: &Path) -> Option<(SystemTime, u64, u64)> {
+fn path_fingerprint(path: &Path) -> Option<(SystemTime, u64, u64)> {
     let metadata = fs::metadata(path).ok()?;
     let mut hasher = DefaultHasher::new();
     fs::read(path).ok()?.hash(&mut hasher);
     Some((metadata.modified().ok()?, metadata.len(), hasher.finish()))
+}
+
+fn paths_fingerprint(paths: &[PathBuf]) -> Option<u64> {
+    let mut hasher = DefaultHasher::new();
+    for path in paths {
+        path.hash(&mut hasher);
+        path_fingerprint(path)?.hash(&mut hasher);
+    }
+    Some(hasher.finish())
+}
+
+fn current_watch_paths(state: &ServerState, source: &Path) -> Result<Vec<PathBuf>, CliError> {
+    let generation = state
+        .active
+        .read()
+        .map_err(|_| CliError::new("generation lock is poisoned"))?;
+    Ok(generation.as_ref().map_or_else(
+        || vec![source.to_path_buf()],
+        |value| value.watched_paths.clone(),
+    ))
 }
 
 fn sha1(input: &[u8]) -> [u8; 20] {
@@ -761,16 +941,19 @@ fn base64(input: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::io::{Read, Write};
+    use std::io::{Cursor, Read, Write};
     use std::net::{Shutdown, TcpListener, TcpStream};
+    use std::sync::atomic::AtomicUsize;
     use std::sync::{Arc, Mutex, RwLock};
     use std::thread;
     use std::time::{Duration, Instant};
 
     use super::{
-        CLIENT_START, ERROR_START, Generation, ServerState, broadcast, decorate_index,
-        handle_connection, safe_relative_path, same_origin, serve, valid_websocket_key,
-        websocket_accept, websocket_frame,
+        CLIENT_START, ConnectionPermit, ERROR_START, Generation, MAX_HTTP_CONNECTIONS,
+        MAX_REQUEST_BYTES, ServerState, broadcast, decorate_index, handle_connection,
+        read_client_frame, read_request, safe_relative_path, same_origin, serve,
+        start_broadcast_worker, valid_http_host, valid_websocket_key, websocket_accept,
+        websocket_frame,
     };
 
     #[test]
@@ -789,6 +972,18 @@ mod tests {
         assert!(same_origin(request, 4173));
         let foreign = "Host: 127.0.0.1:4173\r\nOrigin: https://example.com\r\n";
         assert!(!same_origin(foreign, 4173));
+        assert!(valid_http_host(
+            b"GET / HTTP/1.1\r\nHost: localhost:4173\r\n\r\n",
+            4173,
+        ));
+        assert!(!valid_http_host(
+            b"GET / HTTP/1.1\r\nHost: example.test\r\n\r\n",
+            4173,
+        ));
+        assert!(!valid_http_host(
+            b"GET / HTTP/1.1\r\nHost: localhost:4173\r\nHost: 127.0.0.1:4173\r\n\r\n",
+            4173,
+        ));
     }
 
     #[test]
@@ -797,8 +992,40 @@ mod tests {
             safe_relative_path("/assets/app.js").unwrap(),
             std::path::PathBuf::from("assets/app.js")
         );
+        assert_eq!(
+            safe_relative_path("/my%20image.png").unwrap(),
+            std::path::PathBuf::from("my image.png")
+        );
         assert!(safe_relative_path("/../secret").is_none());
+        assert!(safe_relative_path("/%2e%2e/secret").is_none());
+        assert!(safe_relative_path("/nested%5csecret").is_none());
+        assert!(safe_relative_path("/bad%2").is_none());
         assert!(safe_relative_path("/nested\\secret").is_none());
+    }
+
+    #[test]
+    fn checks_header_size_before_accepting_the_terminator() {
+        let mut oversized = vec![b'a'; MAX_REQUEST_BYTES + 4];
+        let end = oversized.len();
+        oversized[end - 4..].copy_from_slice(b"\r\n\r\n");
+        let error = read_request(&mut Cursor::new(oversized)).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn rejects_unsupported_websocket_frame_flags_and_opcodes() {
+        for frame in [
+            vec![0x01, 0x80, 0, 0, 0, 0],
+            vec![0xC1, 0x80, 0, 0, 0, 0],
+            vec![0x80, 0x80, 0, 0, 0, 0],
+            vec![0x81, 0x00],
+        ] {
+            assert!(read_client_frame(&mut Cursor::new(frame)).is_err());
+        }
+        assert_eq!(
+            read_client_frame(&mut Cursor::new(vec![0x89, 0x80, 0, 0, 0, 0])).unwrap(),
+            Some((0x9, Vec::new()))
+        );
     }
 
     #[test]
@@ -808,6 +1035,26 @@ mod tests {
         let frame = websocket_frame(0x1, message.as_bytes());
         assert_eq!(&frame[..4], &[0x81, 126, 0, 126]);
         assert_eq!(&frame[4..], message.as_bytes());
+    }
+
+    #[test]
+    fn bounds_concurrent_http_connections() {
+        let clients = Arc::new(Mutex::new(Vec::new()));
+        let broadcaster = start_broadcast_worker(Arc::clone(&clients)).unwrap();
+        let state = Arc::new(ServerState {
+            active: Arc::new(RwLock::new(None)),
+            error: Arc::new(RwLock::new(None)),
+            clients,
+            broadcaster,
+            active_connections: AtomicUsize::new(0),
+            port: 4173,
+        });
+        let mut permits = (0..MAX_HTTP_CONNECTIONS)
+            .map(|_| ConnectionPermit::acquire(Arc::clone(&state)).unwrap())
+            .collect::<Vec<_>>();
+        assert!(ConnectionPermit::acquire(Arc::clone(&state)).is_none());
+        permits.pop();
+        assert!(ConnectionPermit::acquire(state).is_some());
     }
 
     #[test]
@@ -835,10 +1082,17 @@ mod tests {
             "<!doctype html><html><body>ready</body></html>",
         )
         .unwrap();
+        let clients = Arc::new(Mutex::new(Vec::new()));
+        let broadcaster = start_broadcast_worker(Arc::clone(&clients)).unwrap();
         let state = Arc::new(ServerState {
-            active: Arc::new(RwLock::new(Some(Arc::new(Generation { root })))),
+            active: Arc::new(RwLock::new(Some(Arc::new(Generation {
+                root,
+                watched_paths: Vec::new(),
+            })))),
             error: Arc::new(RwLock::new(None)),
-            clients: Arc::new(Mutex::new(Vec::new())),
+            clients,
+            broadcaster,
+            active_connections: AtomicUsize::new(0),
             port: 4173,
         });
         let response = round_trip(&state, "GET / HTTP/1.1\r\nHost: 127.0.0.1:4173\r\n\r\n");
@@ -846,6 +1100,9 @@ mod tests {
         assert!(response.contains("Cache-Control: no-store"));
         assert!(response.contains(CLIENT_START));
         assert!(response.contains("ready"));
+
+        let rebound = round_trip(&state, "GET / HTTP/1.1\r\nHost: example.test\r\n\r\n");
+        assert!(rebound.starts_with("HTTP/1.1 403 Forbidden"));
 
         let rejected = round_trip(
             &state,
@@ -865,10 +1122,14 @@ mod tests {
     fn broadcasts_reload_to_an_upgraded_websocket() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
+        let clients = Arc::new(Mutex::new(Vec::new()));
+        let broadcaster = start_broadcast_worker(Arc::clone(&clients)).unwrap();
         let state = Arc::new(ServerState {
             active: Arc::new(RwLock::new(None)),
             error: Arc::new(RwLock::new(None)),
-            clients: Arc::new(Mutex::new(Vec::new())),
+            clients,
+            broadcaster,
+            active_connections: AtomicUsize::new(0),
             port: address.port(),
         });
         let server_state = Arc::clone(&state);
@@ -908,7 +1169,7 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(state.clients.lock().unwrap().len(), 1);
-        broadcast(&state.clients, r#"{"type":"reload"}"#);
+        broadcast(&state.broadcaster, r#"{"type":"reload"}"#);
 
         let expected = websocket_frame(0x1, br#"{"type":"reload"}"#);
         let mut actual = vec![0_u8; expected.len()];

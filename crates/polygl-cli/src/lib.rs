@@ -18,7 +18,10 @@ use polygl_lir::AssetReference;
 use polygl_span::{Diagnostics, SourceFile, SourceId};
 use polygl_types::TypedModule;
 
+mod artifact;
 mod serve;
+
+use artifact::{ArtifactFile, prepare_assets, publish};
 
 const RUNTIME_BUNDLE: &[u8] = include_bytes!("../assets/runtime.js");
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -50,11 +53,6 @@ const INDEX_HTML: &str = r#"<!doctype html>
 </body>
 </html>
 "#;
-
-struct PreparedAsset {
-    relative_path: PathBuf,
-    contents: Vec<u8>,
-}
 
 #[derive(Debug)]
 pub struct CliError {
@@ -113,7 +111,7 @@ pub fn run(
             source,
             output: destination,
             mode,
-        } => build(&source, &destination, mode, output),
+        } => build(&source, &destination, mode, output).map(|_| ()),
         Command::Check { source } => {
             let (source, typed) = compile_frontend(&source)?;
             let (_, _, _, warnings) = compile_backends(&source, &typed, BuildMode::Debug)?;
@@ -293,38 +291,35 @@ fn ensure_empty(mut args: impl Iterator<Item = OsString>) -> Result<(), CliError
     Ok(())
 }
 
+pub(crate) struct BuildReport {
+    pub(crate) watched_paths: Vec<PathBuf>,
+}
+
 fn build(
     source_path: &Path,
     destination: &Path,
     mode: BuildMode,
     messages: &mut dyn Write,
-) -> Result<(), CliError> {
+) -> Result<BuildReport, CliError> {
     let (source, typed) = compile_frontend(source_path)?;
     let (javascript, shaders, assets, warnings) = compile_backends(&source, &typed, mode)?;
     let assets = prepare_assets(source_path, &assets)?;
     write_diagnostics(&warnings, &source, messages)?;
 
-    fs::create_dir_all(destination).map_err(|error| {
-        CliError::new(format!(
-            "failed to create output directory {}: {error}",
-            destination.display()
-        ))
-    })?;
-    write_artifact(
-        &destination.join("app.js"),
-        javascript.javascript.as_bytes(),
-    )?;
-    write_artifact(
-        &destination.join("app.js.map"),
-        javascript.source_map.as_bytes(),
-    )?;
-    write_artifact(
-        &destination.join("shaders.js"),
-        render_shader_module(&shaders, &source, mode)?.as_bytes(),
-    )?;
-    write_artifact(&destination.join("runtime.js"), RUNTIME_BUNDLE)?;
-    write_artifact(&destination.join("index.html"), INDEX_HTML.as_bytes())?;
-    write_assets(destination, assets)
+    let shader_module = render_shader_module(&shaders, &source, mode)?;
+    let mut files = vec![
+        ArtifactFile::new("app.js", javascript.javascript.into_bytes()),
+        ArtifactFile::new("app.js.map", javascript.source_map.into_bytes()),
+        ArtifactFile::new("shaders.js", shader_module.into_bytes()),
+        ArtifactFile::new("runtime.js", RUNTIME_BUNDLE.to_vec()),
+        ArtifactFile::new("index.html", INDEX_HTML.as_bytes().to_vec()),
+    ];
+    let mut watched_paths = Vec::with_capacity(assets.source_paths.len() + 1);
+    watched_paths.push(source_path.to_path_buf());
+    watched_paths.extend(assets.source_paths);
+    files.extend(assets.files);
+    publish(destination, files)?;
+    Ok(BuildReport { watched_paths })
 }
 
 fn compile_backends(
@@ -511,57 +506,6 @@ fn write_diagnostics(
         .map_err(|error| CliError::new(format!("failed to write diagnostics: {error}")))
 }
 
-fn write_artifact(path: &Path, contents: &[u8]) -> Result<(), CliError> {
-    fs::write(path, contents).map_err(|error| {
-        CliError::new(format!(
-            "failed to write build artifact {}: {error}",
-            path.display()
-        ))
-    })
-}
-
-fn prepare_assets(
-    source_path: &Path,
-    references: &[AssetReference],
-) -> Result<Vec<PreparedAsset>, CliError> {
-    let source_directory = source_path.parent().unwrap_or_else(|| Path::new("."));
-    references
-        .iter()
-        .map(|reference| {
-            let relative_path = reference.path.split('/').collect::<PathBuf>();
-            let input_path = source_directory.join(&relative_path);
-            let contents = fs::read(&input_path).map_err(|error| {
-                CliError::new(format!(
-                    "failed to read texture asset {} referenced as `{}`: {error}",
-                    input_path.display(),
-                    reference.path,
-                ))
-            })?;
-            Ok(PreparedAsset {
-                relative_path,
-                contents,
-            })
-        })
-        .collect()
-}
-
-fn write_assets(destination: &Path, assets: Vec<PreparedAsset>) -> Result<(), CliError> {
-    for asset in assets {
-        let output_path = destination.join(&asset.relative_path);
-        let parent = output_path
-            .parent()
-            .expect("a validated relative asset path has a parent");
-        fs::create_dir_all(parent).map_err(|error| {
-            CliError::new(format!(
-                "failed to create asset directory {}: {error}",
-                parent.display(),
-            ))
-        })?;
-        write_artifact(&output_path, &asset.contents)?;
-    }
-    Ok(())
-}
-
 fn write_languages(output: &mut dyn Write) -> Result<(), CliError> {
     for adapter in [
         &RubyAdapter as &dyn LanguageAdapter,
@@ -606,14 +550,19 @@ fn new_adapter(language: &str, destination: &Path, output: &mut dyn Write) -> Re
     let implementation = format!(
         "use polygl_adapter_api::{{FeatureTag, LanguageAdapter, LowerCtx}};\nuse polygl_hir::Module;\nuse polygl_span::{{Diagnostic, Diagnostics, Severity, SourceFile, Suggestion}};\n\n#[derive(Clone, Copy, Debug, Default)]\npub struct {adapter_name};\n\nimpl LanguageAdapter for {adapter_name} {{\n    fn id(&self) -> &'static str {{\n        \"{language}\"\n    }}\n\n    fn file_extensions(&self) -> &'static [&'static str] {{\n        &[\"{language}\"]\n    }}\n\n    fn lower(\n        &self,\n        source: &SourceFile,\n        _context: &mut LowerCtx<'_>,\n    ) -> Result<Module, Diagnostics> {{\n        let span = source.span(0, source.len()).expect(\"complete source span\");\n        let mut diagnostics = Diagnostics::new();\n        diagnostics.push(\n            Diagnostic::new(\n                Severity::Error,\n                \"E0200\",\n                \"the {language} adapter lowering is not implemented\",\n                span,\n            )\n            .with_suggestion(Suggestion::rewrite(\n                span,\n                \"implement parser-specific lowering to Common Core HIR\",\n            )),\n        );\n        Err(diagnostics)\n    }}\n\n    fn capabilities(&self) -> &'static [FeatureTag] {{\n        &[]\n    }}\n}}\n"
     );
-    write_artifact(&destination.join("Cargo.toml"), manifest.as_bytes())?;
-    write_artifact(&source_directory.join("lib.rs"), implementation.as_bytes())?;
+    write_file(&destination.join("Cargo.toml"), manifest.as_bytes())?;
+    write_file(&source_directory.join("lib.rs"), implementation.as_bytes())?;
     writeln!(
         output,
         "created {} for the `{language}` adapter",
         destination.display()
     )
     .map_err(|error| CliError::new(format!("failed to write scaffold result: {error}")))
+}
+
+fn write_file(path: &Path, contents: &[u8]) -> Result<(), CliError> {
+    fs::write(path, contents)
+        .map_err(|error| CliError::new(format!("failed to write {}: {error}", path.display())))
 }
 
 fn valid_language_id(language: &str) -> bool {
