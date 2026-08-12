@@ -4,7 +4,7 @@ use std::error::Error;
 use std::ffi::OsString;
 use std::fmt;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use polygl_adapter_api::{ADAPTER_API_VERSION, LanguageAdapter};
@@ -127,6 +127,12 @@ enum Command {
     DumpHir {
         source: PathBuf,
     },
+    Emit {
+        source: PathBuf,
+        language: Option<String>,
+        kinds: Vec<EmitKind>,
+        options: BuildOptions,
+    },
     Explain {
         code: polygl_span::DiagnosticCode,
         format: DiagnosticFormat,
@@ -152,6 +158,27 @@ enum CompletionShell {
     Zsh,
     Fish,
     PowerShell,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EmitKind {
+    Hir,
+    Lir,
+    Js,
+    Glsl,
+    Manifest,
+}
+
+impl EmitKind {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Hir => "hir",
+            Self::Lir => "lir",
+            Self::Js => "js",
+            Self::Glsl => "glsl",
+            Self::Manifest => "manifest",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -270,11 +297,22 @@ pub fn run(
     args: impl IntoIterator<Item = OsString>,
     output: &mut dyn Write,
 ) -> Result<(), CliError> {
-    run_with_color_support(args, output, false)
+    let input = std::io::stdin();
+    run_with_io(args, &mut input.lock(), output, false)
 }
 
 pub fn run_with_color_support(
     args: impl IntoIterator<Item = OsString>,
+    output: &mut dyn Write,
+    color_supported: bool,
+) -> Result<(), CliError> {
+    let input = std::io::stdin();
+    run_with_io(args, &mut input.lock(), output, color_supported)
+}
+
+pub fn run_with_io(
+    args: impl IntoIterator<Item = OsString>,
+    input: &mut dyn Read,
     output: &mut dyn Write,
     color_supported: bool,
 ) -> Result<(), CliError> {
@@ -322,6 +360,12 @@ pub fn run_with_color_support(
                 .write_all(polygl_hir::dump(typed.module().as_hir()).as_bytes())
                 .map_err(|error| CliError::new(format!("failed to write HIR dump: {error}")))
         }
+        Command::Emit {
+            source,
+            language,
+            kinds,
+            options,
+        } => emit(&source, language.as_deref(), &kinds, options, input, output),
         Command::Explain { code, format } => write_explanation(code, format, output),
         Command::Languages { json } => write_languages(json, output),
         Command::NewAdapter {
@@ -348,6 +392,7 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Command, CliEr
         Some("serve") => parse_serve(args),
         Some("check") => parse_check(args),
         Some("dump-hir") => parse_single_source(args, |source| Command::DumpHir { source }),
+        Some("emit") => parse_emit(args),
         Some("explain") => parse_explain(args),
         Some("languages") => parse_languages(args),
         Some("new-adapter") => parse_new_adapter(args),
@@ -370,6 +415,113 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Command, CliEr
         ))),
         None => Err(CliError::new("command name is not valid UTF-8")),
     }
+}
+
+fn parse_emit(mut args: impl Iterator<Item = OsString>) -> Result<Command, CliError> {
+    let source = required_path(args.next(), "emit requires a source file or `-`")?;
+    let mut language = None;
+    let mut kinds = None;
+    let mut mode = BuildMode::Debug;
+    let mut selected_mode = false;
+    let mut source_map = SourceMapMode::None;
+    let mut sources_content = false;
+    while let Some(argument) = args.next() {
+        match argument.to_str() {
+            Some("--language") if language.is_none() => {
+                language = Some(
+                    args.next()
+                        .ok_or_else(|| CliError::new("language requires an adapter id"))?
+                        .into_string()
+                        .map_err(|_| CliError::new("language id is not valid UTF-8"))?,
+                );
+            }
+            Some("--language") => {
+                return Err(CliError::new("language may only be specified once"));
+            }
+            Some("--emit") if kinds.is_none() => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| CliError::new("emit requires a comma-separated kind list"))?;
+                let value = value
+                    .to_str()
+                    .ok_or_else(|| CliError::new("emit kind list is not valid UTF-8"))?;
+                let parsed = value
+                    .split(',')
+                    .map(|kind| match kind {
+                        "hir" => Ok(EmitKind::Hir),
+                        "lir" => Ok(EmitKind::Lir),
+                        "js" => Ok(EmitKind::Js),
+                        "glsl" => Ok(EmitKind::Glsl),
+                        "manifest" => Ok(EmitKind::Manifest),
+                        other => Err(CliError::new(format!(
+                            "unknown emit kind `{other}`; expected hir, lir, js, glsl, or manifest"
+                        ))),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                if parsed.is_empty() {
+                    return Err(CliError::new("emit kind list may not be empty"));
+                }
+                let mut unique = Vec::new();
+                for kind in parsed {
+                    if !unique.contains(&kind) {
+                        unique.push(kind);
+                    }
+                }
+                kinds = Some(unique);
+            }
+            Some("--emit") => return Err(CliError::new("emit kinds may only be specified once")),
+            Some("--debug" | "--release") if !selected_mode => {
+                mode = if argument == "--release" {
+                    BuildMode::Release
+                } else {
+                    BuildMode::Debug
+                };
+                selected_mode = true;
+            }
+            Some("--debug" | "--release") => {
+                return Err(CliError::new("emit mode may only be specified once"));
+            }
+            Some("--sources-content") if !sources_content => sources_content = true,
+            Some("--sources-content") => {
+                return Err(CliError::new("sources content may only be specified once"));
+            }
+            Some("--source-map") => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| CliError::new("source map option requires a mode"))?;
+                source_map = match value.to_str() {
+                    Some("none") => SourceMapMode::None,
+                    Some("external") => SourceMapMode::External,
+                    Some("inline") => SourceMapMode::Inline,
+                    Some(other) => {
+                        return Err(CliError::new(format!("unknown source map mode `{other}`")));
+                    }
+                    None => return Err(CliError::new("source map mode is not valid UTF-8")),
+                };
+            }
+            Some(other) => return Err(CliError::new(format!("unknown emit option `{other}`"))),
+            None => return Err(CliError::new("emit option is not valid UTF-8")),
+        }
+    }
+    if source == Path::new("-") && language.is_none() {
+        return Err(CliError::new("stdin emit requires --language <adapter-id>"));
+    }
+    if sources_content && source_map == SourceMapMode::None {
+        return Err(CliError::new(
+            "--sources-content requires an external or inline source map",
+        ));
+    }
+    Ok(Command::Emit {
+        source,
+        language,
+        kinds: kinds.unwrap_or_else(|| vec![EmitKind::Js]),
+        options: BuildOptions {
+            mode,
+            source_map,
+            sources_content,
+            profile: false,
+        },
+    })
 }
 
 fn parse_check(mut args: impl Iterator<Item = OsString>) -> Result<Command, CliError> {
@@ -753,6 +905,117 @@ fn build(
     watched_paths.extend(assets.source_paths);
     publish(destination, files)?;
     Ok(BuildReport { watched_paths })
+}
+
+fn emit(
+    source_argument: &Path,
+    language: Option<&str>,
+    kinds: &[EmitKind],
+    options: BuildOptions,
+    input: &mut dyn Read,
+    output: &mut dyn Write,
+) -> Result<(), CliError> {
+    if options.source_map == SourceMapMode::External {
+        return Err(CliError::new(
+            "emit cannot write an external source map; use inline or none",
+        ));
+    }
+    let compiler = compiler();
+    let (source, adapter, source_path) = if source_argument == Path::new("-") {
+        let language = language.expect("stdin language is required by argument validation");
+        let adapter = compiler
+            .adapters()
+            .by_id(language)
+            .ok_or_else(|| CliError::new(format!("unsupported source language `{language}`")))?;
+        let mut bytes = Vec::new();
+        input
+            .read_to_end(&mut bytes)
+            .map_err(|error| CliError::new(format!("failed to read stdin: {error}")))?;
+        let extension = adapter.file_extensions().first().copied().unwrap_or("txt");
+        let source = SourceFile::from_bytes(SourceId::new(0), format!("stdin.{extension}"), bytes)
+            .map_err(|error| CliError::new(error.to_string()))?;
+        (source, adapter, None)
+    } else {
+        let source = load_source(source_argument)?;
+        let adapter = match language {
+            Some(language) => compiler.adapters().by_id(language).ok_or_else(|| {
+                CliError::new(format!("unsupported source language `{language}`"))
+            })?,
+            None => adapter_for_source(compiler.adapters(), source_argument)?,
+        };
+        (source, adapter, Some(source_argument))
+    };
+    let compiled = compiler
+        .compile(&source, adapter.id(), options.compiler())
+        .map_err(|error| compilation_error(error, &source))?;
+    if source_path.is_none() && !compiled.assets.is_empty() {
+        return Err(CliError::new(
+            "stdin source may not reference relative assets because it has no source directory",
+        ));
+    }
+
+    let mut values = std::collections::BTreeMap::new();
+    for kind in kinds {
+        let value = match kind {
+            EmitKind::Hir => polygl_hir::dump(compiled.typed.module().as_hir()),
+            EmitKind::Lir => format!("{:#?}\n", polygl_lir::lower(compiled.typed.module())),
+            EmitKind::Js => compiled.javascript.javascript.clone(),
+            EmitKind::Glsl => {
+                serde_json::to_string_pretty(
+                    &compiled
+                        .shaders
+                        .shaders
+                        .iter()
+                        .map(|shader| {
+                            serde_json::json!({
+                                "name": shader.name,
+                                "vertex": shader.vertex,
+                                "fragment": shader.fragment,
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .expect("serializing GLSL output cannot fail")
+                    + "\n"
+            }
+            EmitKind::Manifest => {
+                let shader_module = render_shader_module(&compiled.shaders, &source, options.mode)?;
+                let mut files = vec![
+                    ArtifactFile::new("app.js", compiled.javascript.javascript.as_bytes().to_vec()),
+                    ArtifactFile::new("shaders.js", shader_module.into_bytes()),
+                    ArtifactFile::new("runtime.js", RUNTIME_BUNDLE.to_vec()),
+                    ArtifactFile::new("index.html", INDEX_HTML.as_bytes().to_vec()),
+                ];
+                if let Some(map) = &compiled.javascript.source_map {
+                    files.push(ArtifactFile::new("app.js.map", map.as_bytes().to_vec()));
+                }
+                if let Some(source_path) = source_path {
+                    files.extend(prepare_assets(source_path, &compiled.assets)?.files);
+                }
+                files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+                String::from_utf8(render_artifact_manifest(&source, adapter, options, &files)?)
+                    .expect("artifact manifest is UTF-8 JSON")
+            }
+        };
+        values.insert(kind.name(), value);
+    }
+
+    if values.len() == 1 {
+        output
+            .write_all(
+                values
+                    .into_values()
+                    .next()
+                    .expect("one emitted value")
+                    .as_bytes(),
+            )
+            .map_err(|error| CliError::new(format!("failed to write emitted output: {error}")))
+    } else {
+        serde_json::to_writer_pretty(&mut *output, &values)
+            .map_err(|error| CliError::new(format!("failed to write emitted output: {error}")))?;
+        writeln!(output)
+            .map_err(|error| CliError::new(format!("failed to write emitted output: {error}")))
+    }
 }
 
 fn render_shader_module(
@@ -1331,6 +1594,7 @@ usage:
   polygl serve <source.rb|source.php|source.pl> [--port <port>] [--watch] [--open]
   polygl check <source.rb|source.php|source.pl> [--diagnostic-format <human|json|sarif|lsp>] [--deny-warnings] [--allow <Wcode|WxxFamily>] [--deny <Wcode|WxxFamily>] [--max-warnings <count>] [--profile]
   polygl dump-hir <source.rb|source.php|source.pl>
+  polygl emit <source.rb|source.php|source.pl|-> [--language <adapter-id>] [--emit <hir,lir,js,glsl,manifest>] [--debug | --release] [--source-map <none|inline>]
   polygl explain <diagnostic-code> [--diagnostic-format <human|json>]
   polygl languages [--json]
   polygl new-adapter <language> [-o <directory>]
@@ -1349,7 +1613,7 @@ mod tests {
 
     use super::{
         BuildMode, BuildOptions, CliError, CliErrorKind, Command, SourceMapMode, VERSION,
-        parse_args, run,
+        parse_args, run, run_with_io,
     };
 
     static NEXT_TEMPORARY: AtomicUsize = AtomicUsize::new(0);
@@ -1463,6 +1727,89 @@ mod tests {
         assert!(page.starts_with(".TH POLYGL 1"));
         assert!(page.contains(".SH COMMANDS"));
         assert!(page.contains("--watch"));
+    }
+
+    #[test]
+    fn emits_single_and_multiple_pipeline_stages_from_files_and_stdin() {
+        let temporary = temporary_directory();
+        let source = temporary.join("main.rb");
+        let program = b"def setup\n  value = 1\nend\n";
+        fs::write(&source, program).unwrap();
+
+        let mut javascript = Vec::new();
+        run_with_io(
+            arguments(["emit", source.to_str().unwrap(), "--emit", "js"]),
+            &mut &[][..],
+            &mut javascript,
+            false,
+        )
+        .unwrap();
+        assert!(
+            String::from_utf8(javascript)
+                .unwrap()
+                .contains("__polyglRuntimeAbi")
+        );
+
+        let mut multiple = Vec::new();
+        run_with_io(
+            arguments([
+                "emit",
+                "-",
+                "--language",
+                "ruby",
+                "--emit",
+                "hir,js,glsl,manifest,hir",
+            ]),
+            &mut &program[..],
+            &mut multiple,
+            false,
+        )
+        .unwrap();
+        let multiple: serde_json::Value = serde_json::from_slice(&multiple).unwrap();
+        assert_eq!(multiple.as_object().unwrap().len(), 4);
+        assert!(multiple["hir"].as_str().unwrap().contains("entry setup"));
+        assert!(
+            multiple["js"]
+                .as_str()
+                .unwrap()
+                .contains("__polyglRuntimeAbi")
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(multiple["manifest"].as_str().unwrap())
+                .unwrap()["source"]["path"],
+            "stdin.rb"
+        );
+
+        assert!(
+            run_with_io(
+                arguments(["emit", "-"]),
+                &mut &program[..],
+                &mut Vec::new(),
+                false,
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("requires --language")
+        );
+        assert!(
+            run_with_io(
+                arguments([
+                    "emit",
+                    "-",
+                    "--language",
+                    "ruby",
+                    "--source-map",
+                    "external",
+                ]),
+                &mut &program[..],
+                &mut Vec::new(),
+                false,
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("cannot write an external source map")
+        );
+        fs::remove_dir_all(temporary).unwrap();
     }
 
     #[test]
