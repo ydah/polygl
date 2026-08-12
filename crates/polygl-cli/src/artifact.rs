@@ -438,6 +438,7 @@ fn path_collision(first: &str, second: &str) -> CliError {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::PathBuf;
 
     use polygl_lir::AssetReference;
     use polygl_span::{SourceFile, SourceId};
@@ -525,9 +526,12 @@ mod tests {
             prepared
                 .files
                 .iter()
-                .map(|file| file.relative_path.to_string_lossy().into_owned())
+                .map(|file| file.relative_path.clone())
                 .collect::<Vec<_>>(),
-            ["nested/a.txt", "z.txt"]
+            [
+                PathBuf::from("nested").join("a.txt"),
+                PathBuf::from("z.txt")
+            ]
         );
         assert!(prepared.source_paths.contains(&public.join("nested")));
     }
