@@ -9,6 +9,7 @@ use crate::{
     Module, Place, PlaceKind, StatementKind,
 };
 use crate::{
+    dependency::{block_dependencies, expression_dependencies},
     graph::DependencyGraph,
     symbol::{SymbolKind, SymbolTable},
 };
@@ -410,7 +411,8 @@ impl<'module> Validator<'module> {
     }
 
     fn block_dependencies(&self, block: &Block) -> Vec<Dependency<'module>> {
-        self.named_dependencies(function_calls(block), block_constant_refs(block))
+        let dependencies = block_dependencies(block);
+        self.named_dependencies(dependencies.functions, dependencies.constants)
     }
 
     fn validate_material_references(&mut self) {
@@ -984,19 +986,15 @@ impl<'module> Validator<'module> {
                 let Some(function) = self.functions.get(name) else {
                     return Vec::new();
                 };
-                (
-                    function_calls(&function.body),
-                    block_constant_refs(&function.body),
-                )
+                let dependencies = block_dependencies(&function.body);
+                (dependencies.functions, dependencies.constants)
             }
             Dependency::Constant(name) => {
                 let Some(constant) = self.constants.get(name) else {
                     return Vec::new();
                 };
-                (
-                    expression_function_calls(&constant.value),
-                    constant_refs(&constant.value),
-                )
+                let dependencies = expression_dependencies(&constant.value);
+                (dependencies.functions, dependencies.constants)
             }
         };
 
@@ -1422,219 +1420,6 @@ const fn valid_varying_type(ty: &Type) -> bool {
         ty,
         Type::Int | Type::Float | Type::Vector(_) | Type::Matrix(_)
     )
-}
-
-fn function_calls(block: &Block) -> Vec<String> {
-    let mut calls = Vec::new();
-    collect_block_calls(block, &mut calls);
-    calls
-}
-
-fn expression_function_calls(expression: &Expr) -> Vec<String> {
-    let mut calls = Vec::new();
-    collect_expr_calls(expression, &mut calls);
-    calls
-}
-
-fn block_constant_refs(block: &Block) -> Vec<String> {
-    let mut constants = Vec::new();
-    collect_block_constants(block, &mut constants);
-    constants
-}
-
-fn constant_refs(expression: &Expr) -> Vec<String> {
-    let mut constants = Vec::new();
-    collect_expr_constants(expression, &mut constants);
-    constants
-}
-
-fn collect_expr_constants(expression: &Expr, constants: &mut Vec<String>) {
-    match &expression.kind {
-        ExprKind::Constant(name) => constants.push(name.clone()),
-        ExprKind::Call { args, .. } | ExprKind::Vector { args, .. } => {
-            for argument in args {
-                collect_expr_constants(argument, constants);
-            }
-        }
-        ExprKind::Binary { left, right, .. }
-        | ExprKind::Index {
-            base: left,
-            index: right,
-        } => {
-            collect_expr_constants(left, constants);
-            collect_expr_constants(right, constants);
-        }
-        ExprKind::Unary { operand, .. }
-        | ExprKind::Field { base: operand, .. }
-        | ExprKind::ArrayLength(operand)
-        | ExprKind::IsNil(operand)
-        | ExprKind::IsFalsy(operand) => collect_expr_constants(operand, constants),
-        ExprKind::Array(items) => {
-            for item in items {
-                collect_expr_constants(item, constants);
-            }
-        }
-        ExprKind::Map(entries) => {
-            for entry in entries {
-                collect_expr_constants(&entry.key, constants);
-                collect_expr_constants(&entry.value, constants);
-            }
-        }
-        ExprKind::Struct { fields, .. } => {
-            for field in fields {
-                collect_expr_constants(&field.value, constants);
-            }
-        }
-        ExprKind::Literal(_) | ExprKind::Variable(_) | ExprKind::Uniform(_) => {}
-    }
-}
-
-fn collect_block_constants(block: &Block, constants: &mut Vec<String>) {
-    for statement in &block.statements {
-        match &statement.kind {
-            StatementKind::Let { init, .. } | StatementKind::Expr(init) => {
-                collect_expr_constants(init, constants);
-            }
-            StatementKind::Assign { target, value } => {
-                collect_place_constants(target, constants);
-                collect_expr_constants(value, constants);
-            }
-            StatementKind::If {
-                condition,
-                then_block,
-                else_block,
-            } => {
-                collect_expr_constants(condition, constants);
-                collect_block_constants(then_block, constants);
-                if let Some(else_block) = else_block {
-                    collect_block_constants(else_block, constants);
-                }
-            }
-            StatementKind::While { condition, body } => {
-                collect_expr_constants(condition, constants);
-                collect_block_constants(body, constants);
-            }
-            StatementKind::For { range, body, .. } => {
-                collect_expr_constants(&range.start, constants);
-                collect_expr_constants(&range.end, constants);
-                collect_block_constants(body, constants);
-            }
-            StatementKind::Return(value) => {
-                if let Some(value) = value {
-                    collect_expr_constants(value, constants);
-                }
-            }
-            StatementKind::Break | StatementKind::Continue => {}
-        }
-    }
-}
-
-fn collect_place_constants(place: &Place, constants: &mut Vec<String>) {
-    match &place.kind {
-        PlaceKind::Variable(_) => {}
-        PlaceKind::Index { base, index } => {
-            collect_expr_constants(base, constants);
-            collect_expr_constants(index, constants);
-        }
-        PlaceKind::Field { base, .. } => collect_expr_constants(base, constants),
-    }
-}
-
-fn collect_block_calls(block: &Block, calls: &mut Vec<String>) {
-    for statement in &block.statements {
-        match &statement.kind {
-            StatementKind::Let { init, .. } | StatementKind::Expr(init) => {
-                collect_expr_calls(init, calls);
-            }
-            StatementKind::Assign { target, value } => {
-                collect_place_calls(target, calls);
-                collect_expr_calls(value, calls);
-            }
-            StatementKind::If {
-                condition,
-                then_block,
-                else_block,
-            } => {
-                collect_expr_calls(condition, calls);
-                collect_block_calls(then_block, calls);
-                if let Some(else_block) = else_block {
-                    collect_block_calls(else_block, calls);
-                }
-            }
-            StatementKind::While { condition, body } => {
-                collect_expr_calls(condition, calls);
-                collect_block_calls(body, calls);
-            }
-            StatementKind::For { range, body, .. } => {
-                collect_expr_calls(&range.start, calls);
-                collect_expr_calls(&range.end, calls);
-                collect_block_calls(body, calls);
-            }
-            StatementKind::Return(value) => {
-                if let Some(value) = value {
-                    collect_expr_calls(value, calls);
-                }
-            }
-            StatementKind::Break | StatementKind::Continue => {}
-        }
-    }
-}
-
-fn collect_place_calls(place: &Place, calls: &mut Vec<String>) {
-    match &place.kind {
-        PlaceKind::Variable(_) => {}
-        PlaceKind::Index { base, index } => {
-            collect_expr_calls(base, calls);
-            collect_expr_calls(index, calls);
-        }
-        PlaceKind::Field { base, .. } => collect_expr_calls(base, calls),
-    }
-}
-
-fn collect_expr_calls(expression: &Expr, calls: &mut Vec<String>) {
-    match &expression.kind {
-        ExprKind::Call { target, args } => {
-            if let CallTarget::Function(name) = target {
-                calls.push(name.clone());
-            }
-            for argument in args {
-                collect_expr_calls(argument, calls);
-            }
-        }
-        ExprKind::Binary { left, right, .. }
-        | ExprKind::Index {
-            base: left,
-            index: right,
-        } => {
-            collect_expr_calls(left, calls);
-            collect_expr_calls(right, calls);
-        }
-        ExprKind::Unary { operand, .. }
-        | ExprKind::Field { base: operand, .. }
-        | ExprKind::ArrayLength(operand)
-        | ExprKind::IsNil(operand)
-        | ExprKind::IsFalsy(operand) => collect_expr_calls(operand, calls),
-        ExprKind::Array(items) | ExprKind::Vector { args: items, .. } => {
-            for item in items {
-                collect_expr_calls(item, calls);
-            }
-        }
-        ExprKind::Map(entries) => {
-            for entry in entries {
-                collect_expr_calls(&entry.key, calls);
-                collect_expr_calls(&entry.value, calls);
-            }
-        }
-        ExprKind::Struct { fields, .. } => {
-            for field in fields {
-                collect_expr_calls(&field.value, calls);
-            }
-        }
-        ExprKind::Literal(_)
-        | ExprKind::Variable(_)
-        | ExprKind::Constant(_)
-        | ExprKind::Uniform(_) => {}
-    }
 }
 
 fn collect_string_runtime_references_block(

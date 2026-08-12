@@ -3,6 +3,7 @@
 /// Serialization and tooling contract version for the low-level IR schema.
 pub const LIR_SCHEMA_VERSION: u32 = 1;
 
+mod dependency;
 mod domain;
 mod expr;
 mod graph;
