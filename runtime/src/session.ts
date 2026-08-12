@@ -1,4 +1,5 @@
 import { showRuntimeError } from "./errors.js";
+import { runtimeAbi } from "./generated/abi.js";
 import { SeededRandom } from "./random.js";
 import { WebGL2BatchRenderer } from "./renderer.js";
 import { WebGL2SceneRenderer } from "./scene.js";
@@ -31,6 +32,7 @@ export interface PolyglProgram {
   readonly frame?: (dt: number) => void;
   readonly on_event?: (event: RuntimeEvent) => void;
   readonly __polyglShaderBundle?: ShaderBundle;
+  readonly __polyglRuntimeAbi?: number;
 }
 
 export type PolyglProgramLoader = () => Promise<PolyglProgram>;
@@ -46,6 +48,7 @@ export interface RuntimeOptions {
   readonly shaderBundle?: ShaderBundle;
   readonly imageLoader?: RuntimeImageLoader;
   readonly onError?: (reason: unknown) => void;
+  readonly requireRuntimeAbi?: boolean;
 }
 
 export interface RuntimeHandle {
@@ -72,6 +75,7 @@ export class RuntimeSession implements RuntimeHandle {
   private onStop: () => void = () => {};
   private shaderRegistry: WebGL2ShaderRegistry;
   private readonly initialShaderBundle: ShaderBundle | undefined;
+  private readonly requireRuntimeAbi: boolean;
 
   public constructor(
     public readonly canvas: HTMLCanvasElement,
@@ -95,6 +99,7 @@ export class RuntimeSession implements RuntimeHandle {
       (reason) => this.fail(reason),
     );
     this.initialShaderBundle = options.shaderBundle;
+    this.requireRuntimeAbi = options.requireRuntimeAbi ?? false;
     this.randomSource = new SeededRandom(options.seed);
     this.requestFrame =
       options.requestAnimationFrame ??
@@ -114,6 +119,14 @@ export class RuntimeSession implements RuntimeHandle {
       const program = typeof source === "function" ? await source() : source;
       if (this.stopped) {
         return;
+      }
+      if (
+        (this.requireRuntimeAbi || program.__polyglRuntimeAbi !== undefined) &&
+        program.__polyglRuntimeAbi !== runtimeAbi
+      ) {
+        throw new Error(
+          `generated program requires runtime ABI ${String(program.__polyglRuntimeAbi ?? "missing")}; this runtime provides ABI ${runtimeAbi}`,
+        );
       }
       this.program = program;
       if (program.__polyglShaderBundle !== undefined) {

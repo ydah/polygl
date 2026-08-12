@@ -10,3 +10,6 @@ pub use common::{
 };
 pub use feature::FeatureTag;
 pub use lower::{BuiltinResolver, LanguageAdapter, LowerCtx};
+
+/// Compatibility version of the public adapter trait and lowering contract.
+pub const ADAPTER_API_VERSION: u32 = 1;

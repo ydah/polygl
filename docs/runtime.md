@@ -3,6 +3,13 @@
 
 # Browser runtime
 
+Generated modules export a numeric runtime ABI marker. The embedded runtime
+checks it before setup, shader compilation, or rendering and rejects missing or
+mismatched markers with both versions in the error. Direct object programs may
+omit the marker for runtime-library use; dynamically loaded compiler output may
+not. The runtime package version and ABI constant are generated from the
+workspace compatibility source rather than maintained by hand.
+
 `@polygl/runtime` executes a generated ES2020 module in a WebGL2 canvas. The
 generated `index.html` loads the data-only `shaders.js` first, passes its bundle
 to `start`, and then loads `app.js`. The runtime compiles the bundle before the

@@ -7,13 +7,14 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use polygl_adapter_api::{LanguageAdapter, LowerCtx};
+use polygl_adapter_api::{ADAPTER_API_VERSION, LanguageAdapter, LowerCtx};
 use polygl_adapter_perl::PerlAdapter;
 use polygl_adapter_php::PhpAdapter;
 use polygl_adapter_ruby::RubyAdapter;
 use polygl_backend_glsl::{GlslArtifacts, GlslBackend, UniformSource};
-use polygl_backend_js::{BuildMode, JavaScriptBackend, SourceMapMode};
-use polygl_core::BuiltinTable;
+use polygl_backend_js::{BuildMode, JavaScriptBackend, RUNTIME_ABI_VERSION, SourceMapMode};
+use polygl_core::{BUILTIN_SCHEMA_VERSION, BuiltinTable};
+use polygl_hir::HIR_SCHEMA_VERSION;
 use polygl_lir::AssetReference;
 use polygl_span::{Diagnostics, SourceFile, SourceId};
 use polygl_types::TypedModule;
@@ -43,6 +44,7 @@ const INDEX_HTML: &str = r#"<!doctype html>
     import { showRuntimeError, start } from "./runtime.js";
     import { shaderBundle } from "./shaders.js";
     globalThis.__polyglReady = start(() => import("./app.js"), {
+      requireRuntimeAbi: true,
       shaderBundle,
     }).catch((error) => {
       console.error(error);
@@ -380,10 +382,14 @@ fn build(
     if let Some(source_map) = javascript.source_map {
         files.push(ArtifactFile::new("app.js.map", source_map.into_bytes()));
     }
+    files.extend(assets.files);
+    files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    let adapter = adapter_for_source(source_path)?;
+    let manifest = render_artifact_manifest(&source, adapter, options, &files)?;
+    files.push(ArtifactFile::new("polygl-manifest.json", manifest));
     let mut watched_paths = Vec::with_capacity(assets.source_paths.len() + 1);
     watched_paths.push(source_path.to_path_buf());
     watched_paths.extend(assets.source_paths);
-    files.extend(assets.files);
     publish(destination, files)?;
     Ok(BuildReport { watched_paths })
 }
@@ -510,24 +516,7 @@ fn js_string(value: &str) -> String {
 }
 
 fn compile_frontend(source_path: &Path) -> Result<(SourceFile, TypedModule), CliError> {
-    let adapter: &dyn LanguageAdapter = match source_path
-        .extension()
-        .and_then(|extension| extension.to_str())
-    {
-        Some("rb") => &RubyAdapter,
-        Some("php") => &PhpAdapter,
-        Some("pl") => &PerlAdapter,
-        Some(extension) => {
-            return Err(CliError::new(format!(
-                "unsupported source extension `.{extension}`; supported extensions are `.rb`, `.php`, and `.pl`"
-            )));
-        }
-        None => {
-            return Err(CliError::new(
-                "source file must have a `.rb`, `.php`, or `.pl` extension",
-            ));
-        }
-    };
+    let adapter = adapter_for_source(source_path)?;
 
     let bytes = fs::read(source_path).map_err(|error| {
         CliError::new(format!(
@@ -546,6 +535,93 @@ fn compile_frontend(source_path: &Path) -> Result<(SourceFile, TypedModule), Cli
     let typed = polygl_types::analyze(&hir)
         .map_err(|diagnostics| diagnostic_error(&diagnostics, &source))?;
     Ok((source, typed))
+}
+
+fn adapter_for_source(source_path: &Path) -> Result<&'static dyn LanguageAdapter, CliError> {
+    match source_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+    {
+        Some("rb") => Ok(&RubyAdapter),
+        Some("php") => Ok(&PhpAdapter),
+        Some("pl") => Ok(&PerlAdapter),
+        Some(extension) => Err(CliError::new(format!(
+            "unsupported source extension `.{extension}`; supported extensions are `.rb`, `.php`, and `.pl`"
+        ))),
+        None => Err(CliError::new(
+            "source file must have a `.rb`, `.php`, or `.pl` extension",
+        )),
+    }
+}
+
+fn render_artifact_manifest(
+    source: &SourceFile,
+    adapter: &dyn LanguageAdapter,
+    options: BuildOptions,
+    files: &[ArtifactFile],
+) -> Result<Vec<u8>, CliError> {
+    let mut features = adapter
+        .capabilities()
+        .iter()
+        .map(|feature| feature.as_str())
+        .collect::<Vec<_>>();
+    features.sort_unstable();
+    let artifacts = files
+        .iter()
+        .map(|file| {
+            let path = file
+                .relative_path
+                .components()
+                .map(|component| component.as_os_str().to_str())
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| CliError::new("artifact manifest path is not valid UTF-8"))?
+                .join("/");
+            Ok(serde_json::json!({
+                "blake3": blake3::hash(&file.contents).to_hex().to_string(),
+                "path": path,
+                "size": file.contents.len(),
+            }))
+        })
+        .collect::<Result<Vec<_>, CliError>>()?;
+    let manifest = serde_json::json!({
+        "adapter": {
+            "apiVersion": ADAPTER_API_VERSION,
+            "features": features,
+            "id": adapter.id(),
+        },
+        "artifacts": artifacts,
+        "compiler": {
+            "name": "polygl",
+            "version": VERSION,
+        },
+        "options": {
+            "mode": match options.mode {
+                BuildMode::Debug => "debug",
+                BuildMode::Release => "release",
+            },
+            "sourceMap": match options.source_map {
+                SourceMapMode::None => "none",
+                SourceMapMode::External => "external",
+                SourceMapMode::Inline => "inline",
+            },
+            "sourcesContent": options.sources_content,
+        },
+        "runtimeAbi": RUNTIME_ABI_VERSION,
+        "schemaVersion": 1,
+        "schemas": {
+            "builtins": BUILTIN_SCHEMA_VERSION,
+            "hir": HIR_SCHEMA_VERSION,
+        },
+        "source": {
+            "blake3": blake3::hash(source.text().as_bytes()).to_hex().to_string(),
+            "path": source.name(),
+        },
+    });
+    let mut output = serde_json::to_vec_pretty(&manifest).map_err(|error| {
+        CliError::new(format!("failed to serialize artifact manifest: {error}"))
+    })?;
+    output.push(b'\n');
+    Ok(output)
 }
 
 fn normalized_source_name(source_path: &Path) -> Result<String, CliError> {
@@ -896,6 +972,57 @@ end
                 .unwrap()
                 .contains("from \"./shaders.js\"")
         );
+        let debug_manifest_bytes = fs::read(debug.join("polygl-manifest.json")).unwrap();
+        let debug_manifest: serde_json::Value =
+            serde_json::from_slice(&debug_manifest_bytes).unwrap();
+        assert_eq!(debug_manifest["schemaVersion"], 1);
+        assert_eq!(debug_manifest["compiler"]["version"], VERSION);
+        assert_eq!(debug_manifest["adapter"]["id"], "ruby");
+        assert_eq!(debug_manifest["adapter"]["apiVersion"], 1);
+        assert_eq!(debug_manifest["runtimeAbi"], 1);
+        assert_eq!(debug_manifest["schemas"]["hir"], 1);
+        assert_eq!(debug_manifest["schemas"]["builtins"], 1);
+        assert_eq!(debug_manifest["source"]["path"], "triangle.rb");
+        assert_eq!(debug_manifest["options"]["mode"], "debug");
+        assert_eq!(debug_manifest["options"]["sourceMap"], "external");
+        assert_eq!(debug_manifest["options"]["sourcesContent"], false);
+        let artifacts = debug_manifest["artifacts"].as_array().unwrap();
+        let paths = artifacts
+            .iter()
+            .map(|artifact| artifact["path"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert!(paths.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(!paths.contains(&"polygl-manifest.json"));
+        for artifact in artifacts {
+            let contents = fs::read(debug.join(artifact["path"].as_str().unwrap())).unwrap();
+            assert_eq!(artifact["size"], contents.len());
+            assert_eq!(
+                artifact["blake3"],
+                blake3::hash(&contents).to_hex().to_string()
+            );
+        }
+
+        let repeated = temporary.join("debug-repeated");
+        run(
+            arguments([
+                "build",
+                source.to_str().unwrap(),
+                "-o",
+                repeated.to_str().unwrap(),
+            ]),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            debug_manifest_bytes,
+            fs::read(repeated.join("polygl-manifest.json")).unwrap()
+        );
+        for path in paths {
+            assert_eq!(
+                fs::read(debug.join(path)).unwrap(),
+                fs::read(repeated.join(path)).unwrap()
+            );
+        }
 
         let release = temporary.join("release");
         run(
@@ -913,6 +1040,12 @@ end
         assert!(!release_javascript.contains("__pglSpans"));
         assert!(!release_javascript.contains("sourceMappingURL"));
         assert!(!release.join("app.js.map").exists());
+        let release_manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(release.join("polygl-manifest.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(release_manifest["options"]["mode"], "release");
+        assert_eq!(release_manifest["options"]["sourceMap"], "none");
         assert!(
             fs::read_to_string(release.join("shaders.js"))
                 .unwrap()

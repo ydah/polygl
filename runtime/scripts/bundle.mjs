@@ -8,6 +8,7 @@ const outputPath = path.resolve(
   "../crates/polygl-cli/assets/runtime.js",
 );
 const inputs = [
+  "dist/generated/abi.js",
   "dist/generated/ops.js",
   "dist/errors.js",
   "dist/random.js",

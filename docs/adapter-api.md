@@ -3,6 +3,10 @@
 
 # Language adapter API
 
+`ADAPTER_API_VERSION` is the compatibility version of the public trait and
+lowering contract. Artifact manifests record it together with versioned feature
+tags; a future plugin boundary must compare it before invoking an adapter.
+
 Adapters implement the object-safe `LanguageAdapter` trait:
 
 - `id` returns the stable lowercase language identifier;

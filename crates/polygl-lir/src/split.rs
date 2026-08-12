@@ -1573,10 +1573,11 @@ fn collect_string_runtime_references_expr(
 }
 
 fn invalid_asset_path_reason(path: &str) -> Option<&'static str> {
-    const GENERATED_ARTIFACTS: [&str; 5] = [
+    const GENERATED_ARTIFACTS: [&str; 6] = [
         "app.js",
         "app.js.map",
         "index.html",
+        "polygl-manifest.json",
         "runtime.js",
         "shaders.js",
     ];
@@ -1912,6 +1913,7 @@ mod tests {
             "../outside.png",
             "assets\\windows.png",
             "https://example.test/a.png",
+            "polygl-manifest.json",
             "runtime.js",
         ] {
             let mut invalid = valid_pair(vec![return_vector4()]);

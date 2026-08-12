@@ -247,6 +247,11 @@ fn emits_es2020_runtime_calls_wrapping_ints_and_source_map_v3() {
             .javascript
             .starts_with("import * as __pglRuntime from \"./runtime.js\";")
     );
+    assert!(
+        artifacts
+            .javascript
+            .contains("export const __polyglRuntimeAbi = 1;")
+    );
     assert!(artifacts.javascript.contains("let before_shadow = x;"));
     assert!(artifacts.javascript.contains("let dollar_parameter = x$1;"));
     assert!(artifacts.javascript.contains("Math.imul(x$2, 2)"));

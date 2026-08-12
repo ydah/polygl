@@ -40,6 +40,7 @@ const {
   rotate,
   roundToInt,
   runtimeOps,
+  runtimeAbi,
   runtimeVersion,
   scale,
   setShaderUniform,
@@ -61,7 +62,20 @@ test("exports generated runtime metadata", () => {
   assert.equal(runtimeOps.no_stroke, "noStroke");
   assert.equal(runtimeOps.time, "time");
   assert.equal(runtimeOps.material_shader, "materialShader");
-  assert.equal(runtimeVersion, "0.0.0");
+  assert.equal(runtimeVersion, "0.1.0");
+  assert.equal(runtimeAbi, 1);
+});
+
+test("rejects generated programs with a missing or mismatched runtime ABI", async () => {
+  const { context } = fakeWebGl2();
+  const canvas = fakeCanvas();
+  const options = { canvas, context, onError() {}, requireRuntimeAbi: true };
+
+  await assert.rejects(start(async () => ({}), options), /ABI missing.*ABI 1/);
+  await assert.rejects(
+    start(async () => ({ __polyglRuntimeAbi: 2 }), options),
+    /ABI 2.*ABI 1/,
+  );
 });
 
 test("seeded random sequences are reproducible", () => {

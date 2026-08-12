@@ -8,7 +8,7 @@ use polygl_span::Span;
 use polygl_types::Type;
 
 use crate::source_map::{SourceCatalog, SourceMapBuilder};
-use crate::{BuildMode, EmitError};
+use crate::{BuildMode, EmitError, RUNTIME_ABI_VERSION};
 
 pub(crate) struct Emitted {
     pub(crate) body: String,
@@ -27,6 +27,7 @@ impl Emitted {
             serde_json::to_string(runtime_module).expect("serializing a Rust string cannot fail");
         let mut header = format!(
             "import * as __pglRuntime from {runtime_module};\n\
+             export const __polyglRuntimeAbi = {RUNTIME_ABI_VERSION};\n\
              const __pglIsFalsy = (value) => value == null || value === false;\n\
              const __pglArithmeticError = (message, location) => {{\n\
              \x20 const error = new RangeError(message);\n\

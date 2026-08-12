@@ -1,4 +1,5 @@
 export { runtimeOps, runtimeSignatures } from "./generated/ops.js";
+export { runtimeAbi, runtimeVersion } from "./generated/abi.js";
 export type {
   BuiltinName,
   RuntimeDomain,
@@ -71,8 +72,6 @@ import type {
   SceneShaderValue,
   TextureHandle,
 } from "./scene.js";
-
-export const runtimeVersion = "0.0.0" as const;
 
 let activeSession: RuntimeSession | undefined;
 let startInProgress = false;

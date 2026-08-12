@@ -21,7 +21,14 @@ polygl --version
   importing the generated program;
 - `app.js` and, when external Source Maps are selected, `app.js.map`;
 - `shaders.js`, containing data-only GLSL and reflection metadata;
-- `runtime.js`, embedded in the CLI binary from the tested TypeScript runtime.
+- `runtime.js`, embedded in the CLI binary from the tested TypeScript runtime;
+- `polygl-manifest.json`, a reproducible provenance record for the build.
+
+The manifest records compiler and adapter versions, versioned feature tags,
+HIR/builtin/runtime ABI versions, normalized source path and BLAKE3 digest,
+effective build options, and a sorted size/digest inventory of every payload
+artifact. It deliberately omits generation time so identical inputs and options
+produce identical bytes. The manifest does not hash itself.
 
 Every `texture_load` argument must be a literal relative slash-separated path.
 `build` reads it relative to the source file and copies it to the same path

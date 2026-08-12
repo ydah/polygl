@@ -1,5 +1,8 @@
 //! PolyGL's source-oriented, language-independent high-level IR.
 
+/// Schema version for tooling that persists or exchanges HIR.
+pub const HIR_SCHEMA_VERSION: u32 = 1;
+
 mod builder;
 mod dump;
 mod expr;
