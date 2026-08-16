@@ -2753,7 +2753,6 @@ limitations under the License.
 Apache License 2.0
 
 Used by:
-- polygl-conformance 0.1.0
 - polygl-adapter-api 0.1.0
 - polygl-adapter-perl 0.1.0
 - polygl-adapter-php 0.1.0
@@ -2768,7 +2767,6 @@ Used by:
 - polygl-lir 0.1.0
 - polygl-span 0.1.0
 - polygl-types 0.1.0
-- xtask 0.1.0
 - allocator-api2 0.2.21
 - blake3 1.8.6
 - blink-alloc 0.3.1
