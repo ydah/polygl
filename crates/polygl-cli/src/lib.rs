@@ -3077,11 +3077,20 @@ end
         fs::write(
             &source,
             r#"<?php
+function doubled($Math) {
+    return $Math * 2;
+}
+
+function vector($Float32Array) {
+    return vec2($Float32Array, 2.0);
+}
+
 function setup() {
     size(320, 180);
     background(0.1, 0.2, 0.3);
     fill(1.0, 0.0, 0.0);
-    triangle(10.0, 10.0, 50.0, 10.0, 30.0, 40.0);
+    triangle(10.0, 10.0, 50.0, 10.0, 30.0, doubled(20));
+    vector(1.0);
 }
 "#,
         )
@@ -3100,6 +3109,8 @@ function setup() {
         let javascript = fs::read_to_string(output.join("app.js")).unwrap();
         assert!(javascript.contains("__pglRuntime.background"));
         assert!(javascript.contains("__pglRuntime.triangle"));
+        assert!(javascript.contains("Math.imul(__pglLocal_4d617468, 2)"));
+        assert!(javascript.contains("new Float32Array([__pglLocal_466c6f617433324172726179, 2])"));
         assert!(output.join("index.html").is_file());
         fs::remove_dir_all(temporary).unwrap();
     }

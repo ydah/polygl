@@ -910,6 +910,7 @@ fn is_safe_identifier(name: &str) -> bool {
             character == '_' || character == '$' || character.is_ascii_alphanumeric()
         })
         && !is_reserved_word(name)
+        && !matches!(name, "Float32Array" | "Math" | "Number")
 }
 
 fn is_reserved_word(name: &str) -> bool {
