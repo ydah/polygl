@@ -5,6 +5,8 @@ and releases follow the compatibility policy in `docs/semver.md`.
 
 ## Unreleased
 
+## 0.2.0 - 2026-09-08
+
 ### Added
 
 - Public compiler orchestration, structured diagnostics, profiling, configured
@@ -21,6 +23,15 @@ and releases follow the compatibility policy in `docs/semver.md`.
   content-addressed metadata and explicit Source Map disclosure.
 - Host LIR uses effect-aware reachability and deterministic symbol/dependency
   analysis.
+
+### Fixed
+
+- Build outputs preserve source assets, accept portable bare relative paths,
+  and keep content-addressed runtime imports coherent.
+- Runtime sessions keep lifecycle, input, rendering, texture-budget, external
+  WebGL, and visibility state consistent across edge cases.
+- Generated JavaScript cannot shadow required platform globals, and malformed
+  Unicode warning selectors are rejected without panicking.
 
 ### Security
 

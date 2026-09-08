@@ -2748,9 +2748,9 @@ mod tests {
         .unwrap();
         let manifest = fs::read_to_string(adapter.join("Cargo.toml")).unwrap();
         assert!(manifest.contains("name = \"polygl-adapter-toy\""));
-        assert!(manifest.contains("polygl-adapter-api = \"=0.1.0\""));
-        assert!(manifest.contains("polygl-hir = \"=0.1.0\""));
-        assert!(manifest.contains("polygl-span = \"=0.1.0\""));
+        assert!(manifest.contains("polygl-adapter-api = \"=0.2.0\""));
+        assert!(manifest.contains("polygl-hir = \"=0.2.0\""));
+        assert!(manifest.contains("polygl-span = \"=0.2.0\""));
         let implementation = fs::read_to_string(adapter.join("src/lib.rs")).unwrap();
         assert!(implementation.contains("pub struct ToyAdapter;"));
         assert!(implementation.contains("impl LanguageAdapter for ToyAdapter"));
