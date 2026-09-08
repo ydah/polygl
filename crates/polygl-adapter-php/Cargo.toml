@@ -16,13 +16,13 @@ mago-span = "=1.43.0"
 mago-syntax = "=1.43.0"
 mago-syntax-core = "=1.43.0"
 mago-text-edit = "=1.43.0"
-polygl-adapter-api = { path = "../polygl-adapter-api", version = "=0.2.0" }
-polygl-hir = { path = "../polygl-hir", version = "=0.2.0" }
-polygl-span = { path = "../polygl-span", version = "=0.2.0" }
+polygl-adapter-api = { path = "../polygl-adapter-api", version = "=0.2.1" }
+polygl-hir = { path = "../polygl-hir", version = "=0.2.1" }
+polygl-span = { path = "../polygl-span", version = "=0.2.1" }
 
 [dev-dependencies]
-polygl-builtins = { path = "../polygl-builtins", version = "=0.2.0" }
-polygl-types = { path = "../polygl-types", version = "=0.2.0" }
+polygl-builtins = { path = "../polygl-builtins", version = "=0.2.1" }
+polygl-types = { path = "../polygl-types", version = "=0.2.1" }
 
 [lints]
 workspace = true

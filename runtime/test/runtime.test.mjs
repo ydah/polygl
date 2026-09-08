@@ -75,7 +75,7 @@ test("exports generated runtime metadata", () => {
   assert.equal(runtimeOps.no_stroke, "noStroke");
   assert.equal(runtimeOps.time, "time");
   assert.equal(runtimeOps.material_shader, "materialShader");
-  assert.equal(runtimeVersion, "0.2.0");
+  assert.equal(runtimeVersion, "0.2.1");
   assert.equal(runtimeAbi, 2);
   assert.equal(shaderAbi, 1);
 });

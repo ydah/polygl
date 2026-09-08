@@ -258,7 +258,7 @@ mod tests {
         let typescript = render_typescript();
         let docs = render_api_docs();
         let abi = render_runtime_abi();
-        assert!(abi.contains("runtimeVersion = \"0.2.0\""));
+        assert!(abi.contains("runtimeVersion = \"0.2.1\""));
         assert!(abi.contains("runtimeAbi = 2"));
         assert!(typescript.contains("time: { domain: \"both\""));
         assert!(typescript.contains("material_shader: \"materialShader\""));

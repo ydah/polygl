@@ -9,12 +9,12 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-polygl-adapter-api = { path = "../crates/polygl-adapter-api", version = "=0.2.0" }
-polygl-conformance = { path = "../conformance/runner", version = "=0.2.0" }
-polygl-backend-js = { path = "../crates/polygl-backend-js", version = "=0.2.0" }
-polygl-backend-glsl = { path = "../crates/polygl-backend-glsl", version = "=0.2.0" }
-polygl-core = { path = "../crates/polygl-core", version = "=0.2.0" }
-polygl-span = { path = "../crates/polygl-span", version = "=0.2.0" }
+polygl-adapter-api = { path = "../crates/polygl-adapter-api", version = "=0.2.1" }
+polygl-conformance = { path = "../conformance/runner", version = "=0.2.1" }
+polygl-backend-js = { path = "../crates/polygl-backend-js", version = "=0.2.1" }
+polygl-backend-glsl = { path = "../crates/polygl-backend-glsl", version = "=0.2.1" }
+polygl-core = { path = "../crates/polygl-core", version = "=0.2.1" }
+polygl-span = { path = "../crates/polygl-span", version = "=0.2.1" }
 serde_json = "=1.0.151"
 
 [lints]

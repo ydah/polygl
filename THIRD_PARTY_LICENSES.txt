@@ -2753,20 +2753,20 @@ limitations under the License.
 Apache License 2.0
 
 Used by:
-- polygl-adapter-api 0.2.0
-- polygl-adapter-perl 0.2.0
-- polygl-adapter-php 0.2.0
-- polygl-adapter-ruby 0.2.0
-- polygl-adapter-treesitter-util 0.2.0
-- polygl-backend-glsl 0.2.0
-- polygl-backend-js 0.2.0
-- polygl-builtins 0.2.0
-- polygl-cli 0.2.0
-- polygl-core 0.2.0
-- polygl-hir 0.2.0
-- polygl-lir 0.2.0
-- polygl-span 0.2.0
-- polygl-types 0.2.0
+- polygl-adapter-api 0.2.1
+- polygl-adapter-perl 0.2.1
+- polygl-adapter-php 0.2.1
+- polygl-adapter-ruby 0.2.1
+- polygl-adapter-treesitter-util 0.2.1
+- polygl-backend-glsl 0.2.1
+- polygl-backend-js 0.2.1
+- polygl-builtins 0.2.1
+- polygl-cli 0.2.1
+- polygl-core 0.2.1
+- polygl-hir 0.2.1
+- polygl-lir 0.2.1
+- polygl-span 0.2.1
+- polygl-types 0.2.1
 - allocator-api2 0.2.21
 - blake3 1.8.6
 - blink-alloc 0.3.1

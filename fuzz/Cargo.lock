@@ -632,7 +632,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "polygl-adapter-api"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "polygl-hir",
  "polygl-span",
@@ -640,7 +640,7 @@ dependencies = [
 
 [[package]]
 name = "polygl-adapter-perl"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "polygl-adapter-api",
  "polygl-adapter-treesitter-util",
@@ -652,7 +652,7 @@ dependencies = [
 
 [[package]]
 name = "polygl-adapter-php"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "mago-allocator",
  "mago-database",
@@ -669,7 +669,7 @@ dependencies = [
 
 [[package]]
 name = "polygl-adapter-ruby"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "polygl-adapter-api",
  "polygl-hir",
@@ -679,7 +679,7 @@ dependencies = [
 
 [[package]]
 name = "polygl-adapter-treesitter-util"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "polygl-span",
  "tree-sitter",
@@ -687,7 +687,7 @@ dependencies = [
 
 [[package]]
 name = "polygl-backend-glsl"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "polygl-builtins",
  "polygl-hir",
@@ -698,7 +698,7 @@ dependencies = [
 
 [[package]]
 name = "polygl-backend-js"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64",
  "polygl-lir",
@@ -709,7 +709,7 @@ dependencies = [
 
 [[package]]
 name = "polygl-builtins"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "polygl-adapter-api",
  "polygl-hir",
@@ -717,7 +717,7 @@ dependencies = [
 
 [[package]]
 name = "polygl-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "polygl-adapter-api",
  "polygl-adapter-perl",
@@ -751,14 +751,14 @@ dependencies = [
 
 [[package]]
 name = "polygl-hir"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "polygl-span",
 ]
 
 [[package]]
 name = "polygl-lir"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "polygl-builtins",
  "polygl-hir",
@@ -768,14 +768,14 @@ dependencies = [
 
 [[package]]
 name = "polygl-span"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "ariadne",
 ]
 
 [[package]]
 name = "polygl-types"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "polygl-builtins",
  "polygl-hir",

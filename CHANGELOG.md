@@ -5,7 +5,7 @@ and releases follow the compatibility policy in `docs/semver.md`.
 
 ## Unreleased
 
-## 0.2.0 - 2026-09-08
+## 0.2.1 - 2026-09-08
 
 ### Added
 
