@@ -406,7 +406,9 @@ function validateResourceLimits(value) {
         "maxMeshBytes",
         "maxNodes",
         "maxTextures",
-        "maxTextureDimension",
+        "maxTextureBytes",
+        "maxTextureWidth",
+        "maxTextureHeight",
         "maxShaderPrograms",
     ];
     for (const name of properties.keys()) {
@@ -418,7 +420,9 @@ function validateResourceLimits(value) {
     const maxMeshBytes = optionalResourceLimit(properties, "maxMeshBytes");
     const maxNodes = optionalResourceLimit(properties, "maxNodes");
     const maxTextures = optionalResourceLimit(properties, "maxTextures");
-    const maxTextureDimension = optionalResourceLimit(properties, "maxTextureDimension");
+    const maxTextureBytes = optionalResourceLimit(properties, "maxTextureBytes");
+    const maxTextureWidth = optionalResourceLimit(properties, "maxTextureWidth");
+    const maxTextureHeight = optionalResourceLimit(properties, "maxTextureHeight");
     const maxShaderPrograms = optionalResourceLimit(properties, "maxShaderPrograms");
     return Object.freeze({
         ...(maxMeshes === undefined ? {} : { maxMeshes }),
@@ -429,9 +433,15 @@ function validateResourceLimits(value) {
         ...(maxTextures === undefined
             ? {}
             : { maxTextures }),
-        ...(maxTextureDimension === undefined
+        ...(maxTextureBytes === undefined
             ? {}
-            : { maxTextureDimension }),
+            : { maxTextureBytes }),
+        ...(maxTextureWidth === undefined
+            ? {}
+            : { maxTextureWidth }),
+        ...(maxTextureHeight === undefined
+            ? {}
+            : { maxTextureHeight }),
         ...(maxShaderPrograms === undefined
             ? {}
             : { maxShaderPrograms }),
@@ -2643,6 +2653,7 @@ export class WebGL2SceneRenderer {
         };
     }
     textureLoad(path, options) {
+        this.assertActive();
         const safePath = validateAssetPath(path);
         const safeOptions = validateTextureOptions(options);
         const cacheKey = textureCacheKey(safePath, safeOptions);
@@ -2813,6 +2824,7 @@ export class WebGL2SceneRenderer {
         this.pendingSetupAssets.clear();
     }
     createMesh(data) {
+        this.assertActive();
         this.assertResourceCount("meshes", this.meshes.size, this.resourceLimits.maxMeshes);
         const byteLength = data.vertices.byteLength + data.indices.byteLength;
         const meshLimit = this.resourceLimits.maxMeshBytes;
@@ -2887,10 +2899,13 @@ export class WebGL2SceneRenderer {
             return true;
         if (depth - radius <= this.camera.near)
             return false;
-        const vertical = depth * Math.tan(this.camera.verticalFov / 2);
-        const horizontal = vertical * (Math.max(1, width) / Math.max(1, height));
-        return Math.abs(center[0]) > horizontal + radius ||
-            Math.abs(center[1]) > vertical + radius;
+        const verticalSlope = Math.tan(this.camera.verticalFov / 2);
+        const horizontalSlope = verticalSlope *
+            (Math.max(1, width) / Math.max(1, height));
+        const horizontalRadius = radius * Math.hypot(1, horizontalSlope);
+        const verticalRadius = radius * Math.hypot(1, verticalSlope);
+        return Math.abs(center[0]) > depth * horizontalSlope + horizontalRadius ||
+            Math.abs(center[1]) > depth * verticalSlope + verticalRadius;
     }
     drawItem(item, view, projection, elapsedSeconds, width, height) {
         if (item.basic !== undefined) {
@@ -2974,10 +2989,19 @@ export class WebGL2SceneRenderer {
             return;
         }
         const dimensions = imageDimensions(image, handle.path);
-        const dimensionLimit = this.textureDimensionLimit();
-        if (dimensions.width > dimensionLimit ||
-            dimensions.height > dimensionLimit) {
-            throw new RangeError(`texture \`${handle.path}\` is ${dimensions.width}x${dimensions.height}, exceeding the ${dimensionLimit}px texture limit`);
+        const hardwareLimit = this.textureDimensionLimit();
+        const widthLimit = Math.min(this.resourceLimits.maxTextureWidth ?? Infinity, hardwareLimit);
+        const heightLimit = Math.min(this.resourceLimits.maxTextureHeight ?? Infinity, hardwareLimit);
+        if (dimensions.width > widthLimit) {
+            throw new RangeError(`texture \`${handle.path}\` is ${dimensions.width}px wide, exceeding the ${widthLimit}px texture width limit`);
+        }
+        if (dimensions.height > heightLimit) {
+            throw new RangeError(`texture \`${handle.path}\` is ${dimensions.height}px high, exceeding the ${heightLimit}px texture height limit`);
+        }
+        const decodedBytes = dimensions.width * dimensions.height * 4;
+        const byteLimit = this.resourceLimits.maxTextureBytes;
+        if (byteLimit !== undefined && decodedBytes > byteLimit) {
+            throw new RangeError(`texture \`${handle.path}\` requires ${decodedBytes} decoded bytes, exceeding the ${byteLimit} byte texture limit`);
         }
         this.stateCache.activateTexture(this.gl.TEXTURE0);
         this.stateCache.bindTexture2d(handle.texture);
@@ -3021,14 +3045,17 @@ export class WebGL2SceneRenderer {
         }
     }
     textureDimensionLimit() {
-        const configured = this.resourceLimits.maxTextureDimension ?? Infinity;
         const reported = this.gl.getParameter(this.gl.MAX_TEXTURE_SIZE);
         if (typeof reported !== "number" ||
             !Number.isSafeInteger(reported) ||
             reported <= 0) {
             throw new Error("WebGL returned an invalid maximum texture dimension");
         }
-        return Math.min(configured, reported);
+        return reported;
+    }
+    assertActive() {
+        if (this.disposed)
+            throw new Error("scene renderer has been disposed");
     }
     assertResourceCount(label, current, maximum) {
         if (maximum !== undefined && current >= maximum) {
@@ -3461,13 +3488,15 @@ export class RuntimeSession {
         this.mouseY = 0;
         this.elapsedSeconds = 0;
         this.sessionState = "initializing";
-        this.pressedKeys = new Set();
+        this.pressedKeys = new Map();
         this.fixedAccumulator = 0;
         this.contextLost = false;
+        this.initialized = false;
         this.stopped = false;
         this.onStop = () => { };
         this.renderedFrames = 0;
         this.tick = (timestamp) => {
+            this.animationHandle = undefined;
             if (this.stopped || this.sessionState !== "running") {
                 return;
             }
@@ -3478,10 +3507,10 @@ export class RuntimeSession {
                 : Math.min(this.maxDeltaSeconds, Math.max(0, (timestamp - previous) / 1000));
             try {
                 this.advanceSimulation(realDelta);
-                if (this.stopped)
+                if (this.stopped || this.sessionState !== "running")
                     return;
                 this.render();
-                this.animationHandle = this.requestFrame(this.tick);
+                this.scheduleAnimation();
             }
             catch (error) {
                 this.fail(error);
@@ -3541,14 +3570,15 @@ export class RuntimeSession {
         this.handleKeyDown = (event) => {
             this.preventDefault(event);
             const key = stringOrNull(event.key);
+            const code = stringOrNull(event.code);
             if (key !== null)
-                this.pressedKeys.add(key);
+                this.pressedKeys.set(code ?? key, key);
             this.dispatchEvent({
                 kind: "keydown",
                 x: this.mouseX,
                 y: this.mouseY,
                 key,
-                code: stringOrNull(event.code),
+                code,
                 pointerId: null,
                 buttons: 0,
                 button: -1,
@@ -3562,14 +3592,16 @@ export class RuntimeSession {
         this.handleKeyUp = (event) => {
             this.preventDefault(event);
             const key = stringOrNull(event.key);
-            if (key !== null)
-                this.pressedKeys.delete(key);
+            const code = stringOrNull(event.code);
+            const pressedKey = code ?? key;
+            if (pressedKey !== null)
+                this.pressedKeys.delete(pressedKey);
             this.dispatchEvent({
                 kind: "keyup",
                 x: this.mouseX,
                 y: this.mouseY,
                 key,
-                code: stringOrNull(event.code),
+                code,
                 pointerId: null,
                 buttons: 0,
                 button: -1,
@@ -3584,7 +3616,9 @@ export class RuntimeSession {
             this.pressedKeys.clear();
         };
         this.handleVisibilityChange = () => {
-            if (this.stopped || this.visibilityPolicy !== "pause")
+            if (this.stopped ||
+                !this.initialized ||
+                this.visibilityPolicy !== "pause")
                 return;
             if (this.shouldPauseForVisibility()) {
                 this.pauseAnimation();
@@ -3597,7 +3631,7 @@ export class RuntimeSession {
             this.previousTimestamp = undefined;
             this.fixedAccumulator = 0;
             if (this.program?.frame !== undefined) {
-                this.animationHandle = this.requestFrame(this.tick);
+                this.scheduleAnimation();
             }
             else {
                 this.scheduleRender();
@@ -3688,20 +3722,20 @@ export class RuntimeSession {
             if (program.__polyglShaderBundle !== undefined) {
                 this.replaceShaderBundle(program.__polyglShaderBundle, this.requireRuntimeAbi || program.__polyglRuntimeAbi !== undefined);
             }
-            await program.setup?.();
+            if (program.setup !== undefined) {
+                this.prepareForUserCallback();
+                await program.setup();
+            }
             await this.scene.awaitSetupAssets();
             if (this.stopped) {
                 return;
             }
             if (this.contextLost)
                 return;
+            this.initialized = true;
             this.render();
             this.sessionState = this.shouldPauseForVisibility() ? "paused" : "running";
-            if (program.frame !== undefined &&
-                !this.contextLost &&
-                this.sessionState === "running") {
-                this.animationHandle = this.requestFrame(this.tick);
-            }
+            this.scheduleAnimation();
         }
         catch (error) {
             this.fail(error);
@@ -3742,7 +3776,11 @@ export class RuntimeSession {
         this.onStop();
     }
     keyDown(key) {
-        return this.pressedKeys.has(key);
+        for (const pressedKey of this.pressedKeys.values()) {
+            if (pressedKey === key)
+                return true;
+        }
+        return false;
     }
     setStopHandler(handler) {
         this.onStop = handler;
@@ -3873,7 +3911,10 @@ export class RuntimeSession {
     }
     dispatchEvent(event) {
         try {
-            this.program?.on_event?.(event);
+            if (this.program?.on_event !== undefined) {
+                this.prepareForUserCallback();
+                this.program.on_event(event);
+            }
             if (this.stopped) {
                 return;
             }
@@ -3887,7 +3928,10 @@ export class RuntimeSession {
         const fixed = this.fixedDeltaSeconds;
         if (fixed === undefined) {
             this.elapsedSeconds += realDelta;
-            this.program?.frame?.(realDelta);
+            if (this.program?.frame !== undefined) {
+                this.prepareForUserCallback();
+                this.program.frame(realDelta);
+            }
             return;
         }
         this.fixedAccumulator = Math.min(this.fixedAccumulator + realDelta, fixed * this.maxCatchUpSteps);
@@ -3895,7 +3939,10 @@ export class RuntimeSession {
         while (this.fixedAccumulator + Number.EPSILON >= fixed &&
             steps < this.maxCatchUpSteps) {
             this.elapsedSeconds += fixed;
-            this.program?.frame?.(fixed);
+            if (this.program?.frame !== undefined) {
+                this.prepareForUserCallback();
+                this.program.frame(fixed);
+            }
             if (this.stopped)
                 return;
             this.fixedAccumulator -= fixed;
@@ -3911,6 +3958,19 @@ export class RuntimeSession {
             this.cancelFrame(this.renderHandle);
             this.renderHandle = undefined;
         }
+    }
+    scheduleAnimation() {
+        if (this.stopped ||
+            this.contextLost ||
+            this.sessionState !== "running" ||
+            this.program?.frame === undefined ||
+            this.animationHandle !== undefined)
+            return;
+        this.animationHandle = this.requestFrame(this.tick);
+    }
+    prepareForUserCallback() {
+        if (this.externalWebGLPolicy === "reset")
+            this.invalidateWebGLState();
     }
     shouldPauseForVisibility() {
         return this.visibilityPolicy === "pause" &&
@@ -3935,6 +3995,7 @@ export class RuntimeSession {
     }
     scheduleRender() {
         if (this.stopped ||
+            !this.initialized ||
             this.contextLost ||
             this.program?.frame !== undefined ||
             this.renderHandle !== undefined) {

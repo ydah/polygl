@@ -134,7 +134,7 @@ export class RuntimeSession implements RuntimeHandle {
   public mouseY = 0;
   public elapsedSeconds = 0;
   private sessionState: RuntimeSessionState = "initializing";
-  private readonly pressedKeys = new Set<string>();
+  private readonly pressedKeys = new Map<string, string>();
   private readonly documentObject: Document | undefined;
   private readonly windowObject: Window | undefined;
   private readonly requestFrame: (callback: FrameRequestCallback) => number;
@@ -155,6 +155,7 @@ export class RuntimeSession implements RuntimeHandle {
   private fixedAccumulator = 0;
   private resizeObserver: RuntimeResizeObserver | undefined;
   private contextLost = false;
+  private initialized = false;
   private stopped = false;
   private onStop: () => void = () => {};
   private shaderRegistry: WebGL2ShaderRegistry;
@@ -260,21 +261,19 @@ export class RuntimeSession implements RuntimeHandle {
           this.requireRuntimeAbi || program.__polyglRuntimeAbi !== undefined,
         );
       }
-      await program.setup?.();
+      if (program.setup !== undefined) {
+        this.prepareForUserCallback();
+        await program.setup();
+      }
       await this.scene.awaitSetupAssets();
       if (this.stopped) {
         return;
       }
       if (this.contextLost) return;
+      this.initialized = true;
       this.render();
       this.sessionState = this.shouldPauseForVisibility() ? "paused" : "running";
-      if (
-        program.frame !== undefined &&
-        !this.contextLost &&
-        this.sessionState === "running"
-      ) {
-        this.animationHandle = this.requestFrame(this.tick);
-      }
+      this.scheduleAnimation();
     } catch (error) {
       this.fail(error);
       throw error;
@@ -322,7 +321,10 @@ export class RuntimeSession implements RuntimeHandle {
   }
 
   public keyDown(key: string): boolean {
-    return this.pressedKeys.has(key);
+    for (const pressedKey of this.pressedKeys.values()) {
+      if (pressedKey === key) return true;
+    }
+    return false;
   }
 
   public setStopHandler(handler: () => void): void {
@@ -470,6 +472,7 @@ export class RuntimeSession implements RuntimeHandle {
   private program: PolyglProgram | undefined;
 
   private readonly tick = (timestamp: number): void => {
+    this.animationHandle = undefined;
     if (this.stopped || this.sessionState !== "running") {
       return;
     }
@@ -483,9 +486,9 @@ export class RuntimeSession implements RuntimeHandle {
       );
     try {
       this.advanceSimulation(realDelta);
-      if (this.stopped) return;
+      if (this.stopped || this.sessionState !== "running") return;
       this.render();
-      this.animationHandle = this.requestFrame(this.tick);
+      this.scheduleAnimation();
     } catch (error) {
       this.fail(error);
     }
@@ -613,13 +616,14 @@ export class RuntimeSession implements RuntimeHandle {
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
     this.preventDefault(event);
     const key = stringOrNull(event.key);
-    if (key !== null) this.pressedKeys.add(key);
+    const code = stringOrNull(event.code);
+    if (key !== null) this.pressedKeys.set(code ?? key, key);
     this.dispatchEvent({
       kind: "keydown",
       x: this.mouseX,
       y: this.mouseY,
       key,
-      code: stringOrNull(event.code),
+      code,
       pointerId: null,
       buttons: 0,
       button: -1,
@@ -634,13 +638,15 @@ export class RuntimeSession implements RuntimeHandle {
   private readonly handleKeyUp = (event: KeyboardEvent): void => {
     this.preventDefault(event);
     const key = stringOrNull(event.key);
-    if (key !== null) this.pressedKeys.delete(key);
+    const code = stringOrNull(event.code);
+    const pressedKey = code ?? key;
+    if (pressedKey !== null) this.pressedKeys.delete(pressedKey);
     this.dispatchEvent({
       kind: "keyup",
       x: this.mouseX,
       y: this.mouseY,
       key,
-      code: stringOrNull(event.code),
+      code,
       pointerId: null,
       buttons: 0,
       button: -1,
@@ -657,7 +663,11 @@ export class RuntimeSession implements RuntimeHandle {
   };
 
   private readonly handleVisibilityChange = (): void => {
-    if (this.stopped || this.visibilityPolicy !== "pause") return;
+    if (
+      this.stopped ||
+      !this.initialized ||
+      this.visibilityPolicy !== "pause"
+    ) return;
     if (this.shouldPauseForVisibility()) {
       this.pauseAnimation();
       this.sessionState = "paused";
@@ -668,7 +678,7 @@ export class RuntimeSession implements RuntimeHandle {
     this.previousTimestamp = undefined;
     this.fixedAccumulator = 0;
     if (this.program?.frame !== undefined) {
-      this.animationHandle = this.requestFrame(this.tick);
+      this.scheduleAnimation();
     } else {
       this.scheduleRender();
     }
@@ -713,7 +723,10 @@ export class RuntimeSession implements RuntimeHandle {
 
   private dispatchEvent(event: RuntimeEvent): void {
     try {
-      this.program?.on_event?.(event);
+      if (this.program?.on_event !== undefined) {
+        this.prepareForUserCallback();
+        this.program.on_event(event);
+      }
       if (this.stopped) {
         return;
       }
@@ -727,7 +740,10 @@ export class RuntimeSession implements RuntimeHandle {
     const fixed = this.fixedDeltaSeconds;
     if (fixed === undefined) {
       this.elapsedSeconds += realDelta;
-      this.program?.frame?.(realDelta);
+      if (this.program?.frame !== undefined) {
+        this.prepareForUserCallback();
+        this.program.frame(realDelta);
+      }
       return;
     }
     this.fixedAccumulator = Math.min(
@@ -740,7 +756,10 @@ export class RuntimeSession implements RuntimeHandle {
       steps < this.maxCatchUpSteps
     ) {
       this.elapsedSeconds += fixed;
-      this.program?.frame?.(fixed);
+      if (this.program?.frame !== undefined) {
+        this.prepareForUserCallback();
+        this.program.frame(fixed);
+      }
       if (this.stopped) return;
       this.fixedAccumulator -= fixed;
       steps += 1;
@@ -756,6 +775,21 @@ export class RuntimeSession implements RuntimeHandle {
       this.cancelFrame(this.renderHandle);
       this.renderHandle = undefined;
     }
+  }
+
+  private scheduleAnimation(): void {
+    if (
+      this.stopped ||
+      this.contextLost ||
+      this.sessionState !== "running" ||
+      this.program?.frame === undefined ||
+      this.animationHandle !== undefined
+    ) return;
+    this.animationHandle = this.requestFrame(this.tick);
+  }
+
+  private prepareForUserCallback(): void {
+    if (this.externalWebGLPolicy === "reset") this.invalidateWebGLState();
   }
 
   private shouldPauseForVisibility(): boolean {
@@ -785,6 +819,7 @@ export class RuntimeSession implements RuntimeHandle {
   private scheduleRender(): void {
     if (
       this.stopped ||
+      !this.initialized ||
       this.contextLost ||
       this.program?.frame !== undefined ||
       this.renderHandle !== undefined

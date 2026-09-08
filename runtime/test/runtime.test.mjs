@@ -763,12 +763,18 @@ test("invalidates cached WebGL and uniform state at explicit boundaries", async 
 
 test("can reset owned WebGL state before every rendered frame", async () => {
   const gl = fakeWebGl2();
+  const canvas = fakeCanvas();
+  const overlay = fakeTextOverlay(canvas);
   const frames = [];
   const handle = await start({
-    frame() { triangle(0, 0, 1, 0, 0, 1); },
+    frame() {
+      rect(0, 0, 1, 1);
+      text("flush", 0, 0);
+    },
   }, {
-    canvas: fakeCanvas(),
+    canvas,
     context: gl.context,
+    document: overlay.document,
     externalWebGLPolicy: "reset",
     requestAnimationFrame(callback) {
       frames.push(callback);
@@ -779,8 +785,11 @@ test("can reset owned WebGL state before every rendered frame", async () => {
   });
   const programUsesAtStart = gl.programUses.length;
   frames[0](1_000);
+  const externalProgram = {};
+  gl.context.useProgram(externalProgram);
   frames[1](1_016);
-  assert.equal(gl.programUses.length, programUsesAtStart + 2);
+  assert.equal(gl.programUses.length, programUsesAtStart + 3);
+  assert.notEqual(gl.drawPrograms.at(-1), externalProgram);
   handle.stop();
 });
 
@@ -985,6 +994,36 @@ test("pauses animation while the document is hidden", async () => {
   assert.deepEqual(cancelled, [2]);
   handle.stop();
   assert.equal(documentObject.listeners.size, 0);
+
+  const initializingDocument = fakeDocument();
+  const initializingFrames = [];
+  let finishSetup;
+  const setupBlocked = new Promise((resolve) => { finishSetup = resolve; });
+  const started = start({
+    async setup() { await setupBlocked; },
+    frame() {},
+  }, {
+    canvas: fakeCanvas(),
+    context: fakeWebGl2().context,
+    document: initializingDocument,
+    visibilityPolicy: "pause",
+    requestAnimationFrame(callback) {
+      initializingFrames.push(callback);
+      return initializingFrames.length;
+    },
+    cancelAnimationFrame() {},
+    onError() {},
+  });
+  await Promise.resolve();
+  initializingDocument.hidden = true;
+  initializingDocument.listeners.get("visibilitychange")();
+  initializingDocument.hidden = false;
+  initializingDocument.listeners.get("visibilitychange")();
+  assert.equal(initializingFrames.length, 0);
+  finishSetup();
+  const initialized = await started;
+  assert.equal(initializingFrames.length, 1);
+  initialized.stop();
 });
 
 test("tracks display size and handles WebGL context loss deterministically", async () => {
@@ -1247,7 +1286,7 @@ test("normalizes wheel, keyboard code, modifiers, focus, and default policy", as
     preventDefault,
   });
   documentObject.listeners.get("keydown")({
-    key: "a",
+    key: "A",
     code: "KeyA",
     altKey: true,
     preventDefault,
@@ -1298,6 +1337,14 @@ test("normalizes wheel, keyboard code, modifiers, focus, and default policy", as
       },
     ],
   );
+  assert.equal(keyDown("A"), true);
+  documentObject.listeners.get("keyup")({
+    key: "a",
+    code: "KeyA",
+    preventDefault,
+  });
+  assert.equal(keyDown("A"), false);
+  assert.equal(prevented, 4);
   handle.stop();
 });
 
@@ -1714,6 +1761,12 @@ test("culls bounded basic nodes without culling programmable shaders", async () 
       nodeSetPos(basicNode, 1_000_000, 0, 0);
       const programmableNode = nodeAdd(mesh, materialShader("warped"));
       nodeSetPos(programmableNode, 1_000_000, 0, 0);
+      cameraPerspective(Math.PI / 2, 0.1, 100);
+      const sphere = meshSphere(1, 8);
+      const intersecting = nodeAdd(sphere, materialBasic([1, 1, 1, 1]));
+      nodeSetPos(intersecting, 6.2, 0, 0);
+      const outside = nodeAdd(sphere, materialBasic([1, 1, 1, 1]));
+      nodeSetPos(outside, 6.5, 0, 0);
     },
   }, {
     canvas: fakeCanvas(),
@@ -1729,8 +1782,8 @@ test("culls bounded basic nodes without culling programmable shaders", async () 
     }]),
     onError() {},
   });
-  assert.deepEqual(gl.elementDraws, [36]);
-  assert.equal(runtimeStats().scene.culledNodes, 1);
+  assert.equal(gl.elementDraws.length, 2);
+  assert.equal(runtimeStats().scene.culledNodes, 2);
   handle.stop();
 });
 
@@ -1950,6 +2003,21 @@ test("enforces configured GPU resource budgets before allocation", async () => {
   }), /shader program budget exceeded: 2 > 1/);
 });
 
+test("rejects resource creation after session disposal", async () => {
+  const session = createRuntimeSession({
+    canvas: fakeCanvas(),
+    context: fakeWebGl2().context,
+    imageLoader: async () => ({ width: 1, height: 1 }),
+    onError() {},
+  });
+  await session.run({});
+  session.stop();
+
+  assert.throws(() => session.meshBox(1, 1, 1), /disposed/);
+  assert.throws(() => session.textureLoad("assets/late.png"), /disposed/);
+  assert.throws(() => session.scene.meshBox(1, 1, 1), /disposed/);
+});
+
 test("normalizes texture options and reports WebGL capabilities", async () => {
   const gl = fakeWebGl2({
     maxTextureSize: 2048,
@@ -2008,11 +2076,31 @@ test("rejects oversized decoded textures before uploading them", async () => {
   }, {
     canvas: fakeCanvas(),
     context: gl.context,
-    resourceLimits: { maxTextureDimension: 32 },
+    resourceLimits: { maxTextureWidth: 32 },
     imageLoader: async () => ({ width: 64, height: 16 }),
     onError() {},
-  }), /exceeding the 32px texture limit/);
+  }), /exceeding the 32px texture width limit/);
   assert.equal(gl.textureUploads.length, 1);
+
+  await assert.rejects(start({
+    setup() { textureLoad("assets/tall.png"); },
+  }, {
+    canvas: fakeCanvas(),
+    context: fakeWebGl2().context,
+    resourceLimits: { maxTextureHeight: 32 },
+    imageLoader: async () => ({ width: 16, height: 64 }),
+    onError() {},
+  }), /exceeding the 32px texture height limit/);
+
+  await assert.rejects(start({
+    setup() { textureLoad("assets/heavy.png"); },
+  }, {
+    canvas: fakeCanvas(),
+    context: fakeWebGl2().context,
+    resourceLimits: { maxTextureBytes: 512 },
+    imageLoader: async () => ({ width: 16, height: 16 }),
+    onError() {},
+  }), /1024 decoded bytes.*512 byte texture limit/);
 
   let dimensionGetterCalls = 0;
   const accessorSource = { height: 1 };
@@ -2484,6 +2572,8 @@ function fakeWebGl2(options = {}) {
   const createdPrograms = [];
   const deletedPrograms = [];
   const programUses = [];
+  const drawPrograms = [];
+  let currentProgram = null;
   let shaderChecks = 0;
   const webglErrors = [...(options.webglErrors ?? [])];
   const attributeLocationCalls = new Map();
@@ -2602,6 +2692,7 @@ function fakeWebGl2(options = {}) {
     disable() {},
     drawArrays(_mode, _first, count) {
       draws.push(count);
+      drawPrograms.push(currentProgram);
     },
     drawElements(_mode, count) {
       elementDraws.push(count);
@@ -2697,7 +2788,10 @@ function fakeWebGl2(options = {}) {
         value: [...value],
       });
     },
-    useProgram(program) { programUses.push(program); },
+    useProgram(program) {
+      currentProgram = program;
+      programUses.push(program);
+    },
     vertexAttribPointer() {},
     viewport(...value) { viewports.push(value); },
   };
@@ -2726,5 +2820,6 @@ function fakeWebGl2(options = {}) {
     createdPrograms,
     deletedPrograms,
     programUses,
+    drawPrograms,
   };
 }

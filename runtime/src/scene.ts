@@ -62,7 +62,9 @@ export interface RuntimeResourceLimits {
   readonly maxMeshBytes?: number;
   readonly maxNodes?: number;
   readonly maxTextures?: number;
-  readonly maxTextureDimension?: number;
+  readonly maxTextureBytes?: number;
+  readonly maxTextureWidth?: number;
+  readonly maxTextureHeight?: number;
   readonly maxShaderPrograms?: number;
 }
 
@@ -405,6 +407,7 @@ export class WebGL2SceneRenderer {
   }
 
   public textureLoad(path: string, options?: TextureOptions): TextureHandle {
+    this.assertActive();
     const safePath = validateAssetPath(path);
     const safeOptions = validateTextureOptions(options);
     const cacheKey = textureCacheKey(safePath, safeOptions);
@@ -620,6 +623,7 @@ export class WebGL2SceneRenderer {
   }
 
   private createMesh(data: MeshData): MeshHandle {
+    this.assertActive();
     this.assertResourceCount(
       "meshes",
       this.meshes.size,
@@ -722,10 +726,13 @@ export class WebGL2SceneRenderer {
     if (depth + radius < this.camera.near) return true;
     if (depth - radius > this.camera.far) return true;
     if (depth - radius <= this.camera.near) return false;
-    const vertical = depth * Math.tan(this.camera.verticalFov / 2);
-    const horizontal = vertical * (Math.max(1, width) / Math.max(1, height));
-    return Math.abs(center[0]) > horizontal + radius ||
-      Math.abs(center[1]) > vertical + radius;
+    const verticalSlope = Math.tan(this.camera.verticalFov / 2);
+    const horizontalSlope = verticalSlope *
+      (Math.max(1, width) / Math.max(1, height));
+    const horizontalRadius = radius * Math.hypot(1, horizontalSlope);
+    const verticalRadius = radius * Math.hypot(1, verticalSlope);
+    return Math.abs(center[0]) > depth * horizontalSlope + horizontalRadius ||
+      Math.abs(center[1]) > depth * verticalSlope + verticalRadius;
   }
 
   private drawItem(
@@ -849,13 +856,30 @@ export class WebGL2SceneRenderer {
       return;
     }
     const dimensions = imageDimensions(image, handle.path);
-    const dimensionLimit = this.textureDimensionLimit();
-    if (
-      dimensions.width > dimensionLimit ||
-      dimensions.height > dimensionLimit
-    ) {
+    const hardwareLimit = this.textureDimensionLimit();
+    const widthLimit = Math.min(
+      this.resourceLimits.maxTextureWidth ?? Infinity,
+      hardwareLimit,
+    );
+    const heightLimit = Math.min(
+      this.resourceLimits.maxTextureHeight ?? Infinity,
+      hardwareLimit,
+    );
+    if (dimensions.width > widthLimit) {
       throw new RangeError(
-        `texture \`${handle.path}\` is ${dimensions.width}x${dimensions.height}, exceeding the ${dimensionLimit}px texture limit`,
+        `texture \`${handle.path}\` is ${dimensions.width}px wide, exceeding the ${widthLimit}px texture width limit`,
+      );
+    }
+    if (dimensions.height > heightLimit) {
+      throw new RangeError(
+        `texture \`${handle.path}\` is ${dimensions.height}px high, exceeding the ${heightLimit}px texture height limit`,
+      );
+    }
+    const decodedBytes = dimensions.width * dimensions.height * 4;
+    const byteLimit = this.resourceLimits.maxTextureBytes;
+    if (byteLimit !== undefined && decodedBytes > byteLimit) {
+      throw new RangeError(
+        `texture \`${handle.path}\` requires ${decodedBytes} decoded bytes, exceeding the ${byteLimit} byte texture limit`,
       );
     }
     this.stateCache.activateTexture(this.gl.TEXTURE0);
@@ -926,7 +950,6 @@ export class WebGL2SceneRenderer {
   }
 
   private textureDimensionLimit(): number {
-    const configured = this.resourceLimits.maxTextureDimension ?? Infinity;
     const reported: unknown = this.gl.getParameter(this.gl.MAX_TEXTURE_SIZE);
     if (
       typeof reported !== "number" ||
@@ -935,7 +958,11 @@ export class WebGL2SceneRenderer {
     ) {
       throw new Error("WebGL returned an invalid maximum texture dimension");
     }
-    return Math.min(configured, reported);
+    return reported;
+  }
+
+  private assertActive(): void {
+    if (this.disposed) throw new Error("scene renderer has been disposed");
   }
 
   private assertResourceCount(
