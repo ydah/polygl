@@ -138,7 +138,7 @@ gh run watch RUN_ID --exit-status
 
 After approval in the `release` environment, the workflow:
 
-1. generates a CycloneDX 1.6 SBOM, signs its association with all five native
+1. generates an SPDX 2.3 SBOM, signs its association with all five native
    archives through GitHub OIDC/Sigstore attestations, and publishes both the
    SBOM and checksums;
 2. publishes Rust crates in the dependency stages from ADR 0029;

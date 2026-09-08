@@ -230,7 +230,7 @@ requested feature was implemented.
 | 177 | complete | Release executable clean builds and independent application build processes are both compared byte-for-byte. |
 | 178 | complete | Pull requests run pinned `cargo-semver-checks` for public workspace crates. |
 | 179 | complete | Native archives sort portable entry names and fix mode, uid/gid, tar mtime, and gzip timestamp; reversed-input tests produce identical bytes. |
-| 180 | complete | Release preflight generates and validates a CycloneDX 1.6 SBOM and includes it in checksums. |
+| 180 | complete | Release preflight generates and validates an SPDX 2.3 SBOM and includes it in checksums. |
 | 181 | complete | Tag releases receive GitHub OIDC/Sigstore SBOM attestations over checksum-selected native archives. |
 | 182 | complete | Cargo/npm publication scripts maintain validated per-package ledgers and skip an already published matching version, allowing a partial release to resume. |
 | 183 | complete | macOS uses deployment target 11.0; release binaries are inspected for that floor, glibc <=2.39, or a valid Windows PE. |

@@ -214,20 +214,20 @@ jobs:
           ./osv-scanner scan source
           --config osv-scanner.toml
           --lockfile Cargo.lock
-          --format cyclonedx-1-6
+          --format spdx-2-3
           --all-packages
           --output-file
-          "artifacts/release/polygl-${{ needs.validate.outputs.version }}.cdx.json"
+          "artifacts/release/polygl-${{ needs.validate.outputs.version }}.spdx.json"
 
       - name: Validate SBOM and generate checksums
         shell: bash
         run: |
           cd artifacts/release
           jq -e \
-            '.bomFormat == "CycloneDX" and .specVersion == "1.6" and (.components | length > 0)' \
-            "polygl-${{ needs.validate.outputs.version }}.cdx.json"
+            '.spdxVersion == "SPDX-2.3" and .SPDXID == "SPDXRef-DOCUMENT" and (.packages | length > 0)' \
+            "polygl-${{ needs.validate.outputs.version }}.spdx.json"
           sha256sum ./*.tar.gz | LC_ALL=C sort > ARTIFACT_SHA256SUMS
-          sha256sum ./*.tar.gz ./*.cdx.json | LC_ALL=C sort > SHA256SUMS
+          sha256sum ./*.tar.gz ./*.spdx.json | LC_ALL=C sort > SHA256SUMS
           sha256sum --check SHA256SUMS
 
       - name: Build the complete Cargo workspace
@@ -365,7 +365,7 @@ jobs:
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-checksums: release-preflight/artifacts/release/ARTIFACT_SHA256SUMS
-          sbom-path: release-preflight/artifacts/release/polygl-${{ needs.validate.outputs.version }}.cdx.json
+          sbom-path: release-preflight/artifacts/release/polygl-${{ needs.validate.outputs.version }}.spdx.json
 
   crates-publish:
     name: Publish crates.io packages
@@ -444,7 +444,7 @@ jobs:
           PRERELEASE: ${{ needs.validate.outputs.prerelease }}
         run: |
           archives=(release-preflight/artifacts/release/*.tar.gz)
-          sbom=release-preflight/artifacts/release/polygl-${{ needs.validate.outputs.version }}.cdx.json
+          sbom=release-preflight/artifacts/release/polygl-${{ needs.validate.outputs.version }}.spdx.json
           checksums=release-preflight/artifacts/release/SHA256SUMS
           artifact_checksums=release-preflight/artifacts/release/ARTIFACT_SHA256SUMS
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
