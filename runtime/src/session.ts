@@ -238,6 +238,7 @@ export class RuntimeSession implements RuntimeHandle {
   }
 
   public async run(source: PolyglProgramSource): Promise<void> {
+    if (this.stopped) throw new Error("runtime session has been stopped");
     try {
       this.replaceShaderBundle(this.initialShaderBundle, this.requireRuntimeAbi);
       const program = validateProgram(

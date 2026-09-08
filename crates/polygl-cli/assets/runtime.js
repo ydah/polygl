@@ -3717,6 +3717,8 @@ export class RuntimeSession {
         }
     }
     async run(source) {
+        if (this.stopped)
+            throw new Error("runtime session has been stopped");
         try {
             this.replaceShaderBundle(this.initialShaderBundle, this.requireRuntimeAbi);
             const program = validateProgram(typeof source === "function" ? await source() : source);

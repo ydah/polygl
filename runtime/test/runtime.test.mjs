@@ -2038,6 +2038,18 @@ test("rejects resource creation after session disposal", async () => {
   assert.throws(() => session.materialBasic([1, 1, 1, 1]), /disposed/);
   assert.throws(() => session.nodeAdd(mesh, material), /disposed/);
   assert.throws(() => session.scene.meshBox(1, 1, 1), /disposed/);
+
+  const stoppedGl = fakeWebGl2();
+  const stoppedSession = createRuntimeSession({
+    canvas: fakeCanvas(),
+    context: stoppedGl.context,
+    shaderBundle: shaderBundle([{ name: "late" }]),
+    onError() {},
+  });
+  stoppedSession.stop();
+  const createdPrograms = stoppedGl.createdPrograms.length;
+  await assert.rejects(stoppedSession.run({}), /stopped/);
+  assert.equal(stoppedGl.createdPrograms.length, createdPrograms);
 });
 
 test("normalizes texture options and reports WebGL capabilities", async () => {
