@@ -12,7 +12,7 @@
     "test": "tsc --project tsconfig.json && node scripts/bundle.mjs --check && node --test test/*.test.mjs"
   },
   "devDependencies": {
-    "typescript": "5.9.3"
+    "typescript": "7.0.2"
   },
   "engines": {
     "node": "24.14.1"
