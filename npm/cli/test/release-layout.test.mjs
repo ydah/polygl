@@ -58,6 +58,13 @@ test("release workflow packs only explicit local package paths", async () => {
     "./npm/cli:polygl-cli",
   ]);
   assert.ok(specs.every((spec) => spec.startsWith("./npm/")));
+
+  const retained = workflow.match(
+    /name: release-preflight\n([\s\S]*?)\n\s+if-no-files-found: error/,
+  )?.[0];
+  assert.ok(retained);
+  assert.match(retained, /include-hidden-files: true/);
+  assert.match(retained, /\.node-version/);
 });
 
 test("launcher, release staging, and native package manifests stay aligned", async () => {
