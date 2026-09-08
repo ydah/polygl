@@ -462,7 +462,8 @@ impl WarningSelector {
             && value[1..].bytes().all(|byte| byte.is_ascii_digit())
             && polygl_span::DiagnosticCode::parse(value)
                 .is_some_and(|code| code.metadata().severity == polygl_span::Severity::Warning);
-        let is_family = value.len() == 5
+        let is_family = value.is_ascii()
+            && value.len() == 5
             && value.starts_with('W')
             && value[1..3].bytes().all(|byte| byte.is_ascii_digit())
             && value.ends_with("xx");
@@ -1370,13 +1371,6 @@ fn build_with_package(
     watched_config: Option<&Path>,
     messages: &mut dyn Write,
 ) -> Result<BuildReport, CliError> {
-    validate_destination_separation(
-        destination,
-        source_path,
-        watched_config,
-        package.html_template.as_deref(),
-        package.public_dir.as_deref(),
-    )?;
     let source = load_source(source_path)?;
     let compiler = compiler();
     let adapter = match language {
@@ -1386,13 +1380,23 @@ fn build_with_package(
         })?,
         None => adapter_for_source(compiler.adapters(), source_path)?,
     };
+    let runtime = runtime_file_name(package);
+    let runtime_module = format!("./{runtime}");
     let compiled = compiler
-        .compile(&source, adapter.id(), options.compiler())
+        .compile_with_runtime_module(&source, adapter.id(), options.compiler(), &runtime_module)
         .map_err(|error| compilation_error(error, &source))?;
     if options.profile {
         write_profile(&compiled, messages)?;
     }
     let assets = prepare_assets(source_path, &compiled.assets)?;
+    validate_destination_separation(
+        destination,
+        source_path,
+        watched_config,
+        package.html_template.as_deref(),
+        package.public_dir.as_deref(),
+        &assets.source_paths,
+    )?;
     write_diagnostics(
         &compiled.warnings,
         &source,
@@ -1442,6 +1446,7 @@ fn validate_destination_separation(
     config: Option<&Path>,
     template: Option<&Path>,
     public: Option<&Path>,
+    assets: &[PathBuf],
 ) -> Result<(), CliError> {
     let destination = comparable_path(destination)?;
     for (label, input) in [
@@ -1467,6 +1472,17 @@ fn validate_destination_separation(
                 "output directory {} and public directory {} may not contain one another",
                 destination.display(),
                 public.display()
+            ))
+            .with_kind(CliErrorKind::Usage));
+        }
+    }
+    for asset in assets {
+        let asset = comparable_path(asset)?;
+        if asset.starts_with(&destination) {
+            return Err(CliError::new(format!(
+                "output directory {} may not contain the texture asset {}",
+                destination.display(),
+                asset.display()
             ))
             .with_kind(CliErrorKind::Usage));
         }
@@ -1575,11 +1591,7 @@ fn prepare_generated_files(
     } else {
         "shaders.js".to_owned()
     };
-    let runtime = if package.hashed_filenames {
-        content_hashed_name("runtime", "js", RUNTIME_BUNDLE)
-    } else {
-        "runtime.js".to_owned()
-    };
+    let runtime = runtime_file_name(package);
     let entrypoints = ArtifactEntrypoints {
         app,
         shaders,
@@ -1597,6 +1609,14 @@ fn prepare_generated_files(
         files.push(source_map);
     }
     Ok((files, entrypoints))
+}
+
+fn runtime_file_name(package: &PackageOptions) -> String {
+    if package.hashed_filenames {
+        content_hashed_name("runtime", "js", RUNTIME_BUNDLE)
+    } else {
+        "runtime.js".to_owned()
+    }
 }
 
 fn content_hashed_name(stem: &str, extension: &str, contents: &[u8]) -> String {
@@ -3240,6 +3260,33 @@ sub setup {
             assert!(error.contains("E0501"), "{path}: {error}");
             assert!(error.contains("not portable"), "{path}: {error}");
         }
+
+        fs::write(
+            &source,
+            "def setup\n  texture_load(\"assets/checker.bin\")\nend\n",
+        )
+        .unwrap();
+        fs::write(asset_directory.join("original.psd"), b"source material").unwrap();
+        let error = run(
+            arguments([
+                "build",
+                source.to_str().unwrap(),
+                "-o",
+                asset_directory.to_str().unwrap(),
+            ]),
+            &mut Vec::new(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("may not contain the texture asset"));
+        assert_eq!(
+            fs::read(asset_directory.join("checker.bin")).unwrap(),
+            texture_bytes
+        );
+        assert_eq!(
+            fs::read(asset_directory.join("original.psd")).unwrap(),
+            b"source material"
+        );
         fs::remove_dir_all(temporary).unwrap();
     }
 
@@ -3370,6 +3417,15 @@ sub setup {
             &mut Vec::new(),
         )
         .unwrap();
+        let selector_error = parse_args(arguments([
+            "check",
+            warning.to_str().unwrap(),
+            "--allow",
+            "W€x",
+        ]))
+        .unwrap_err()
+        .to_string();
+        assert!(selector_error.contains("warning selector"));
         let too_many = run(
             arguments(["check", warning.to_str().unwrap(), "--max-warnings", "0"]),
             &mut Vec::new(),
@@ -3420,6 +3476,9 @@ external_webgl_policy = "reset"
 
 [runtime.resource_limits]
 max_meshes = 4
+max_texture_bytes = 4096
+max_texture_width = 32
+max_texture_height = 16
 "#,
         )
         .unwrap();
@@ -3451,7 +3510,16 @@ max_meshes = 4
         assert!(html.contains("\"seed\":42"));
         assert!(html.contains("\"externalWebGLPolicy\":\"reset\""));
         assert!(html.contains("\"maxMeshes\":4"));
+        assert!(html.contains("\"maxTextureBytes\":4096"));
+        assert!(html.contains("\"maxTextureWidth\":32"));
+        assert!(html.contains("\"maxTextureHeight\":16"));
         assert!(!html.contains("polygl:app"));
+
+        let runtime_name = manifest["entrypoints"]["runtime"].as_str().unwrap();
+        let app_name = manifest["entrypoints"]["app"].as_str().unwrap();
+        let app = fs::read_to_string(output.join(app_name)).unwrap();
+        assert!(app.contains(&format!("from \"./{runtime_name}\"")));
+        assert!(!app.contains("from \"./runtime.js\""));
 
         let debug_output = temporary.join("debug-site");
         run(

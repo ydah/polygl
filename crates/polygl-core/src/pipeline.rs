@@ -183,6 +183,16 @@ impl<'adapter> Compiler<'adapter> {
         language_id: &str,
         options: CompileOptions,
     ) -> Result<CompileOutput, CompileError> {
+        self.compile_with_runtime_module(source, language_id, options, "./runtime.js")
+    }
+
+    pub fn compile_with_runtime_module(
+        &self,
+        source: &SourceFile,
+        language_id: &str,
+        options: CompileOptions,
+        runtime_module: &str,
+    ) -> Result<CompileOutput, CompileError> {
         validate_options(source, options)?;
         let adapter = self
             .adapters
@@ -194,7 +204,7 @@ impl<'adapter> Compiler<'adapter> {
         let mut passes = PassManager::default();
         let typed =
             self.analyze_managed(source, adapter, options.budget, &validator, &mut passes)?;
-        self.compile_typed(source, typed, options, &validator, passes)
+        self.compile_typed(source, typed, options, runtime_module, &validator, passes)
     }
 
     fn compile_typed(
@@ -202,6 +212,7 @@ impl<'adapter> Compiler<'adapter> {
         source: &SourceFile,
         typed: TypedHir,
         options: CompileOptions,
+        runtime_module: &str,
         validator: &StageValidator,
         mut passes: PassManager,
     ) -> Result<CompileOutput, CompileError> {
@@ -253,6 +264,7 @@ impl<'adapter> Compiler<'adapter> {
             true,
             || {
                 JavaScriptBackend::new(options.mode)
+                    .with_runtime_module(runtime_module)
                     .with_source_map_mode(options.source_map)
                     .with_sources_content(options.sources_content)
                     .generate(&split.program().host, std::slice::from_ref(source))
