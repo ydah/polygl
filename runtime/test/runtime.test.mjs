@@ -1345,7 +1345,13 @@ test("normalizes wheel, keyboard code, modifiers, focus, and default policy", as
   });
   assert.equal(keyDown("A"), false);
   assert.equal(prevented, 4);
+  documentObject.listeners.get("keydown")({
+    key: "B",
+    code: "KeyB",
+    preventDefault,
+  });
   handle.stop();
+  assert.equal(handle.keyDown("B"), false);
 });
 
 test("draws text on a transformed Canvas2D overlay", async () => {
@@ -1767,6 +1773,13 @@ test("culls bounded basic nodes without culling programmable shaders", async () 
       nodeSetPos(intersecting, 6.2, 0, 0);
       const outside = nodeAdd(sphere, materialBasic([1, 1, 1, 1]));
       nodeSetPos(outside, 6.5, 0, 0);
+      const verticallyIntersecting = nodeAdd(
+        sphere,
+        materialBasic([1, 1, 1, 1]),
+      );
+      nodeSetPos(verticallyIntersecting, 0, 6.2, 0);
+      const verticallyOutside = nodeAdd(sphere, materialBasic([1, 1, 1, 1]));
+      nodeSetPos(verticallyOutside, 0, 6.5, 0);
     },
   }, {
     canvas: fakeCanvas(),
@@ -1782,8 +1795,8 @@ test("culls bounded basic nodes without culling programmable shaders", async () 
     }]),
     onError() {},
   });
-  assert.equal(gl.elementDraws.length, 2);
-  assert.equal(runtimeStats().scene.culledNodes, 2);
+  assert.equal(gl.elementDraws.length, 3);
+  assert.equal(runtimeStats().scene.culledNodes, 3);
   handle.stop();
 });
 
@@ -2004,17 +2017,26 @@ test("enforces configured GPU resource budgets before allocation", async () => {
 });
 
 test("rejects resource creation after session disposal", async () => {
+  let mesh;
+  let material;
   const session = createRuntimeSession({
     canvas: fakeCanvas(),
     context: fakeWebGl2().context,
     imageLoader: async () => ({ width: 1, height: 1 }),
     onError() {},
   });
-  await session.run({});
+  await session.run({
+    setup() {
+      mesh = session.meshBox(1, 1, 1);
+      material = session.materialBasic([1, 1, 1, 1]);
+    },
+  });
   session.stop();
 
   assert.throws(() => session.meshBox(1, 1, 1), /disposed/);
   assert.throws(() => session.textureLoad("assets/late.png"), /disposed/);
+  assert.throws(() => session.materialBasic([1, 1, 1, 1]), /disposed/);
+  assert.throws(() => session.nodeAdd(mesh, material), /disposed/);
   assert.throws(() => session.scene.meshBox(1, 1, 1), /disposed/);
 });
 
@@ -2100,7 +2122,20 @@ test("rejects oversized decoded textures before uploading them", async () => {
     resourceLimits: { maxTextureBytes: 512 },
     imageLoader: async () => ({ width: 16, height: 16 }),
     onError() {},
-  }), /1024 decoded bytes.*512 byte texture limit/);
+  }), /texture byte budget exceeded: 1024 > 512/);
+
+  await assert.rejects(start({
+    setup() {
+      textureLoad("assets/first.png");
+      textureLoad("assets/second.png");
+    },
+  }, {
+    canvas: fakeCanvas(),
+    context: fakeWebGl2().context,
+    resourceLimits: { maxTextureBytes: 400 },
+    imageLoader: async () => ({ width: 8, height: 8 }),
+    onError() {},
+  }), /texture byte budget exceeded: 512 > 400/);
 
   let dimensionGetterCalls = 0;
   const accessorSource = { height: 1 };

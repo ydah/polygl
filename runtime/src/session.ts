@@ -314,6 +314,7 @@ export class RuntimeSession implements RuntimeHandle {
     );
     this.windowObject?.removeEventListener("blur", this.handleBlur);
     this.windowObject?.removeEventListener("resize", this.handleResize);
+    this.pressedKeys.clear();
     this.renderer.dispose();
     this.scene.dispose();
     this.shaderRegistry.dispose();

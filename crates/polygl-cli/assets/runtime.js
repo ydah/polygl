@@ -2503,6 +2503,7 @@ export class WebGL2SceneRenderer {
         this.startupPhase = true;
         this.disposed = false;
         this.meshBytes = 0;
+        this.textureBytes = 0;
         this.drawCalls = 0;
         this.triangles = 0;
         this.culledNodes = 0;
@@ -2547,6 +2548,7 @@ export class WebGL2SceneRenderer {
         return this.createMesh(customMesh(vertices, indices));
     }
     materialBasic(color) {
+        this.assertActive();
         const safeColor = fixedVector(color, 4, "basic material color");
         const material = brand({
             kind: "basic",
@@ -2556,6 +2558,7 @@ export class WebGL2SceneRenderer {
         return Object.freeze(material);
     }
     nodeAdd(mesh, material) {
+        this.assertActive();
         const resource = this.requireMesh(mesh);
         this.assertResourceCount("scene nodes", this.nodes.size, this.resourceLimits.maxNodes);
         if (this.basicMaterials.has(material)) {
@@ -2686,6 +2689,7 @@ export class WebGL2SceneRenderer {
             texture,
             options: safeOptions,
             controller: new AbortController(),
+            byteLength: 0,
             loaded: false,
             disposed: false,
             references: 0,
@@ -2709,6 +2713,7 @@ export class WebGL2SceneRenderer {
         resource.disposed = true;
         resource.controller.abort();
         this.textures.delete(resource.cacheKey);
+        this.textureBytes -= resource.byteLength;
         this.gl.deleteTexture(resource.texture);
     }
     shaderSet(node, uniformName, value) {
@@ -2822,6 +2827,7 @@ export class WebGL2SceneRenderer {
         this.nodes.clear();
         this.textures.clear();
         this.pendingSetupAssets.clear();
+        this.textureBytes = 0;
     }
     createMesh(data) {
         this.assertActive();
@@ -3000,8 +3006,9 @@ export class WebGL2SceneRenderer {
         }
         const decodedBytes = dimensions.width * dimensions.height * 4;
         const byteLimit = this.resourceLimits.maxTextureBytes;
-        if (byteLimit !== undefined && decodedBytes > byteLimit) {
-            throw new RangeError(`texture \`${handle.path}\` requires ${decodedBytes} decoded bytes, exceeding the ${byteLimit} byte texture limit`);
+        if (byteLimit !== undefined &&
+            this.textureBytes + decodedBytes > byteLimit) {
+            throw new RangeError(`texture byte budget exceeded: ${this.textureBytes + decodedBytes} > ${byteLimit}`);
         }
         this.stateCache.activateTexture(this.gl.TEXTURE0);
         this.stateCache.bindTexture2d(handle.texture);
@@ -3011,6 +3018,8 @@ export class WebGL2SceneRenderer {
         if (handle.options.mipmaps) {
             this.gl.generateMipmap(this.gl.TEXTURE_2D);
         }
+        handle.byteLength = decodedBytes;
+        this.textureBytes += decodedBytes;
         handle.loaded = true;
     }
     applyTextureParameters(options) {
@@ -3770,6 +3779,7 @@ export class RuntimeSession {
         this.documentObject?.removeEventListener("visibilitychange", this.handleVisibilityChange);
         this.windowObject?.removeEventListener("blur", this.handleBlur);
         this.windowObject?.removeEventListener("resize", this.handleResize);
+        this.pressedKeys.clear();
         this.renderer.dispose();
         this.scene.dispose();
         this.shaderRegistry.dispose();

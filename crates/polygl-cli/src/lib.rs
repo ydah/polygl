@@ -1371,6 +1371,14 @@ fn build_with_package(
     watched_config: Option<&Path>,
     messages: &mut dyn Write,
 ) -> Result<BuildReport, CliError> {
+    validate_destination_separation(
+        destination,
+        source_path,
+        watched_config,
+        package.html_template.as_deref(),
+        package.public_dir.as_deref(),
+        &[],
+    )?;
     let source = load_source(source_path)?;
     let compiler = compiler();
     let adapter = match language {
@@ -3531,6 +3539,7 @@ max_texture_height = 16
         let app = fs::read_to_string(output.join(app_name)).unwrap();
         assert!(app.contains(&format!("from \"./{runtime_name}\"")));
         assert!(!app.contains("from \"./runtime.js\""));
+        assert!(!output.join("runtime.js").exists());
 
         let debug_output = temporary.join("debug-site");
         run(
@@ -3661,6 +3670,23 @@ max_texture_height = 16
                 .contains("may not contain the source file")
         );
         assert!(source.is_file());
+
+        fs::write(&source, "invalid syntax").unwrap();
+        let error = run(
+            arguments([
+                "build",
+                source.to_str().unwrap(),
+                "-o",
+                destructive_output.to_str().unwrap(),
+            ]),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("may not contain the source file")
+        );
         fs::remove_dir_all(temporary).unwrap();
     }
 
