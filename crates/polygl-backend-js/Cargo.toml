@@ -12,7 +12,7 @@ base64 = "=0.23.1"
 polygl-lir = { path = "../polygl-lir", version = "=0.2.1" }
 polygl-span = { path = "../polygl-span", version = "=0.2.1" }
 polygl-types = { path = "../polygl-types", version = "=0.2.1" }
-serde_json = "=1.0.151"
+serde_json = "=1.0.154"
 
 [dev-dependencies]
 polygl-builtins = { path = "../polygl-builtins", version = "=0.2.1" }
