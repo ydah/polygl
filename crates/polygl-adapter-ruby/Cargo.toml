@@ -11,7 +11,7 @@ repository.workspace = true
 polygl-adapter-api = { path = "../polygl-adapter-api", version = "=0.2.1" }
 polygl-hir = { path = "../polygl-hir", version = "=0.2.1" }
 polygl-span = { path = "../polygl-span", version = "=0.2.1" }
-ruby-prism = "=1.9.0"
+ruby-prism = "=2.0.0"
 
 [dev-dependencies]
 polygl-builtins = { path = "../polygl-builtins", version = "=0.2.1" }
