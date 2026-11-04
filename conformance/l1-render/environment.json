@@ -5,12 +5,12 @@
     "os": "ubuntu-24.04",
     "architecture": "x64",
     "node": "24.14.1",
-    "playwright": "1.57.0"
+    "playwright": "1.62.1"
   },
   "browser": {
     "name": "chromium",
-    "version": "143.0.7499.4",
-    "revision": "1200"
+    "version": "151.0.7922.34",
+    "revision": "1234"
   },
   "graphics": {
     "api": "WebGL2",
