@@ -58,6 +58,19 @@ test("release workflow packs only explicit local package paths", async () => {
     "./npm/cli:polygl-cli",
   ]);
   assert.ok(specs.every((spec) => spec.startsWith("./npm/")));
+
+  const retained = workflow.match(
+    /name: release-preflight\n([\s\S]*?)\n\s+if-no-files-found: error/,
+  )?.[0];
+  assert.ok(retained);
+  assert.match(retained, /include-hidden-files: true/);
+  assert.match(retained, /\.node-version/);
+  assert.match(workflow, /--format spdx-2-3/);
+  assert.match(
+    workflow,
+    /\.spdxVersion == "SPDX-2\.3" and \.SPDXID == "SPDXRef-DOCUMENT"/,
+  );
+  assert.doesNotMatch(workflow, /\.cdx\.json/);
 });
 
 test("launcher, release staging, and native package manifests stay aligned", async () => {

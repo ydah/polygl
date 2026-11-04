@@ -8,8 +8,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-polygl-span = { path = "../polygl-span", version = "=0.1.0" }
-tree-sitter = "=0.26.11"
+polygl-span = { path = "../polygl-span", version = "=0.2.1" }
+tree-sitter = "=0.26.12"
 
 [dev-dependencies]
 ts-parser-perl = "=1.2.1"
