@@ -12,7 +12,7 @@ permalink: /support/
 | Native CLI | Linux x64/arm64, macOS x64/arm64, Windows x64 | Build, archive/hash verification, clean install, example build |
 | Linux runtime floor | glibc 2.39 or older requirement | ELF version inspection on release artifacts |
 | macOS runtime floor | macOS 11.0 | deployment target plus Mach-O minimum-version inspection |
-| Browser baseline | Chromium 143 + pinned SwiftShader, WebGL 2 | blocking pixel/semantic conformance |
+| Browser baseline | Chromium 151 + pinned SwiftShader, WebGL 2 | blocking pixel/semantic conformance |
 | Browser portability | current pinned Playwright Firefox and WebKit, WebGL 2 | scheduled/manual non-blocking smoke |
 
 Browser conformance fixes the renderer, browser revision, viewport, and ABI in
