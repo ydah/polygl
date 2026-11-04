@@ -7,7 +7,7 @@
     "test:portability": "playwright test --config playwright.portability.config.mjs"
   },
   "devDependencies": {
-    "@playwright/test": "1.57.0"
+    "@playwright/test": "1.62.1"
   },
   "engines": {
     "node": "24.14.1"
