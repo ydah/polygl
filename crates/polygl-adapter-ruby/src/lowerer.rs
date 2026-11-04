@@ -212,7 +212,7 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
 
     pub(crate) fn span(&self, location: Location<'_>) -> Span {
         self.source
-            .span(location.start_offset(), location.end_offset())
+            .span(location.start() as usize, location.end() as usize)
             .expect("Prism nodes must use source byte boundaries")
     }
 
@@ -226,7 +226,7 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
         location: Location<'_>,
     ) -> Option<polygl_hir::TypeExpr> {
         self.annotations
-            .take(name, location.start_offset(), self.source)
+            .take(name, location.start() as usize, self.source)
     }
 
     pub(crate) fn parameter_annotation_for(
@@ -235,6 +235,6 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
         definition: Location<'_>,
     ) -> Option<polygl_hir::TypeExpr> {
         self.annotations
-            .take_parameter(name, definition.start_offset(), self.source)
+            .take_parameter(name, definition.start() as usize, self.source)
     }
 }

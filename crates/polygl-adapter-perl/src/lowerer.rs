@@ -647,6 +647,7 @@ impl<'source, 'context, 'resolver> Lowerer<'source, 'context, 'resolver> {
     fn lower_expression(&mut self, node: Node<'_>) -> Option<Expr> {
         let span = node_span(self.source, node);
         let kind = match node.kind() {
+            "parenthesized_expression" => return self.lower_expression(node.named_child(0)?),
             "number" => self.lower_number(node)?,
             "boolean" => {
                 ExprKind::Literal(Literal::Bool(node_text(self.source, node).trim() == "true"))
@@ -1450,7 +1451,7 @@ fn variable_name(source: &SourceFile, node: Node<'_>) -> String {
 fn collection_content(node: Node<'_>) -> Node<'_> {
     if matches!(
         node.kind(),
-        "anonymous_array_expression" | "anonymous_hash_expression"
+        "anonymous_array_expression" | "anonymous_hash_expression" | "parenthesized_expression"
     ) && let Some(content) = named_children(node)
         .into_iter()
         .find(|child| child.kind() == "list_expression")

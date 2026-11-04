@@ -583,6 +583,14 @@ fn lowers_bare_returns_as_void() {
 }
 
 #[test]
+fn preserves_byte_spans_after_unicode_comments() {
+    let source = "# 日本語\ndef value\n  1\nend\n";
+    let module = lower(source).expect("Ruby after a Unicode comment should lower");
+    let span = module.items[0].span();
+    assert_eq!(&source[span.range()], "def value\n  1\nend");
+}
+
+#[test]
 fn reports_prism_parse_errors() {
     let diagnostics = lower("def setup(\n").expect_err("invalid Ruby must fail");
     let diagnostic = diagnostics.iter().next().expect("one parse error");

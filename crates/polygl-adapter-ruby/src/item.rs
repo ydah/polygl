@@ -45,7 +45,7 @@ impl Lowerer<'_, '_, '_> {
                     EntryPointKind::Vertex(_) | EntryPointKind::Fragment(_)
                 )
             })
-            .map(|_| definition.location().start_offset());
+            .map(|_| definition.location().start() as usize);
         let mut body = self.lower_body(definition.body(), span);
         self.shader_annotation_anchor = previous_shader_anchor;
         self.declared.clear();
