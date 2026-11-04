@@ -85,7 +85,7 @@ Merge the release preparation commit to `main`. Run the release workflow
 manually with the exact Cargo version:
 
 ```console
-gh workflow run release.yml --ref main -f version=0.1.0
+gh workflow run release.yml --ref main -f version=0.2.1
 gh run list --workflow release.yml --limit 1
 gh run watch RUN_ID --exit-status
 gh run download RUN_ID --name release-preflight
@@ -130,15 +130,15 @@ reachable from `origin/main`, and the tag version must exactly match Cargo:
 ```console
 git switch main
 git pull --ff-only
-git tag -s v0.1.0 -m "v0.1.0"
-git push origin v0.1.0
+git tag -s v0.2.1 -m "v0.2.1"
+git push origin v0.2.1
 gh run list --workflow release.yml --limit 1
 gh run watch RUN_ID --exit-status
 ```
 
 After approval in the `release` environment, the workflow:
 
-1. generates a CycloneDX 1.6 SBOM, signs its association with all five native
+1. generates an SPDX 2.3 SBOM, signs its association with all five native
    archives through GitHub OIDC/Sigstore attestations, and publishes both the
    SBOM and checksums;
 2. publishes Rust crates in the dependency stages from ADR 0029;

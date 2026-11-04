@@ -156,7 +156,9 @@ function validateResourceLimits(value: unknown): RuntimeResourceLimits {
     "maxMeshBytes",
     "maxNodes",
     "maxTextures",
-    "maxTextureDimension",
+    "maxTextureBytes",
+    "maxTextureWidth",
+    "maxTextureHeight",
     "maxShaderPrograms",
   ] as const;
   for (const name of properties.keys()) {
@@ -168,9 +170,17 @@ function validateResourceLimits(value: unknown): RuntimeResourceLimits {
   const maxMeshBytes = optionalResourceLimit(properties, "maxMeshBytes");
   const maxNodes = optionalResourceLimit(properties, "maxNodes");
   const maxTextures = optionalResourceLimit(properties, "maxTextures");
-  const maxTextureDimension = optionalResourceLimit(
+  const maxTextureBytes = optionalResourceLimit(
     properties,
-    "maxTextureDimension",
+    "maxTextureBytes",
+  );
+  const maxTextureWidth = optionalResourceLimit(
+    properties,
+    "maxTextureWidth",
+  );
+  const maxTextureHeight = optionalResourceLimit(
+    properties,
+    "maxTextureHeight",
   );
   const maxShaderPrograms = optionalResourceLimit(
     properties,
@@ -185,9 +195,15 @@ function validateResourceLimits(value: unknown): RuntimeResourceLimits {
     ...(maxTextures === undefined
       ? {}
       : { maxTextures }),
-    ...(maxTextureDimension === undefined
+    ...(maxTextureBytes === undefined
       ? {}
-      : { maxTextureDimension }),
+      : { maxTextureBytes }),
+    ...(maxTextureWidth === undefined
+      ? {}
+      : { maxTextureWidth }),
+    ...(maxTextureHeight === undefined
+      ? {}
+      : { maxTextureHeight }),
     ...(maxShaderPrograms === undefined
       ? {}
       : { maxShaderPrograms }),

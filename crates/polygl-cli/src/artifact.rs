@@ -34,7 +34,10 @@ pub(crate) fn prepare_assets(
     source_path: &Path,
     references: &[AssetReference],
 ) -> Result<PreparedAssets, CliError> {
-    let source_directory = source_path.parent().unwrap_or_else(|| Path::new("."));
+    let source_directory = source_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
     let canonical_source_directory = source_directory.canonicalize().map_err(|error| {
         CliError::new(format!(
             "failed to resolve source directory {}: {error}",
@@ -201,7 +204,10 @@ pub(crate) fn publish(destination: &Path, files: Vec<ArtifactFile>) -> Result<()
 }
 
 fn resolve_destination(destination: &Path) -> Result<(PathBuf, PathBuf), CliError> {
-    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    let parent = destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent).map_err(|error| {
         CliError::new(format!(
             "failed to create output parent directory {}: {error}",
