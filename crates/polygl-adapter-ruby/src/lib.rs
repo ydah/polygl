@@ -55,12 +55,12 @@ impl LanguageAdapter for RubyAdapter {
         for error in parsed.errors() {
             let location = error.location();
             let span = source
-                .span(location.start_offset(), location.end_offset())
+                .span(location.start() as usize, location.end() as usize)
                 .expect("Prism diagnostics must use source byte boundaries");
             diagnostics.push(Diagnostic::new(
                 Severity::Error,
                 "E0100",
-                error.message(),
+                String::from_utf8_lossy(error.message()),
                 span,
             ));
         }

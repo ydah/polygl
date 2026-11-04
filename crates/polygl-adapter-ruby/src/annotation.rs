@@ -90,10 +90,10 @@ pub(crate) fn parse_annotations(
     let mut result = Annotations::default();
     for comment in parsed.comments() {
         let location = comment.location();
-        let line_start = source.text()[..location.start_offset()]
+        let line_start = source.text()[..location.start() as usize]
             .rfind('\n')
             .map_or(0, |offset| offset + 1);
-        if !source.text()[line_start..location.start_offset()]
+        if !source.text()[line_start..location.start() as usize]
             .trim()
             .is_empty()
         {
@@ -117,7 +117,7 @@ pub(crate) fn parse_annotations(
         }
         let directive = rest.trim();
         let span = source
-            .span(location.start_offset(), location.end_offset())
+            .span(location.start() as usize, location.end() as usize)
             .expect("Prism comments must use source byte boundaries");
         let Some((name, type_name)) = directive.split_once(':') else {
             invalid_annotation(
@@ -149,8 +149,8 @@ pub(crate) fn parse_annotations(
             name: name.to_owned(),
             ty,
             span,
-            offset: location.start_offset(),
-            end_offset: location.end_offset(),
+            offset: location.start() as usize,
+            end_offset: location.end() as usize,
             used: false,
         });
     }
